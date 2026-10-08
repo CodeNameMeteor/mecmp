@@ -1,0 +1,46 @@
+#pragma once
+// Peer-to-peer link: our own small UDP protocol on its own port. It never touches the game's
+// networking or online services.
+//
+// Every player sends its state (~30 Hz) to every peer it knows: the configured peer, plus anyone
+// who contacted us. Each remote player is identified by the random session id in its packets.
+
+#include <cstdint>
+#include <string>
+#include <vector>
+
+namespace mecmp::net {
+
+constexpr uint32_t kMaxPoseBones = 32;
+
+struct PlayerState {
+    float pos[3] = {0, 0, 0};
+    float yaw = 0;      // radians, atan2(forward.x, forward.z)
+    uint32_t flags = 0; // bit0: in a level
+    // Body pose in the replay player's format: per bone {translation x,y,z,w; rotation x,y,z,w}.
+    // Bone order = the recorder's, which maps 1:1 onto a ghost's replay pose. 0 = no pose.
+    uint32_t boneCount = 0;
+    float bones[kMaxPoseBones][8] = {};
+};
+
+struct RemoteInfo {
+    uint32_t id = 0;        // the remote player's session id
+    std::string name;
+    std::string address;
+    bool loopback = false;  // our own packets (solo test)
+    uint32_t ageMs = 0;     // since the last state arrived
+};
+
+bool start(uint16_t port, const std::string& peer, float loopbackOffset, const std::string& name);
+void stop();
+
+// Game thread: newest local state (sent by the network thread).
+void publishLocal(const PlayerState& s);
+// Remote players heard from in the last `maxAgeMs`.
+std::vector<RemoteInfo> remotes(uint32_t maxAgeMs = 5000);
+// Smoothed state of a remote player (shown ~100 ms in the past, blended between packets).
+bool remoteState(uint32_t id, PlayerState& out, uint32_t& ageMs);
+
+std::string describe();
+
+} // namespace mecmp::net

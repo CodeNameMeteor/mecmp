@@ -13,6 +13,7 @@
 #include "game/level.h"
 #include "game/local_player.h"
 #include "net/net.h"
+#include "ui/overlay.h"
 
 namespace mecmp::app {
 namespace {
@@ -114,6 +115,7 @@ void run(HMODULE self) {
         MLOG("startup: could not hook the game tick; staying inactive");
         return;
     }
+    ui::install();
     const auto& cfg = config::get();
     if (cfg.netEnabled) net::start(cfg.port, cfg.join, cfg.loopbackOffset, cfg.name);
     else MLOG("net: disabled in mecmp.ini");

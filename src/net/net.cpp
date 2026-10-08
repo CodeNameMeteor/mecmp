@@ -65,8 +65,9 @@ std::map<uint32_t, Remote> g_remotes;     // by session id
 std::vector<sockaddr_in> g_sendTo;        // JOIN: the host. HOST: kept in sync with g_members
 std::vector<Member> g_members;            // HOST: connected joiners
 sockaddr_in g_hostAddr{};                 // JOIN
-bool g_heardFromHost = false;
+std::atomic<bool> g_heardFromHost{false};
 std::string g_joinCode, g_lanCode;
+std::atomic<uint32_t> g_generation{0}; // bumped on every start(); stale host setups don't publish
 PlayerState g_local;
 bool g_haveLocal = false;
 std::string g_name;
@@ -161,7 +162,12 @@ void sendState() {
 
 void sendHello() {
     char buf[proto::kMaxPacket];
-    sendAll(buf, proto::writeHello(buf, header(proto::kTypeHello), g_name.c_str()));
+    std::string name;
+    {
+        std::lock_guard<std::mutex> lock(g_m);
+        name = g_name;
+    }
+    sendAll(buf, proto::writeHello(buf, header(proto::kTypeHello), name.c_str()));
 }
 
 void handlePacket(const char* buf, int n, const sockaddr_in& from) {
@@ -304,7 +310,7 @@ void publishCode(const std::string& code, const std::string& lan) {
     }
 }
 
-void hostSetup() {
+void hostSetup(uint32_t generation) {
     const upnp::Result r = upnp::mapUdpPort(g_port, "MECMP", 3600);
     const uint32_t lanIp = parseIp(r.localIp);
     const std::string lan = lanIp ? joincode::encode(lanIp, g_port) : std::string();
@@ -332,6 +338,7 @@ void hostSetup() {
         pub = 0;
     }
     const std::string code = pub ? joincode::encode(pub, pubPort) : std::string();
+    if (generation != g_generation) return; // the session was changed meanwhile
     publishCode(code, lan);
     if (!code.empty())
         MLOG("net: HOSTING. Join code: %s  (copied to the clipboard and saved in join_code.txt)", code.c_str());
@@ -394,9 +401,21 @@ void threadMain() {
 } // namespace
 
 bool start(uint16_t port, const std::string& join, float loopbackOffset, const std::string& name) {
+    if (g_run) stop();
+    ++g_generation;
+    {
+        std::lock_guard<std::mutex> lock(g_m);
+        g_remotes.clear();
+        g_sendTo.clear();
+        g_members.clear();
+        g_heardFromHost = false;
+        g_joinCode.clear();
+        g_lanCode.clear();
+        g_name = name;
+    }
+    g_stunIp = 0;
     g_port = port;
     g_loopbackOffset = loopbackOffset;
-    g_name = name;
     WSADATA wsa;
     if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) { MLOG("net: WSAStartup failed"); return false; }
     g_sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
@@ -439,13 +458,13 @@ bool start(uint16_t port, const std::string& join, float loopbackOffset, const s
     }
     g_run = true;
     g_thread = std::thread(threadMain);
-    if (g_role == Role::Host) std::thread(hostSetup).detach();
+    if (g_role == Role::Host) std::thread(hostSetup, g_generation.load()).detach();
     return true;
 }
 
 void stop() {
     if (!g_run.exchange(false)) return;
-    if (g_role == Role::Host) upnp::unmapUdpPort(g_port);
+    // The router mapping is left to expire (1 h lease): unmapping blocks, and re-hosting reuses it.
     if (g_thread.joinable()) g_thread.join();
     if (g_sock != INVALID_SOCKET) closesocket(g_sock);
     g_sock = INVALID_SOCKET;
@@ -500,6 +519,16 @@ std::string joinCode() {
 }
 
 bool hosting() { return g_role == Role::Host; }
+bool running() { return g_run.load(); }
+bool connectedToHost() { return g_heardFromHost; }
+std::string lanCode() {
+    std::lock_guard<std::mutex> lock(g_m);
+    return g_lanCode;
+}
+void setName(const std::string& name) {
+    std::lock_guard<std::mutex> lock(g_m);
+    g_name = name;
+}
 
 std::string describe() {
     size_t peers = 0;

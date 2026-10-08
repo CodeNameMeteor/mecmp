@@ -25,6 +25,7 @@ void levelChanged(); // forget ghosts of the old level
 void requestSpawnOrRefresh(); // F7: spawn missing ghosts now / re-apply the look; resumes auto spawning
 void requestHideAll();        // F12: hide all ghosts and pause auto spawning
 void requestNextModel();      // F8
+void requestModel(const std::string& name); // menu: use this model for everyone's ghost
 
 std::string status();
 

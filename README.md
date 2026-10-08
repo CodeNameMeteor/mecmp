@@ -15,12 +15,16 @@ Status: experimental. Ghosts are visual only (no collision).
 1. Put `mecmp.dll` and `mecmp_inject.exe` in one folder. The first run creates `mecmp.ini` there.
 2. Start the game, run `mecmp_inject.exe` (two beeps = the mod is active), load into free roam.
 
-**Hosting** (leave `join=` empty in `mecmp.ini`): the mod asks your router to open UDP port 47800
+**In game, press INSERT** for the MECMP menu: host a session, paste a join code and join, set your
+name, see who is connected and pick how other players look. Everything can also be set in
+`mecmp.ini` (the menu saves to it).
+
+**Hosting** (the menu's *Host a session*, or `join=` empty in `mecmp.ini`): the mod asks your router to open UDP port 47800
 (UPnP) and makes a **join code** like `2HMAS-W9ENR`. It is copied to your clipboard, saved in
 `join_code.txt` and written to `mecmp.log` (F9 shows it again). Send it to your friends. The host
 forwards everyone's movement to everyone, so friends need nothing opened on their side.
 
-**Joining**: set `join=` to the host's code (e.g. `join=2HMAS-W9ENR`) and start the game.
+**Joining**: paste the host's code in the menu and press *Join* (or set `join=2HMAS-W9ENR`).
 
 If the host's router has UPnP turned off, forward UDP 47800 to the host's PC by hand. If the log
 says the address is not reachable (carrier-grade NAT, common on mobile internet), let another
@@ -55,7 +59,9 @@ Outputs: `mecmp.dll` (the mod), `mecmp_inject.exe` (loader), `version.dll` (opti
 src/app     startup, per-tick update, hotkeys, crash logging
 src/core    log, config (mecmp.ini), safe memory access, engine type list
 src/game    engine addresses, hooks, level state, ghosts, ghost models, local player capture
-src/net     UDP peer-to-peer link and wire protocol
+src/net     UDP peer-to-peer link, wire protocol, UPnP, join codes
+src/ui      in-game overlay (Dear ImGui on the game's D3D11 swap chain) and the menu
+third_party Dear ImGui 1.91.9 (MIT)
 tools       injector and version.dll proxy
 docs        how it works and the roadmap
 ```

@@ -37,9 +37,17 @@ add_library(mecmp SHARED
   src/net/protocol.cpp
   src/net/upnp.cpp
   src/net/joincode.cpp
+  src/ui/overlay.cpp
+  src/ui/menu.cpp
+  third_party/imgui/imgui.cpp
+  third_party/imgui/imgui_draw.cpp
+  third_party/imgui/imgui_tables.cpp
+  third_party/imgui/imgui_widgets.cpp
+  third_party/imgui/backends/imgui_impl_dx11.cpp
+  third_party/imgui/backends/imgui_impl_win32.cpp
 )
-target_include_directories(mecmp PRIVATE src)
-target_link_libraries(mecmp PRIVATE ws2_32)
+target_include_directories(mecmp PRIVATE src third_party/imgui)
+target_link_libraries(mecmp PRIVATE ws2_32 d3d11 dxgi d3dcompiler dwmapi)
 set_target_properties(mecmp PROPERTIES OUTPUT_NAME "mecmp" PREFIX "")
 
 # --- mecmp_inject.exe: loads mecmp.dll into the running game -------------------------------------

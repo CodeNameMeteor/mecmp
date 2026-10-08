@@ -42,6 +42,8 @@ std::atomic<uintptr_t> g_ghostCharData{0}; // the ghost blueprint's PamCharacter
 DWORD g_lastSpawnAt = 0;
 std::atomic<bool> g_paused{false};
 std::atomic<bool> g_reqSpawn{false}, g_reqHide{false}, g_reqNextModel{false};
+std::mutex g_reqModelMutex;
+std::string g_reqModel; // set by the menu, applied on the game thread
 
 bool claimWindowOpen() {
     const DWORD at = g_pendingAt.load();
@@ -233,6 +235,18 @@ void handleRequests() {
             }
         }
     }
+    {
+        std::string want;
+        {
+            std::lock_guard<std::mutex> lock(g_reqModelMutex);
+            want.swap(g_reqModel);
+        }
+        if (!want.empty()) {
+            config::mut().model = want;
+            applyModelToAll(want);
+            MLOG("ghosts: model '%s'", want.c_str());
+        }
+    }
     if (g_reqSpawn.exchange(false)) {
         if (g_paused.exchange(false)) MLOG("ghosts: automatic spawning resumed");
         {
@@ -369,6 +383,10 @@ void levelChanged() {
 void requestSpawnOrRefresh() { g_reqSpawn = true; }
 void requestHideAll() { g_reqHide = true; }
 void requestNextModel() { g_reqNextModel = true; }
+void requestModel(const std::string& name) {
+    std::lock_guard<std::mutex> lock(g_reqModelMutex);
+    g_reqModel = name;
+}
 
 std::string status() {
     std::lock_guard<std::mutex> lock(g_m);

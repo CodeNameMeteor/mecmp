@@ -33,7 +33,8 @@ struct RemoteInfo {
     uint32_t ageMs = 0;     // since the last state arrived
 };
 
-// join: empty = host; otherwise a join code or ip:port of the host.
+// join: empty = host; otherwise a join code or ip:port of the host. Calling it again switches
+// session (the old one is stopped first).
 bool start(uint16_t port, const std::string& join, float loopbackOffset, const std::string& name);
 void stop();
 
@@ -44,7 +45,11 @@ std::vector<RemoteInfo> remotes(uint32_t maxAgeMs = 5000);
 // Smoothed state of a remote player (shown ~100 ms in the past, blended between packets).
 bool remoteState(uint32_t id, PlayerState& out, uint32_t& ageMs);
 
+bool running();
 bool hosting();
+bool connectedToHost();   // joiner: the host has answered
+std::string lanCode();    // host: code for players on the same network
+void setName(const std::string& name);
 std::string joinCode(); // the host's code (empty until set up, or when not reachable)
 std::string describe();
 

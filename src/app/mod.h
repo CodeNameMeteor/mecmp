@@ -8,7 +8,7 @@
 
 namespace mecmp::app {
 
-constexpr const char* kVersion = "0.4.0";
+constexpr const char* kVersion = "0.5.0";
 
 // Runs on the mod's own thread until the game exits.
 void run(HMODULE self);

@@ -40,6 +40,10 @@ constexpr const char* kDefaultIni =
     "; e.g. RunVis (the red time-trial ghost). F8 cycles through the loaded models in game.\r\n"
     "model=faith\r\n"
     "\r\n"
+    "[ui]\r\n"
+    "; key that opens the in-game menu: INSERT, HOME, END, DELETE or F1..F12\r\n"
+    "menu_key=INSERT\r\n"
+    "\r\n"
     "[debug]\r\n"
     "; 1 = detailed diagnostic log (for bug reports)\r\n"
     "verbose=0\r\n";
@@ -80,6 +84,7 @@ void load(const std::wstring& dir) {
     if (s.name.size() > 24) s.name.resize(24);
     s.autoSpawn = readInt(ini, L"ghost", L"auto_spawn", 1) != 0;
     s.model = readString(ini, L"ghost", L"model", "faith");
+    s.menuKey = readString(ini, L"ui", L"menu_key", "INSERT");
     s.verbose = readInt(ini, L"debug", L"verbose", 0) != 0;
     log::verbose = s.verbose;
     MLOG("config: name '%s', port %u, %s '%s', model '%s'%s", s.name.c_str(), s.port, s.join.empty() ? "hosting" : "joining",
@@ -89,6 +94,19 @@ void load(const std::wstring& dir) {
 
 const Settings& get() { return g_settings; }
 const std::wstring& dir() { return g_dir; }
+
+void save() {
+    const std::wstring ini = g_dir + L"mecmp.ini";
+    auto put = [&](const wchar_t* sec, const wchar_t* key, const std::string& v) {
+        wchar_t w[512] = {};
+        MultiByteToWideChar(CP_UTF8, 0, v.c_str(), -1, w, 512);
+        WritePrivateProfileStringW(sec, key, w, ini.c_str());
+    };
+    put(L"player", L"name", g_settings.name);
+    put(L"net", L"join", g_settings.join);
+    put(L"ghost", L"model", g_settings.model);
+    MLOG("config: saved");
+}
 Settings& mut() { return g_settings; }
 
 } // namespace mecmp::config

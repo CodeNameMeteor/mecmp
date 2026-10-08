@@ -17,6 +17,8 @@ struct Settings {
     // [ghost]
     bool autoSpawn = true;
     std::string model = "faith";          // "faith" or part of a model name (F8 cycles in game)
+    // [ui]
+    std::string menuKey = "INSERT";       // INSERT, HOME, END, DELETE or F1..F12
     // [debug]
     bool verbose = false;
 };
@@ -25,6 +27,7 @@ struct Settings {
 void load(const std::wstring& dir);
 const Settings& get();
 const std::wstring& dir(); // folder of mecmp.dll / mecmp.ini (with trailing backslash)
-Settings& mut(); // runtime changes (e.g. model picked in game); not written back yet
+Settings& mut();  // runtime changes (menu)
+void save();      // writes name, join and model back to mecmp.ini
 
 } // namespace mecmp::config

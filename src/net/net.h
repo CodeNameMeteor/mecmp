@@ -2,8 +2,10 @@
 // Peer-to-peer link: our own small UDP protocol on its own port. It never touches the game's
 // networking or online services.
 //
-// Every player sends its state (~30 Hz) to every peer it knows: the configured peer, plus anyone
-// who contacted us. Each remote player is identified by the random session id in its packets.
+// Sessions: one player hosts (join= empty), the others join with the host's join code. The host
+// opens its port on the router with UPnP, and forwards every player's packets to all the others,
+// so only the host has to be reachable. Each remote player is identified by the random session id
+// in its packets (forwarded packets keep the original id).
 
 #include <cstdint>
 #include <string>
@@ -31,7 +33,8 @@ struct RemoteInfo {
     uint32_t ageMs = 0;     // since the last state arrived
 };
 
-bool start(uint16_t port, const std::string& peer, float loopbackOffset, const std::string& name);
+// join: empty = host; otherwise a join code or ip:port of the host.
+bool start(uint16_t port, const std::string& join, float loopbackOffset, const std::string& name);
 void stop();
 
 // Game thread: newest local state (sent by the network thread).
@@ -41,6 +44,8 @@ std::vector<RemoteInfo> remotes(uint32_t maxAgeMs = 5000);
 // Smoothed state of a remote player (shown ~100 ms in the past, blended between packets).
 bool remoteState(uint32_t id, PlayerState& out, uint32_t& ageMs);
 
+bool hosting();
+std::string joinCode(); // the host's code (empty until set up, or when not reachable)
 std::string describe();
 
 } // namespace mecmp::net

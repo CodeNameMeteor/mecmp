@@ -1,11 +1,10 @@
 # Roadmap
 
-## Next: joining each other, more players
-- Sessions: one player hosts, others join with a short code; the host tells everyone about
-  everyone (full mesh), so 3+ players see each other.
-- NAT traversal (UDP hole punching through a tiny rendezvous server) so players in different
-  houses can join without Tailscale/ZeroTier or port forwarding.
-- Version handshake with a clear message on mismatch (protocol field already in every packet).
+## Done
+- Host / join with a join code; UPnP port mapping; host forwards everyone to everyone (0.4.0).
+
+## Next
+- Optional relay/rendezvous fallback for hosts behind carrier-grade NAT.
 
 ## In-game menu (ImGui)
 - Host / join by code, list of connected players.

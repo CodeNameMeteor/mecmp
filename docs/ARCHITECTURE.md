@@ -64,8 +64,15 @@ applies it with `character->vtbl[0x340]`; the look replicates to the client.
 
 ## Network (`net/`)
 
-UDP, one socket. Each player sends STATE ~30 Hz and HELLO (name) ~1 Hz to every known address:
-the configured peer plus whoever contacted us. Remote players are keyed by the random session id
-in their packets. Pose compression: rotations smallest-three 32-bit, translations i16 at 1 mm, only
-for bones that changed since the last full packet (one per second). About 150 bytes per packet.
-Receivers buffer 16 snapshots per player and show them 100 ms in the past, blended.
+UDP, one socket. Sessions have one host and any number of joiners (up to 16).
+
+- **Host** (`join=` empty): `upnp.cpp` finds the router (SSDP), asks it to forward the UDP port
+  (SOAP AddPortMapping, 1 h lease, renewed) and reads its public IP. Without UPnP a STUN request
+  (stun.l.google.com) through the game socket finds the public address. `joincode.cpp` turns
+  ip:port into a 10-character Crockford base32 code. The host forwards every joiner's packets
+  unchanged to all other joiners, so only the host has to be reachable.
+- **Join**: send to the host only; everyone else's packets arrive through the host.
+- Packets: STATE ~30 Hz and HELLO (name) ~1 Hz. Remote players are keyed by the random session id
+  in each packet. Pose compression: rotations smallest-three 32-bit, translations i16 at 1 mm,
+  only for bones that changed since the last full packet (one per second); about 150 bytes.
+- Receivers buffer 16 snapshots per player and show them 100 ms in the past, blended.

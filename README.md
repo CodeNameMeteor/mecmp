@@ -12,12 +12,19 @@ Status: experimental. Ghosts are visual only (no collision).
 
 ## Use
 
-1. Put `mecmp.dll`, `mecmp_inject.exe` and `mecmp.ini` in one folder.
-2. In `mecmp.ini` set `peer=` to the other player's address (`ipconfig` → IPv4 Address), e.g.
-   `peer=192.168.0.144:47800`. One side may leave it empty and wait to be contacted.
-   Different houses: use Tailscale/ZeroTier, or forward UDP 47800 (built-in joining is next on the roadmap).
-3. Start the game, run `mecmp_inject.exe` (two beeps = the mod is active), load into free roam.
-   Other players' ghosts appear a few seconds after their packets arrive.
+1. Put `mecmp.dll` and `mecmp_inject.exe` in one folder. The first run creates `mecmp.ini` there.
+2. Start the game, run `mecmp_inject.exe` (two beeps = the mod is active), load into free roam.
+
+**Hosting** (leave `join=` empty in `mecmp.ini`): the mod asks your router to open UDP port 47800
+(UPnP) and makes a **join code** like `2HMAS-W9ENR`. It is copied to your clipboard, saved in
+`join_code.txt` and written to `mecmp.log` (F9 shows it again). Send it to your friends. The host
+forwards everyone's movement to everyone, so friends need nothing opened on their side.
+
+**Joining**: set `join=` to the host's code (e.g. `join=2HMAS-W9ENR`) and start the game.
+
+If the host's router has UPnP turned off, forward UDP 47800 to the host's PC by hand. If the log
+says the address is not reachable (carrier-grade NAT, common on mobile internet), let another
+player host. Players on the same network can use the LAN code from the log.
 
 | Key | Action |
 |---|---|
@@ -26,8 +33,8 @@ Status: experimental. Ghosts are visual only (no collision).
 | F12 | Hide all ghosts and pause automatic spawning (F7 resumes) |
 | F9 | Write a status line to `mecmp.log` |
 
-Solo test: leave `peer=127.0.0.1:47800`. Your own packets come back and a ghost mirrors you
-3 m to your side.
+Solo test: `join=127.0.0.1:47800`. Your own packets come back and a ghost mirrors you 3 m to
+your side.
 
 ## Build
 

@@ -13,17 +13,19 @@
 namespace mecmp::config {
 namespace {
 Settings g_settings;
+std::wstring g_dir;
 
 constexpr const char* kDefaultIni =
     "; MECMP settings (read when the mod loads)\r\n"
     "[net]\r\n"
     "enabled=1\r\n"
-    "; UDP port this game listens on\r\n"
+    "; UDP port this game uses\r\n"
     "port=47800\r\n"
-    "; the other player's address, e.g. peer=192.168.0.144:47800\r\n"
-    "; leave empty to wait until the other player contacts you\r\n"
-    "; solo test: peer=127.0.0.1:47800 (a ghost mirrors you)\r\n"
-    "peer=127.0.0.1:47800\r\n"
+    "; HOST: leave join empty. The mod opens the port on your router (UPnP) and writes your\r\n"
+    ";       join code to the log, to join_code.txt and to the clipboard.\r\n"
+    "; JOIN: paste the host's join code, e.g. join=8H3KQ-ZT1V4 (or the host's ip:port).\r\n"
+    "; solo test: join=127.0.0.1:47800 (a ghost mirrors you)\r\n"
+    "join=\r\n"
     "; solo test only: how far to the side the mirrored ghost stands (metres)\r\n"
     "loopback_offset=3.0\r\n"
     "\r\n"
@@ -58,6 +60,7 @@ int readInt(const std::wstring& ini, const wchar_t* sec, const wchar_t* key, int
 void load(const std::wstring& dir) {
     std::wstring d = dir;
     if (!d.empty() && d.back() != L'\\' && d.back() != L'/') d += L'\\';
+    g_dir = d;
     const std::wstring ini = d + L"mecmp.ini";
     if (GetFileAttributesW(ini.c_str()) == INVALID_FILE_ATTRIBUTES) {
         if (FILE* f = _wfopen(ini.c_str(), L"wb")) {
@@ -69,7 +72,8 @@ void load(const std::wstring& dir) {
     Settings& s = g_settings;
     s.netEnabled = readInt(ini, L"net", L"enabled", 1) != 0;
     s.port = static_cast<uint16_t>(readInt(ini, L"net", L"port", 47800));
-    s.peer = readString(ini, L"net", L"peer", "");
+    s.join = readString(ini, L"net", L"join", "\x01");
+    if (s.join == "\x01") s.join = readString(ini, L"net", L"peer", ""); // older mecmp.ini files (no join= line)
     s.loopbackOffset = static_cast<float>(atof(readString(ini, L"net", L"loopback_offset", "3.0").c_str()));
     s.name = readString(ini, L"player", L"name", "Runner");
     if (s.name.empty()) s.name = "Runner";
@@ -78,11 +82,13 @@ void load(const std::wstring& dir) {
     s.model = readString(ini, L"ghost", L"model", "faith");
     s.verbose = readInt(ini, L"debug", L"verbose", 0) != 0;
     log::verbose = s.verbose;
-    MLOG("config: name '%s', port %u, peer '%s', model '%s'%s", s.name.c_str(), s.port, s.peer.c_str(), s.model.c_str(),
+    MLOG("config: name '%s', port %u, %s '%s', model '%s'%s", s.name.c_str(), s.port, s.join.empty() ? "hosting" : "joining",
+         s.join.c_str(), s.model.c_str(),
          s.verbose ? ", verbose log" : "");
 }
 
 const Settings& get() { return g_settings; }
+const std::wstring& dir() { return g_dir; }
 Settings& mut() { return g_settings; }
 
 } // namespace mecmp::config

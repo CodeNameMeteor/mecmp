@@ -115,10 +115,10 @@ void run(HMODULE self) {
         return;
     }
     const auto& cfg = config::get();
-    if (cfg.netEnabled) net::start(cfg.port, cfg.peer, cfg.loopbackOffset, cfg.name);
+    if (cfg.netEnabled) net::start(cfg.port, cfg.join, cfg.loopbackOffset, cfg.name);
     else MLOG("net: disabled in mecmp.ini");
-    MLOG("ready. Other players appear automatically once their packets arrive. "
-         "F7 = spawn/show ghosts, F8 = next ghost model, F12 = hide ghosts, F9 = status.");
+    MLOG("ready. %s F7 = spawn/show ghosts, F8 = next ghost model, F12 = hide ghosts, F9 = status (and join code).",
+         cfg.join.empty() ? "Hosting: friends join with your join code (see below)." : "Joining: other players appear once the host answers.");
     monitorLoop();
 }
 

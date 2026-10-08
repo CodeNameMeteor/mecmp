@@ -14,9 +14,14 @@
 #include <map>
 #include <mutex>
 #include <thread>
+#include <cstdio>
+#include <cstdlib>
 
+#include "core/config.h"
 #include "core/log.h"
+#include "net/joincode.h"
 #include "net/protocol.h"
+#include "net/upnp.h"
 
 namespace mecmp::net {
 namespace {
@@ -47,9 +52,21 @@ struct Remote {
     int head = 0, fill = 0;
 };
 
+// Session roles. HOST: accepts joiners and forwards every player's packets to all the others,
+// so joiners only ever talk to the host (only the host needs a reachable port). JOIN: sends to
+// the host only.
+enum class Role { Host, Join };
+Role g_role = Role::Host;
+
+struct Member { sockaddr_in addr{}; DWORD lastSeen = 0; };
+
 std::mutex g_m;
 std::map<uint32_t, Remote> g_remotes;     // by session id
-std::vector<sockaddr_in> g_sendTo;        // configured peer + whoever contacted us
+std::vector<sockaddr_in> g_sendTo;        // JOIN: the host. HOST: kept in sync with g_members
+std::vector<Member> g_members;            // HOST: connected joiners
+sockaddr_in g_hostAddr{};                 // JOIN
+bool g_heardFromHost = false;
+std::string g_joinCode, g_lanCode;
 PlayerState g_local;
 bool g_haveLocal = false;
 std::string g_name;
@@ -60,7 +77,7 @@ SOCKET g_sock = INVALID_SOCKET;
 uint32_t g_session = 0;
 float g_loopbackOffset = 3.0f;
 uint16_t g_port = 47800;
-std::atomic<uint64_t> g_sent{0}, g_recv{0}, g_dropped{0}, g_bytesSent{0};
+std::atomic<uint64_t> g_sent{0}, g_recv{0}, g_dropped{0}, g_bytesSent{0}, g_relayed{0};
 
 std::string addrToString(const sockaddr_in& a) {
     char ip[64] = {};
@@ -164,13 +181,24 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
     }
     const bool own = h.session == g_session;
     std::lock_guard<std::mutex> lock(g_m);
-    if (!own) { // reply to whoever talks to us
+    if (!own && g_role == Role::Host) {
+        // A joiner: remember it, and forward its packet unchanged to everyone else.
         bool known = false;
-        for (const auto& a : g_sendTo) known = known || sameAddr(a, from);
-        if (!known && g_sendTo.size() < kMaxPeers) {
+        for (auto& m : g_members)
+            if (sameAddr(m.addr, from)) { m.lastSeen = GetTickCount(); known = true; }
+        if (!known) {
+            if (g_members.size() >= kMaxPeers) return;
+            g_members.push_back({from, GetTickCount()});
             g_sendTo.push_back(from);
-            MLOG("net: %s contacted us; sending our state there too", addrToString(from).c_str());
+            MLOG("net: %s joined (%zu player(s) connected)", addrToString(from).c_str(), g_members.size());
         }
+        for (const auto& m : g_members)
+            if (!sameAddr(m.addr, from))
+                if (sendto(g_sock, buf, n, 0, reinterpret_cast<const sockaddr*>(&m.addr), sizeof(m.addr)) == n) ++g_relayed;
+    }
+    if (!own && g_role == Role::Join && sameAddr(from, g_hostAddr) && !g_heardFromHost) {
+        g_heardFromHost = true;
+        MLOG("net: connected to the host %s", addrToString(from).c_str());
     }
     Remote& r = g_remotes[h.session];
     if (!r.id) {
@@ -210,6 +238,106 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
     if (r.fill < kSnapCount) ++r.fill;
 }
 
+// --- Host setup: router port mapping (UPnP), public address, join code ---------------------------
+// STUN (RFC 5389) binding request through our game socket: the reply tells our public ip:port as
+// the internet sees it. Fallback for routers without UPnP (the port then has to be forwarded).
+constexpr uint32_t kStunCookie = 0x2112A442;
+std::atomic<uint32_t> g_stunIp{0};
+std::atomic<uint16_t> g_stunPort{0};
+
+void sendStunRequest() {
+    addrinfo hints{};
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_DGRAM;
+    addrinfo* res = nullptr;
+    if (getaddrinfo("stun.l.google.com", "19302", &hints, &res) != 0 || !res) return;
+    unsigned char req[20] = {0x00, 0x01, 0x00, 0x00, 0x21, 0x12, 0xA4, 0x42};
+    for (int i = 8; i < 20; ++i) req[i] = static_cast<unsigned char>(rand());
+    sendto(g_sock, reinterpret_cast<const char*>(req), sizeof(req), 0, res->ai_addr, static_cast<int>(res->ai_addrlen));
+    freeaddrinfo(res);
+}
+
+bool handleStun(const unsigned char* b, int n) {
+    if (n < 20 || b[0] != 0x01 || b[1] != 0x01) return false; // binding success response
+    if (((b[4] << 24) | (b[5] << 16) | (b[6] << 8) | b[7]) != static_cast<int>(kStunCookie)) return false;
+    for (int p = 20; p + 4 <= n;) {
+        const int type = (b[p] << 8) | b[p + 1], len = (b[p + 2] << 8) | b[p + 3];
+        if (type == 0x0020 && len >= 8 && p + 4 + len <= n && b[p + 5] == 0x01) { // XOR-MAPPED-ADDRESS, IPv4
+            g_stunPort = static_cast<uint16_t>(((b[p + 6] << 8) | b[p + 7]) ^ (kStunCookie >> 16));
+            g_stunIp = static_cast<uint32_t>((b[p + 8] << 24) | (b[p + 9] << 16) | (b[p + 10] << 8) | b[p + 11]) ^ kStunCookie;
+        }
+        p += 4 + ((len + 3) & ~3);
+    }
+    return true;
+}
+
+uint32_t parseIp(const std::string& s) {
+    in_addr a{};
+    return inet_pton(AF_INET, s.c_str(), &a) == 1 ? ntohl(a.s_addr) : 0;
+}
+
+bool isPrivate(uint32_t ip) {
+    return (ip >> 24) == 10 || (ip >> 20) == (172 << 4 | 1) || (ip >> 16) == (192 << 8 | 168) ||
+           (ip >> 22) == ((100 << 2) | 1) /* 100.64/10, carrier-grade NAT */ || (ip >> 24) == 127;
+}
+
+void publishCode(const std::string& code, const std::string& lan) {
+    {
+        std::lock_guard<std::mutex> lock(g_m);
+        g_joinCode = code;
+        g_lanCode = lan;
+    }
+    // join_code.txt next to the mod, and the clipboard, so it is easy to send to friends.
+    const std::wstring path = config::dir() + L"join_code.txt";
+    if (FILE* f = _wfopen(path.c_str(), L"wb")) {
+        fprintf(f, "MECMP join code: %s\r\nSame network (LAN): %s\r\n", code.c_str(), lan.c_str());
+        fclose(f);
+    }
+    if (!code.empty() && OpenClipboard(nullptr)) {
+        EmptyClipboard();
+        if (HGLOBAL h = GlobalAlloc(GMEM_MOVEABLE, code.size() + 1)) {
+            memcpy(GlobalLock(h), code.c_str(), code.size() + 1);
+            GlobalUnlock(h);
+            if (!SetClipboardData(CF_TEXT, h)) GlobalFree(h);
+        }
+        CloseClipboard();
+    }
+}
+
+void hostSetup() {
+    const upnp::Result r = upnp::mapUdpPort(g_port, "MECMP", 3600);
+    const uint32_t lanIp = parseIp(r.localIp);
+    const std::string lan = lanIp ? joincode::encode(lanIp, g_port) : std::string();
+    uint32_t pub = parseIp(r.externalIp);
+    uint16_t pubPort = g_port;
+    if (r.mapped) {
+        MLOG("net: router port %u opened with UPnP", g_port);
+    } else {
+        MLOG("net: UPnP: %s", r.error.c_str());
+        // Ask a public STUN server how the internet sees us (waits up to ~2 s for the reply).
+        for (int i = 0; i < 4 && !g_stunIp; ++i) {
+            sendStunRequest();
+            Sleep(500);
+        }
+        if (g_stunIp) {
+            pub = g_stunIp;
+            pubPort = g_stunPort;
+        }
+        MLOG("net: friends outside your network can only join if UDP port %u is forwarded to this PC on your router",
+             g_port);
+    }
+    if (pub && isPrivate(pub)) {
+        MLOG("net: your router's public address %u.%u.%u.%u is not reachable from the internet (carrier-grade NAT). "
+             "Let another player host, or use Tailscale/ZeroTier.", pub >> 24, (pub >> 16) & 255, (pub >> 8) & 255, pub & 255);
+        pub = 0;
+    }
+    const std::string code = pub ? joincode::encode(pub, pubPort) : std::string();
+    publishCode(code, lan);
+    if (!code.empty())
+        MLOG("net: HOSTING. Join code: %s  (copied to the clipboard and saved in join_code.txt)", code.c_str());
+    if (!lan.empty()) MLOG("net: join code for players on your own network: %s", lan.c_str());
+}
+
 void receiveAll() {
     for (;;) {
         char buf[proto::kMaxPacket + 64];
@@ -222,12 +350,14 @@ void receiveAll() {
             if (e != WSAEWOULDBLOCK) MLOG("net: recvfrom error %d", e);
             return;
         }
+        if (handleStun(reinterpret_cast<const unsigned char*>(buf), n)) continue;
         handlePacket(buf, n, from);
     }
 }
 
 void threadMain() {
-    DWORD lastSend = 0, lastHello = 0, lastStats = GetTickCount();
+    const DWORD started = GetTickCount();
+    DWORD lastSend = 0, lastHello = 0, lastStats = started, lastHousekeeping = started, lastJoinWarn = 0, lastLease = started;
     while (g_run) {
         fd_set rd;
         FD_ZERO(&rd);
@@ -238,11 +368,32 @@ void threadMain() {
         if (now - lastSend >= 33) { lastSend = now; sendState(); }
         if (now - lastHello >= 1000) { lastHello = now; sendHello(); }
         if (now - lastStats >= 30000) { lastStats = now; MLOG("net: %s", describe().c_str()); }
+        if (now - lastHousekeeping >= 1000) {
+            lastHousekeeping = now;
+            std::lock_guard<std::mutex> lock(g_m);
+            if (g_role == Role::Host) {
+                for (size_t i = 0; i < g_members.size();) {
+                    if (now - g_members[i].lastSeen < 15000) { ++i; continue; }
+                    MLOG("net: %s left", addrToString(g_members[i].addr).c_str());
+                    for (size_t k = 0; k < g_sendTo.size(); ++k)
+                        if (sameAddr(g_sendTo[k], g_members[i].addr)) { g_sendTo.erase(g_sendTo.begin() + static_cast<long>(k)); break; }
+                    g_members.erase(g_members.begin() + static_cast<long>(i));
+                }
+            } else if (!g_heardFromHost && now - started > 10000 && now - lastJoinWarn > 20000) {
+                lastJoinWarn = now;
+                MLOG("net: no answer from the host %s yet. Check the join code, and that the host is in game.",
+                     addrToString(g_hostAddr).c_str());
+            }
+        }
+        if (g_role == Role::Host && now - lastLease > 30 * 60 * 1000) { // renew the router mapping
+            lastLease = now;
+            std::thread([] { upnp::mapUdpPort(g_port, "MECMP", 3600); }).detach();
+        }
     }
 }
 } // namespace
 
-bool start(uint16_t port, const std::string& peer, float loopbackOffset, const std::string& name) {
+bool start(uint16_t port, const std::string& join, float loopbackOffset, const std::string& name) {
     g_port = port;
     g_loopbackOffset = loopbackOffset;
     g_name = name;
@@ -255,7 +406,7 @@ bool start(uint16_t port, const std::string& peer, float loopbackOffset, const s
     local.sin_port = htons(g_port);
     local.sin_addr.s_addr = htonl(INADDR_ANY);
     if (bind(g_sock, reinterpret_cast<sockaddr*>(&local), sizeof(local)) == SOCKET_ERROR) {
-        MLOG("net: cannot bind UDP port %u (error %d); is another copy running?", g_port, WSAGetLastError());
+        MLOG("net: cannot use UDP port %u (error %d); is another copy running?", g_port, WSAGetLastError());
         closesocket(g_sock);
         g_sock = INVALID_SOCKET;
         return false;
@@ -263,21 +414,38 @@ bool start(uint16_t port, const std::string& peer, float loopbackOffset, const s
     u_long nb = 1;
     ioctlsocket(g_sock, FIONBIO, &nb);
     g_session = GetTickCount() ^ (GetCurrentProcessId() << 16) ^ 0x5a17c0deu;
-    sockaddr_in p{};
-    if (!peer.empty() && parsePeer(peer, p)) {
-        g_sendTo.push_back(p);
-        MLOG("net: listening on UDP %u, sending to %s", g_port, addrToString(p).c_str());
+    srand(g_session);
+    if (join.empty()) {
+        g_role = Role::Host;
+        MLOG("net: hosting on UDP %u; setting up the router and the join code...", g_port);
     } else {
-        if (!peer.empty()) MLOG("net: could not resolve peer '%s'", peer.c_str());
-        MLOG("net: listening on UDP %u, waiting for other players to contact us", g_port);
+        g_role = Role::Join;
+        uint32_t ip = 0;
+        uint16_t p = 0;
+        sockaddr_in a{};
+        if (joincode::decode(join, ip, p)) {
+            a.sin_family = AF_INET;
+            a.sin_addr.s_addr = htonl(ip);
+            a.sin_port = htons(p);
+        } else if (!parsePeer(join, a)) {
+            MLOG("net: '%s' is not a join code or address; check join= in mecmp.ini", join.c_str());
+            closesocket(g_sock);
+            g_sock = INVALID_SOCKET;
+            return false;
+        }
+        g_hostAddr = a;
+        g_sendTo.push_back(a);
+        MLOG("net: joining the host at %s", addrToString(a).c_str());
     }
     g_run = true;
     g_thread = std::thread(threadMain);
+    if (g_role == Role::Host) std::thread(hostSetup).detach();
     return true;
 }
 
 void stop() {
     if (!g_run.exchange(false)) return;
+    if (g_role == Role::Host) upnp::unmapUdpPort(g_port);
     if (g_thread.joinable()) g_thread.join();
     if (g_sock != INVALID_SOCKET) closesocket(g_sock);
     g_sock = INVALID_SOCKET;
@@ -326,18 +494,34 @@ bool remoteState(uint32_t id, PlayerState& out, uint32_t& ageMs) {
     return true;
 }
 
+std::string joinCode() {
+    std::lock_guard<std::mutex> lock(g_m);
+    return g_joinCode;
+}
+
+bool hosting() { return g_role == Role::Host; }
+
 std::string describe() {
     size_t peers = 0;
+    std::string code;
     {
         std::lock_guard<std::mutex> lock(g_m);
-        peers = g_sendTo.size();
+        peers = g_role == Role::Host ? g_members.size() : g_sendTo.size();
+        code = g_joinCode;
     }
     const uint64_t sent = g_sent.load();
-    char buf[256];
-    snprintf(buf, sizeof(buf), "port %u, sending to %zu address(es), sent %llu (avg %llu bytes), received %llu, dropped %llu",
-             g_port, peers, static_cast<unsigned long long>(sent),
-             static_cast<unsigned long long>(sent ? g_bytesSent.load() / sent : 0),
-             static_cast<unsigned long long>(g_recv.load()), static_cast<unsigned long long>(g_dropped.load()));
+    char buf[320];
+    if (g_role == Role::Host)
+        snprintf(buf, sizeof(buf), "hosting on port %u (code %s), %zu player(s) joined, sent %llu (avg %llu bytes), received %llu, forwarded %llu, dropped %llu",
+                 g_port, code.empty() ? "-" : code.c_str(), peers, static_cast<unsigned long long>(sent),
+                 static_cast<unsigned long long>(sent ? g_bytesSent.load() / sent : 0),
+                 static_cast<unsigned long long>(g_recv.load()), static_cast<unsigned long long>(g_relayed.load()),
+                 static_cast<unsigned long long>(g_dropped.load()));
+    else
+        snprintf(buf, sizeof(buf), "joined %s (%s), sent %llu (avg %llu bytes), received %llu, dropped %llu",
+                 addrToString(g_hostAddr).c_str(), g_heardFromHost ? "connected" : "no answer yet",
+                 static_cast<unsigned long long>(sent), static_cast<unsigned long long>(sent ? g_bytesSent.load() / sent : 0),
+                 static_cast<unsigned long long>(g_recv.load()), static_cast<unsigned long long>(g_dropped.load()));
     return buf;
 }
 

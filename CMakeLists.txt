@@ -35,6 +35,8 @@ add_library(mecmp SHARED
   src/game/local_player.cpp
   src/net/net.cpp
   src/net/protocol.cpp
+  src/net/upnp.cpp
+  src/net/joincode.cpp
 )
 target_include_directories(mecmp PRIVATE src)
 target_link_libraries(mecmp PRIVATE ws2_32)

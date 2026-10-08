@@ -10,7 +10,7 @@ struct Settings {
     // [net]
     bool netEnabled = true;
     uint16_t port = 47800;
-    std::string peer = "127.0.0.1:47800"; // ip:port of the other player; empty = wait to be contacted
+    std::string join;                     // join code or ip:port of the host; empty = host a session
     float loopbackOffset = 3.0f;          // solo test: metres to the side the mirrored ghost stands
     // [player]
     std::string name = "Runner";
@@ -24,6 +24,7 @@ struct Settings {
 // Reads (and creates if missing) mecmp.ini in `dir`. Call once at startup.
 void load(const std::wstring& dir);
 const Settings& get();
+const std::wstring& dir(); // folder of mecmp.dll / mecmp.ini (with trailing backslash)
 Settings& mut(); // runtime changes (e.g. model picked in game); not written back yet
 
 } // namespace mecmp::config

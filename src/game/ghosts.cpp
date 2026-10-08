@@ -291,6 +291,7 @@ void onClientCharacter(void* ent) {
 void tick(uint64_t tick, uint64_t ticksInLevel) {
     (void)tick;
     handleRequests();
+    models::tick();
     const auto remotes = net::remotes(kHideAfterMs + 60000);
 
     // Forget ghosts the game destroyed. The city-ghost spawner sometimes takes a ghost back (to put

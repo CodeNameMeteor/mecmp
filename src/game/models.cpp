@@ -14,6 +14,8 @@ namespace {
 struct Model { std::string name; uintptr_t ccd = 0; };
 std::mutex g_m;
 std::vector<Model> g_models;
+uintptr_t g_shaderData = 0;   // ghost character data whose ghost-shader flag we switched off
+DWORD g_shaderRestoreAt = 0;  // when to switch it back on (game thread)
 
 std::string lower(std::string s) {
     for (auto& c : s) c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
@@ -111,6 +113,16 @@ void noteTemplate(uintptr_t spawnerData, const std::string& spawnerName) {
 void reset() {
     std::lock_guard<std::mutex> lock(g_m);
     g_models.clear();
+    g_shaderData = 0;
+    g_shaderRestoreAt = 0;
+}
+
+void tick() {
+    if (g_shaderData && g_shaderRestoreAt && static_cast<int32_t>(GetTickCount() - g_shaderRestoreAt) >= 0) {
+        poke<uint8_t>(g_shaderData + CharData_GhostShader, 1);
+        g_shaderData = 0;
+        g_shaderRestoreAt = 0;
+    }
 }
 
 std::vector<std::string> names() {
@@ -160,12 +172,20 @@ bool apply(void* ghost, const std::string& wanted, std::string* usedName) {
     const uintptr_t ch = reinterpret_cast<uintptr_t>(ghost);
     uintptr_t vt = 0, fn = 0;
     if (!mem::read(ch, vt) || !inImage(vt) || !mem::read(vt + Vtbl_ApplyCustomize, fn) || !inImage(fn)) return false;
-    // Ghost shader off for normal meshes, on for the projection looks.
+    // Ghost shader off while a normal look (Faith...) is built on the ghost: with it on, normal meshes
+    // are invisible. The flag lives in the ProjectionCharacter data that the game's own time-trial
+    // ghosts share, so it is switched back on shortly after (tick()); a TT ghost needs it.
     {
         const uint8_t ghostShader = lower(used).find("projection") != std::string::npos ? 1 : 0;
         const uintptr_t data = mem::readOr<uintptr_t>(ch + Character_Data);
         uint8_t cur = 0;
-        if (data && mem::read(data + CharData_GhostShader, cur) && cur != ghostShader) poke(data + CharData_GhostShader, ghostShader);
+        if (data && mem::read(data + CharData_GhostShader, cur)) {
+            if (cur != ghostShader) poke(data + CharData_GhostShader, ghostShader);
+            if (!ghostShader) {
+                g_shaderData = data;
+                g_shaderRestoreAt = GetTickCount() + 3000;
+            }
+        }
     }
     struct Args { void* ch; void* player; void* customize; uint8_t flag; uint8_t pad[7]; } args{};
     args.ch = ghost;

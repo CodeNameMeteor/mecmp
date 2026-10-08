@@ -18,6 +18,7 @@ namespace mecmp::game::models {
 
 void noteTemplate(uintptr_t spawnerData, const std::string& spawnerName); // from spawner creation
 void reset();                                                               // level changed
+void tick();  // game thread: switches the shared ghost-shader flag back on after a look was built
 
 std::vector<std::string> names(); // available now, "faith" first
 // Applies a model to a ghost (game thread). `wanted` = "faith" or part of a model name.

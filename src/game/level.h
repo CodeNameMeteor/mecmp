@@ -18,6 +18,12 @@ struct BoneSetup {
 void onSpawnerCreated(void* creationInfo, void* entity);
 void onForeignClientReplayComp(void* comp); // a client replay component that is not one of our ghosts'
 
+// True when everything ghosts need is known (player + ghost spawner, a ghost client for the bones).
+bool complete();
+// Finds missing spawners / ghost clients in memory (when the mod was loaded after the level).
+// Takes a few seconds; call from the mod's own thread.
+void scanForMissing();
+
 // The level changed (or ended): forget everything captured from it.
 void reset();
 

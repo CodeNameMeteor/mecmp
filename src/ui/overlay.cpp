@@ -49,16 +49,92 @@ bool isInputMessage(UINT msg) {
     return (msg >= WM_MOUSEFIRST && msg <= WM_MOUSELAST) || (msg >= WM_KEYFIRST && msg <= WM_KEYLAST) || msg == WM_INPUT;
 }
 
+// Virtual cursor. In gameplay the game hides the cursor, keeps re-centring it and reads the mouse
+// as raw input, so the real cursor is useless for the menu. While the menu is open we move our own
+// cursor with the raw mouse movement (WM_INPUT) and feed it to ImGui; the legacy mouse messages
+// are only used if no raw input arrives (e.g. in the game's own menus).
+std::atomic<float> g_cursorX{0}, g_cursorY{0};
+std::atomic<bool> g_rawMouse{false};
+
+void clampCursor() {
+    RECT rc{};
+    GetClientRect(g_window, &rc);
+    float x = g_cursorX, y = g_cursorY;
+    x = x < 0 ? 0 : (x > rc.right - 1 ? rc.right - 1 : x);
+    y = y < 0 ? 0 : (y > rc.bottom - 1 ? rc.bottom - 1 : y);
+    g_cursorX = x;
+    g_cursorY = y;
+}
+
+// Raw mouse events are collected here (window thread) and handed to ImGui at the start of the next
+// frame (render thread): ImGui itself is not thread-safe.
+std::atomic<uint32_t> g_btnDown{0}, g_btnUp{0};
+std::atomic<int> g_wheel{0};
+
+void handleRawMouse(LPARAM l) {
+    RAWINPUT ri{};
+    UINT size = sizeof(ri);
+    if (GetRawInputData(reinterpret_cast<HRAWINPUT>(l), RID_INPUT, &ri, &size, sizeof(RAWINPUTHEADER)) == static_cast<UINT>(-1)) return;
+    if (ri.header.dwType != RIM_TYPEMOUSE) return;
+    const RAWMOUSE& m = ri.data.mouse;
+    if (!(m.usFlags & MOUSE_MOVE_ABSOLUTE) && (m.lLastX || m.lLastY)) {
+        g_cursorX = g_cursorX + static_cast<float>(m.lLastX);
+        g_cursorY = g_cursorY + static_cast<float>(m.lLastY);
+        clampCursor();
+    }
+    const USHORT b = m.usButtonFlags;
+    uint32_t down = 0, up = 0;
+    if (b & RI_MOUSE_LEFT_BUTTON_DOWN) down |= 1;
+    if (b & RI_MOUSE_LEFT_BUTTON_UP) up |= 1;
+    if (b & RI_MOUSE_RIGHT_BUTTON_DOWN) down |= 2;
+    if (b & RI_MOUSE_RIGHT_BUTTON_UP) up |= 2;
+    if (b & RI_MOUSE_MIDDLE_BUTTON_DOWN) down |= 4;
+    if (b & RI_MOUSE_MIDDLE_BUTTON_UP) up |= 4;
+    if (down) g_btnDown |= down;
+    if (up) g_btnUp |= up;
+    if (b & RI_MOUSE_WHEEL) g_wheel += static_cast<SHORT>(m.usButtonData);
+    g_rawMouse = true;
+}
+
+// Render thread, before NewFrame: apply what the window thread collected.
+void applyRawMouse() {
+    ImGuiIO& io = ImGui::GetIO();
+    io.AddMousePosEvent(g_cursorX, g_cursorY);
+    const uint32_t down = g_btnDown.exchange(0), up = g_btnUp.exchange(0);
+    for (int i = 0; i < 3; ++i) {
+        // A click that went down and up between two frames: press this frame, release the next.
+        if (down & (1u << i)) io.AddMouseButtonEvent(i, true);
+        if (up & (1u << i)) {
+            if (down & (1u << i)) g_btnUp |= (1u << i);
+            else io.AddMouseButtonEvent(i, false);
+        }
+    }
+    if (const int w = g_wheel.exchange(0)) io.AddMouseWheelEvent(0.f, static_cast<float>(w) / WHEEL_DELTA);
+}
+
+bool isMouseMessage(UINT msg) { return msg >= WM_MOUSEFIRST && msg <= WM_MOUSELAST; }
+
 LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
     if (msg == WM_KEYDOWN && static_cast<int>(w) == g_toggleKey && !(l & (1 << 30))) {
         const bool open = !g_open;
         g_open = open;
-        if (open) ClipCursor(nullptr); // let the cursor reach the menu
+        if (open) {
+            ClipCursor(nullptr);
+            RECT rc{};
+            GetClientRect(g_window, &rc);
+            g_cursorX = (rc.right - rc.left) * 0.5f; // start in the middle of the screen
+            g_cursorY = (rc.bottom - rc.top) * 0.5f;
+            g_rawMouse = false;
+        }
         return 0;
     }
     if (g_open && g_ready) {
-        ImGui_ImplWin32_WndProcHandler(hwnd, msg, w, l);
-        if (msg == WM_INPUT) return DefWindowProcW(hwnd, msg, w, l); // swallow raw game input
+        if (msg == WM_INPUT) {
+            handleRawMouse(l);
+            return DefWindowProcW(hwnd, msg, w, l); // swallowed: the game does not see it
+        }
+        // Keyboard and text always go to ImGui; legacy mouse messages only while no raw input came.
+        if (!isMouseMessage(msg) || !g_rawMouse) ImGui_ImplWin32_WndProcHandler(hwnd, msg, w, l);
         if (isInputMessage(msg)) return 0;
     }
     return CallWindowProcW(g_origWndProc, hwnd, msg, w, l);
@@ -109,6 +185,7 @@ HRESULT STDMETHODCALLTYPE presentHook(IDXGISwapChain* sc, UINT sync, UINT flags)
     if (g_ready && sc == g_swapChain && g_rtv) {
         ImGui_ImplDX11_NewFrame();
         ImGui_ImplWin32_NewFrame();
+        if (g_open && g_rawMouse) applyRawMouse(); // after the backend's own cursor read, so ours wins
         ImGui::NewFrame();
         ImGui::GetIO().MouseDrawCursor = g_open.load();
         menu::draw(g_open.load());

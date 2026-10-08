@@ -72,6 +72,7 @@ bool gameMatches() {
 
 void monitorLoop() {
     uintptr_t lastWorld = 0;
+    DWORD levelSince = GetTickCount(), lastScan = 0;
     struct Key { int vk; bool down; void (*action)(); };
     Key keys[] = {
         {VK_F7, false, [] { game::ghosts::requestSpawnOrRefresh(); }},
@@ -85,6 +86,14 @@ void monitorLoop() {
             MLOG("level %s", world ? "started" : "ended");
             if (lastWorld) game::level::reset(); // spawners of the old level are stale
             lastWorld = world;
+            levelSince = GetTickCount();
+            lastScan = 0;
+        }
+        // Loaded after the level was created (or the game re-used spawners we never saw being
+        // made)? Look for them in memory, at most every 20 s.
+        if (world && GetTickCount() - levelSince > 15000 && GetTickCount() - lastScan > 20000 && !game::level::complete()) {
+            lastScan = GetTickCount();
+            game::level::scanForMissing();
         }
         for (Key& k : keys) {
             const bool d = (GetAsyncKeyState(k.vk) & 0x8000) != 0;

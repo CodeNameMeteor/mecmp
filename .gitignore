@@ -5,3 +5,6 @@ out/
 CMakeSettings.json
 *.log
 mecmp.ini
+bin/
+*.bundle
+join_code.txt

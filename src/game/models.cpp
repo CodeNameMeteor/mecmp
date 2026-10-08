@@ -94,6 +94,12 @@ void noteTemplate(uintptr_t spawnerData, const std::string& spawnerName) {
     std::string name = assetName(ccd);
     if (name.empty()) name = spawnerName;
     if (name.find("ErrorTemplate") != std::string::npos) return; // the game's placeholder bodies
+    // The ghost is animated on Faith's skeleton. Looks made for other skeletons (enemies,
+    // civilians) deform badly on it, so only Faith outfits and the projection looks are offered.
+    {
+        const std::string ln = lower(name);
+        if (ln.find("faith") == std::string::npos && ln.find("projection") == std::string::npos) return;
+    }
     std::lock_guard<std::mutex> lock(g_m);
     for (auto& m : g_models)
         if (m.ccd == ccd) return;

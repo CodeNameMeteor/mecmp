@@ -283,7 +283,10 @@ void tick(uint64_t tick, uint64_t ticksInLevel) {
     {
         std::lock_guard<std::mutex> lock(g_m);
         for (size_t i = 0; i < g_ghosts.size();) {
-            if (level::characterAlive(g_ghosts[i].character, g_ghosts[i].spawner)) { ++i; continue; }
+            if (!g_ghosts[i].character || level::characterAlive(g_ghosts[i].character, g_ghosts[i].spawner)) { ++i; continue; }
+            // The game sometimes takes a fresh ghost back from the city-ghost spawner right after a
+            // level loads; the entity can live on, frozen. Hide it before forgetting it.
+            if (g_ghosts[i].clientChar) setClientVisible(g_ghosts[i].clientChar, false);
             VLOG("ghost: ghost of player %08x is gone", g_ghosts[i].peer);
             g_ghosts.erase(g_ghosts.begin() + static_cast<long>(i));
         }

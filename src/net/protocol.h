@@ -3,7 +3,7 @@
 //
 // Header (16 bytes): u32 magic "MECM" | u16 protocol | u16 type | u32 session | u32 seq
 //
-// type 1 STATE: f32 pos[3] | f32 yaw | u32 flags | pose
+// type 1 STATE: f32 pos[3] | f32 yaw | u32 flags | u32 timeMs | pose
 //   pose: u8 boneCount | u8 flags (bit0 = full) | u16 0 | u32 translation mask
 //         | boneCount x u32 rotation (smallest-three: 2-bit index + 3 x 10 bits)
 //         | per mask bit: 3 x i16 translation (1/1024 m)
@@ -20,7 +20,7 @@
 namespace mecmp::net::protocol {
 
 constexpr uint32_t kMagic = 0x4d43454d; // "MECM"
-constexpr uint16_t kProtocol = 4;
+constexpr uint16_t kProtocol = 5;
 constexpr uint16_t kTypeState = 1;
 constexpr uint16_t kTypeHello = 2;
 constexpr size_t kNameLen = 24;

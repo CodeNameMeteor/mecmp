@@ -28,7 +28,7 @@ namespace {
 namespace proto = protocol;
 
 constexpr int kSnapCount = 16;
-constexpr double kInterpDelayMs = 100.0; // remote players are shown this far in the past
+constexpr double kInterpDelayMs = 120.0; // remote players are shown this far behind their own clock
 constexpr size_t kMaxPeers = 16;
 
 double nowMs() {
@@ -38,7 +38,7 @@ double nowMs() {
     return static_cast<double>(c.QuadPart) * 1000.0 / static_cast<double>(f.QuadPart);
 }
 
-struct Snap { PlayerState s; double t = 0; };
+struct Snap { PlayerState s; double t = 0; }; // t = sender's capture time
 struct Remote {
     uint32_t id = 0;
     sockaddr_in addr{};
@@ -48,6 +48,11 @@ struct Remote {
     bool haveSeq = false;
     DWORD lastTick = 0;
     proto::Decoder decoder;
+    // Sender clock -> our clock: the smallest (arrival - sent) seen = one-way delay + clock offset.
+    // Replaying on the sender's timestamps keeps movement smooth when packets arrive in bursts.
+    double minDelta = 0;
+    bool haveDelta = false;
+    uint32_t lastTime = 0;
     Snap snaps[kSnapCount];
     int head = 0, fill = 0;
 };
@@ -239,7 +244,12 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
         s.pos[2] -= std::sin(s.yaw) * g_loopbackOffset;
     }
     r.lastTick = GetTickCount();
-    r.snaps[r.head] = {s, nowMs()};
+    if (r.fill && static_cast<int32_t>(s.timeMs - r.lastTime) <= 0) return; // same capture sent twice
+    r.lastTime = s.timeMs;
+    const double delta = nowMs() - static_cast<double>(s.timeMs);
+    if (!r.haveDelta || delta < r.minDelta) { r.minDelta = delta; r.haveDelta = true; }
+    else r.minDelta += 0.02; // let the estimate creep up slowly (clock drift, route changes)
+    r.snaps[r.head] = {s, static_cast<double>(s.timeMs)};
     r.head = (r.head + 1) % kSnapCount;
     if (r.fill < kSnapCount) ++r.fill;
 }
@@ -333,9 +343,24 @@ void hostSetup(uint32_t generation) {
              g_port);
     }
     if (pub && isPrivate(pub)) {
-        MLOG("net: your router's public address %u.%u.%u.%u is not reachable from the internet (carrier-grade NAT). "
-             "Let another player host, or use Tailscale/ZeroTier.", pub >> 24, (pub >> 16) & 255, (pub >> 8) & 255, pub & 255);
-        pub = 0;
+        // The router itself sits behind another router (double NAT) or the ISP's NAT. Ask STUN
+        // how the internet sees us; the outer router may still need the port forwarded.
+        for (int i = 0; i < 4 && !g_stunIp; ++i) {
+            sendStunRequest();
+            Sleep(500);
+        }
+        const uint32_t outer = g_stunIp;
+        MLOG("net: your router reports a private address (%u.%u.%u.%u): there is another router or the ISP's NAT in "
+             "front of it.", pub >> 24, (pub >> 16) & 255, (pub >> 8) & 255, pub & 255);
+        if (outer && !isPrivate(outer)) {
+            pub = outer;
+            pubPort = g_stunPort;
+            MLOG("net: the join code below works if the outer router forwards UDP %u to your router. If friends cannot "
+                 "join, let another player host, or use Tailscale/ZeroTier.", g_port);
+        } else {
+            MLOG("net: not reachable from the internet (carrier-grade NAT). Let another player host, or use Tailscale/ZeroTier.");
+            pub = 0;
+        }
     }
     const std::string code = pub ? joincode::encode(pub, pubPort) : std::string();
     if (generation != g_generation) return; // the session was changed meanwhile
@@ -496,7 +521,7 @@ bool remoteState(uint32_t id, PlayerState& out, uint32_t& ageMs) {
     const Remote& r = it->second;
     ageMs = GetTickCount() - r.lastTick;
     // Find the two snapshots around (now - delay), newest first, and blend them.
-    const double t = nowMs() - kInterpDelayMs;
+    const double t = nowMs() - r.minDelta - kInterpDelayMs; // on the sender's clock
     const Snap* newer = nullptr;
     for (int k = 0; k < r.fill; ++k) {
         const Snap& sn = r.snaps[(r.head - 1 - k + 2 * kSnapCount) % kSnapCount];

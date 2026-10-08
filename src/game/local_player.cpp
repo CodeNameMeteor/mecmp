@@ -44,7 +44,17 @@ bool capture(net::PlayerState& st) {
     st.yaw = std::atan2(t->forward[0], t->forward[2]);
     st.flags = 1;
     st.boneCount = 0;
-    capturePose(st);
+    if (capturePose(st) && st.boneCount > 1) {
+        // Bone slot 1 is the AITrajectory bone: the world anchor the game itself places ghosts by.
+        // Using it (instead of the entity position) keeps body and root consistent (no height offset).
+        st.pos[0] = st.bones[1][0];
+        st.pos[1] = st.bones[1][1];
+        st.pos[2] = st.bones[1][2];
+    }
+    static const double freq = [] { LARGE_INTEGER f; QueryPerformanceFrequency(&f); return static_cast<double>(f.QuadPart); }();
+    LARGE_INTEGER c;
+    QueryPerformanceCounter(&c);
+    st.timeMs = static_cast<uint32_t>(static_cast<uint64_t>(static_cast<double>(c.QuadPart) * 1000.0 / freq));
     return true;
 }
 

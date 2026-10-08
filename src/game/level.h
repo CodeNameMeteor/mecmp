@@ -27,6 +27,7 @@ void* ghostSpawner();                 // the level's city-ghost spawner (always 
 void* playerCharacter();              // local player's ServerCharacterEntity (game thread)
 bool spawnerAlive(void* spawner);
 bool characterAlive(void* character, void* spawner); // still in its spawner's spawned list
+bool characterExists(void* character, uintptr_t expectedData); // a live PamServerCharacterEntity with this data
 // Bone setup the game's ghost clients use (copied from any live ghost client component).
 bool referenceSetup(BoneSetup& out);
 

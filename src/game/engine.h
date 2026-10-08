@@ -44,6 +44,7 @@ constexpr uintptr_t Vtbl_PamServerCharacterSpawnEntity = 0x141c4b388;
 constexpr uintptr_t Vtbl_ServerCharacterSpawnEntity = 0x141b4e0c8;
 constexpr uintptr_t Vtbl_PamClientReplayPlayerComponent = 0x141c48a28;
 constexpr uintptr_t Vtbl_PamClientCharacterEntity = 0x141c3c760;
+constexpr uintptr_t Vtbl_PamServerCharacterEntity = 0x141c3fcb0;
 
 // --- Functions ------------------------------------------------------------------------------------
 constexpr uintptr_t Fn_SpatialEntity_setTransform = 0x1432eb1f0; // (entity, const LinearTransform*, u8)

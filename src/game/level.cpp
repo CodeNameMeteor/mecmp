@@ -98,6 +98,13 @@ bool characterAlive(void* character, void* spawner) {
     return false;
 }
 
+bool characterExists(void* character, uintptr_t expectedData) {
+    const uintptr_t ch = reinterpret_cast<uintptr_t>(character);
+    uintptr_t vt = 0, data = 0;
+    return ch && mem::read(ch, vt) && vt == rva(Vtbl_PamServerCharacterEntity) && mem::read(ch + Character_Data, data) &&
+           (!expectedData || data == expectedData);
+}
+
 void* playerCharacter() {
     void* spawner = playerSpawner();
     if (!spawnerAlive(spawner)) return nullptr;

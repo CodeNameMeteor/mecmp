@@ -19,6 +19,7 @@ struct PlayerState {
     float pos[3] = {0, 0, 0};
     float yaw = 0;      // radians, atan2(forward.x, forward.z)
     uint32_t flags = 0; // bit0: in a level
+    uint32_t timeMs = 0; // sender's clock when this state was captured (receivers replay on it)
     // Body pose in the replay player's format: per bone {translation x,y,z,w; rotation x,y,z,w}.
     // Bone order = the recorder's, which maps 1:1 onto a ghost's replay pose. 0 = no pose.
     uint32_t boneCount = 0;

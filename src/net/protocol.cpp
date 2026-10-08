@@ -59,6 +59,7 @@ size_t writeState(char* buf, const Header& h, const PlayerState& s, Encoder& enc
     put(p, s.pos);
     put(p, s.yaw);
     put(p, s.flags);
+    put(p, s.timeMs);
     const uint8_t nb = static_cast<uint8_t>(s.boneCount <= kMaxPoseBones ? s.boneCount : 0);
     const bool full = nb && (nb != enc.lastFullCount || ++enc.sinceFull >= kFullEvery);
     int16_t qt[kMaxPoseBones][3];
@@ -101,7 +102,7 @@ bool readState(const char* payload, size_t n, const Decoder& dec, PlayerState& o
     uint8_t nb = 0, fl = 0;
     uint16_t res = 0;
     uint32_t mask = 0;
-    if (!get(p, end, out.pos) || !get(p, end, out.yaw) || !get(p, end, out.flags) || !get(p, end, nb) ||
+    if (!get(p, end, out.pos) || !get(p, end, out.yaw) || !get(p, end, out.flags) || !get(p, end, out.timeMs) || !get(p, end, nb) ||
         !get(p, end, fl) || !get(p, end, res) || !get(p, end, mask))
         return false;
     full = (fl & 1) != 0;

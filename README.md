@@ -29,7 +29,7 @@ player host. Players on the same network can use the LAN code from the log.
 | Key | Action |
 |---|---|
 | F7 | Spawn missing ghosts now / show them again / refresh their look |
-| F8 | Next ghost model (Faith, the red time-trial ghost, enemies, ...) |
+| F8 | Next ghost model (Faith outfits, the time-trial projection ghosts) |
 | F12 | Hide all ghosts and pause automatic spawning (F7 resumes) |
 | F9 | Write a status line to `mecmp.log` |
 

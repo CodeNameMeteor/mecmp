@@ -10,10 +10,11 @@
 //   Bones whose translation is not in the packet keep the last full packet's value (a full packet,
 //   with every translation, goes out every kFullEvery packets). The trajectory bone's translation
 //   is world space and is clamped; receivers place it at pos instead.
-// type 2 HELLO (about once a second): char name[24] (UTF-8, NUL padded)
+// type 2 HELLO (about once a second): char name[24] (UTF-8, at most 23 bytes, NUL padded)
 
 #include <cstddef>
 #include <cstdint>
+#include <string>
 
 #include "net/net.h"
 
@@ -47,6 +48,11 @@ struct Decoder { // per remote player
     float baseT[kMaxPoseBones][3] = {};
     uint32_t baseCount = 0;
 };
+
+// Longest player name that fits the HELLO field (one byte is kept for the NUL terminator).
+constexpr size_t kMaxNameBytes = kNameLen - 1;
+// Length of the longest prefix of `s` that is at most `maxBytes` long and does not split a UTF-8 character.
+size_t utf8PrefixLength(const std::string& s, size_t maxBytes);
 
 size_t writeState(char* buf, const Header& h, const PlayerState& s, Encoder& enc);
 size_t writeHello(char* buf, const Header& h, const char* name);

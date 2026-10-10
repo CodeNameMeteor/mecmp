@@ -13,6 +13,7 @@
 #include <cstring>
 #include <map>
 #include <mutex>
+#include <random>
 #include <thread>
 #include <cstdio>
 #include <cstdlib>
@@ -30,6 +31,8 @@ namespace proto = protocol;
 constexpr int kSnapCount = 16;
 constexpr double kInterpDelayMs = 120.0; // remote players are shown this far behind their own clock
 constexpr size_t kMaxPeers = 16;
+constexpr size_t kMaxRemotes = 64;        // player entries kept at once (a session has at most kMaxPeers players)
+constexpr DWORD kRemoteForgetMs = 120000; // entries silent this long are dropped (the ghosts use 65 s)
 
 double nowMs() {
     static const LARGE_INTEGER f = [] { LARGE_INTEGER x; QueryPerformanceFrequency(&x); return x; }();
@@ -175,6 +178,17 @@ void sendHello() {
     sendAll(buf, proto::writeHello(buf, header(proto::kTypeHello), name.c_str()));
 }
 
+// Player names are shown in the menu and written to the log: keep bytes that can be shown, drop control
+// characters (a name must not be able to forge log lines). UTF-8 bytes (0x80 and up) are kept.
+std::string cleanName(const char* raw, size_t len) {
+    std::string s;
+    for (size_t i = 0; i < len && raw[i]; ++i) {
+        const unsigned char c = static_cast<unsigned char>(raw[i]);
+        if (c >= 0x20 && c != 0x7f) s.push_back(static_cast<char>(c));
+    }
+    return s;
+}
+
 void handlePacket(const char* buf, int n, const sockaddr_in& from) {
     proto::Header h;
     if (n < static_cast<int>(sizeof(h))) { ++g_dropped; return; }
@@ -190,6 +204,8 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
         ++g_dropped;
         return;
     }
+    // Only the packet types we know may create state or be forwarded to other players.
+    if (h.type != proto::kTypeState && h.type != proto::kTypeHello) { ++g_dropped; return; }
     const bool own = h.session == g_session;
     std::lock_guard<std::mutex> lock(g_m);
     if (!own && g_role == Role::Host) {
@@ -198,10 +214,19 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
         for (auto& m : g_members)
             if (sameAddr(m.addr, from)) { m.lastSeen = GetTickCount(); known = true; }
         if (!known) {
-            if (g_members.size() >= kMaxPeers) return;
+            if (g_members.size() >= kMaxPeers) {
+                static DWORD lastFullWarn = 0;
+                if (GetTickCount() - lastFullWarn > 10000) {
+                    lastFullWarn = GetTickCount();
+                    MLOG("net: session full (%llu players); not admitting %s", static_cast<unsigned long long>(g_members.size()),
+                         addrToString(from).c_str());
+                }
+                return;
+            }
             g_members.push_back({from, GetTickCount()});
             g_sendTo.push_back(from);
-            MLOG("net: %s joined (%zu player(s) connected)", addrToString(from).c_str(), g_members.size());
+            MLOG("net: %s joined (%llu player(s) connected)", addrToString(from).c_str(),
+                 static_cast<unsigned long long>(g_members.size()));
         }
         for (const auto& m : g_members)
             if (!sameAddr(m.addr, from))
@@ -211,7 +236,18 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
         g_heardFromHost = true;
         MLOG("net: connected to the host %s", addrToString(from).c_str());
     }
-    Remote& r = g_remotes[h.session];
+    auto found = g_remotes.find(h.session);
+    if (found == g_remotes.end()) {
+        if (g_remotes.size() >= kMaxRemotes) {
+            // Flood or spoofed session ids: keep memory bounded by replacing the entry heard from longest ago.
+            auto stalest = g_remotes.begin();
+            for (auto it = g_remotes.begin(); it != g_remotes.end(); ++it)
+                if (it->second.lastTick < stalest->second.lastTick) stalest = it;
+            g_remotes.erase(stalest);
+        }
+        found = g_remotes.emplace(h.session, Remote{}).first;
+    }
+    Remote& r = found->second;
     if (!r.id) {
         r.id = h.session;
         r.addr = from;
@@ -226,11 +262,10 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
     const char* payload = buf + sizeof(h);
     const size_t len = static_cast<size_t>(n) - sizeof(h);
     if (h.type == proto::kTypeHello) {
-        char name[proto::kNameLen + 1] = {};
-        memcpy(name, payload, len < proto::kNameLen ? len : proto::kNameLen);
+        const std::string name = cleanName(payload, len < proto::kNameLen ? len : proto::kNameLen);
         if (r.name != name) {
             r.name = name;
-            MLOG("net: player %08x is '%s'", r.id, name);
+            MLOG("net: player %08x is '%s'", r.id, name.c_str());
         }
         return;
     }
@@ -260,6 +295,10 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
 constexpr uint32_t kStunCookie = 0x2112A442;
 std::atomic<uint32_t> g_stunIp{0};
 std::atomic<uint16_t> g_stunPort{0};
+// The transaction id of the request we are waiting for. A reply only counts with this id.
+std::mutex g_stunM;
+unsigned char g_stunTx[12] = {};
+bool g_stunPending = false;
 
 void sendStunRequest() {
     addrinfo hints{};
@@ -268,19 +307,36 @@ void sendStunRequest() {
     addrinfo* res = nullptr;
     if (getaddrinfo("stun.l.google.com", "19302", &hints, &res) != 0 || !res) return;
     unsigned char req[20] = {0x00, 0x01, 0x00, 0x00, 0x21, 0x12, 0xA4, 0x42};
-    for (int i = 8; i < 20; ++i) req[i] = static_cast<unsigned char>(rand());
+    {
+        // One id for all retries of this setup, so a late reply to an earlier try still counts.
+        std::lock_guard<std::mutex> lock(g_stunM);
+        if (!g_stunPending) {
+            std::random_device rd;
+            for (unsigned char& c : g_stunTx) c = static_cast<unsigned char>(rd());
+            g_stunPending = true;
+        }
+        memcpy(req + 8, g_stunTx, sizeof(g_stunTx));
+    }
     sendto(g_sock, reinterpret_cast<const char*>(req), sizeof(req), 0, res->ai_addr, static_cast<int>(res->ai_addrlen));
     freeaddrinfo(res);
 }
 
 bool handleStun(const unsigned char* b, int n) {
     if (n < 20 || b[0] != 0x01 || b[1] != 0x01) return false; // binding success response
-    if (((b[4] << 24) | (b[5] << 16) | (b[6] << 8) | b[7]) != static_cast<int>(kStunCookie)) return false;
+    const uint32_t cookie = (static_cast<uint32_t>(b[4]) << 24) | (static_cast<uint32_t>(b[5]) << 16) |
+                            (static_cast<uint32_t>(b[6]) << 8) | b[7];
+    if (cookie != kStunCookie) return false;
+    {
+        std::lock_guard<std::mutex> lock(g_stunM);
+        if (!g_stunPending || memcmp(b + 8, g_stunTx, sizeof(g_stunTx)) != 0) return true; // not the answer we asked for
+        g_stunPending = false;
+    }
     for (int p = 20; p + 4 <= n;) {
         const int type = (b[p] << 8) | b[p + 1], len = (b[p + 2] << 8) | b[p + 3];
         if (type == 0x0020 && len >= 8 && p + 4 + len <= n && b[p + 5] == 0x01) { // XOR-MAPPED-ADDRESS, IPv4
             g_stunPort = static_cast<uint16_t>(((b[p + 6] << 8) | b[p + 7]) ^ (kStunCookie >> 16));
-            g_stunIp = static_cast<uint32_t>((b[p + 8] << 24) | (b[p + 9] << 16) | (b[p + 10] << 8) | b[p + 11]) ^ kStunCookie;
+            g_stunIp = ((static_cast<uint32_t>(b[p + 8]) << 24) | (static_cast<uint32_t>(b[p + 9]) << 16) |
+                        (static_cast<uint32_t>(b[p + 10]) << 8) | b[p + 11]) ^ kStunCookie;
         }
         p += 4 + ((len + 3) & ~3);
     }
@@ -312,9 +368,12 @@ void publishCode(const std::string& code, const std::string& lan) {
     if (!code.empty() && OpenClipboard(nullptr)) {
         EmptyClipboard();
         if (HGLOBAL h = GlobalAlloc(GMEM_MOVEABLE, code.size() + 1)) {
-            memcpy(GlobalLock(h), code.c_str(), code.size() + 1);
-            GlobalUnlock(h);
-            if (!SetClipboardData(CF_TEXT, h)) GlobalFree(h);
+            if (void* p = GlobalLock(h)) {
+                memcpy(p, code.c_str(), code.size() + 1);
+                GlobalUnlock(h);
+                if (SetClipboardData(CF_TEXT, h)) h = nullptr; // the system owns the memory now
+            }
+            if (h) GlobalFree(h);
         }
         CloseClipboard();
     }
@@ -403,6 +462,10 @@ void threadMain() {
         if (now - lastHousekeeping >= 1000) {
             lastHousekeeping = now;
             std::lock_guard<std::mutex> lock(g_m);
+            for (auto it = g_remotes.begin(); it != g_remotes.end();) {
+                if (now - it->second.lastTick > kRemoteForgetMs) it = g_remotes.erase(it);
+                else ++it;
+            }
             if (g_role == Role::Host) {
                 for (size_t i = 0; i < g_members.size();) {
                     if (now - g_members[i].lastSeen < 15000) { ++i; continue; }
@@ -439,12 +502,20 @@ bool start(uint16_t port, const std::string& join, float loopbackOffset, const s
         g_name = name;
     }
     g_stunIp = 0;
+    {
+        std::lock_guard<std::mutex> lock(g_stunM);
+        g_stunPending = false;
+    }
     g_port = port;
     g_loopbackOffset = loopbackOffset;
     WSADATA wsa;
     if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) { MLOG("net: WSAStartup failed"); return false; }
     g_sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
-    if (g_sock == INVALID_SOCKET) { MLOG("net: socket() failed: %d", WSAGetLastError()); return false; }
+    if (g_sock == INVALID_SOCKET) {
+        MLOG("net: socket() failed: %d", WSAGetLastError());
+        WSACleanup();
+        return false;
+    }
     sockaddr_in local{};
     local.sin_family = AF_INET;
     local.sin_port = htons(g_port);
@@ -453,12 +524,12 @@ bool start(uint16_t port, const std::string& join, float loopbackOffset, const s
         MLOG("net: cannot use UDP port %u (error %d); is another copy running?", g_port, WSAGetLastError());
         closesocket(g_sock);
         g_sock = INVALID_SOCKET;
+        WSACleanup();
         return false;
     }
     u_long nb = 1;
     ioctlsocket(g_sock, FIONBIO, &nb);
     g_session = GetTickCount() ^ (GetCurrentProcessId() << 16) ^ 0x5a17c0deu;
-    srand(g_session);
     if (join.empty()) {
         g_role = Role::Host;
         MLOG("net: hosting on UDP %u; setting up the router and the join code...", g_port);
@@ -475,6 +546,7 @@ bool start(uint16_t port, const std::string& join, float loopbackOffset, const s
             MLOG("net: '%s' is not a join code or address; check join= in mecmp.ini", join.c_str());
             closesocket(g_sock);
             g_sock = INVALID_SOCKET;
+            WSACleanup();
             return false;
         }
         g_hostAddr = a;
@@ -566,8 +638,8 @@ std::string describe() {
     const uint64_t sent = g_sent.load();
     char buf[320];
     if (g_role == Role::Host)
-        snprintf(buf, sizeof(buf), "hosting on port %u (code %s), %zu player(s) joined, sent %llu (avg %llu bytes), received %llu, forwarded %llu, dropped %llu",
-                 g_port, code.empty() ? "-" : code.c_str(), peers, static_cast<unsigned long long>(sent),
+        snprintf(buf, sizeof(buf), "hosting on port %u (code %s), %llu player(s) joined, sent %llu (avg %llu bytes), received %llu, forwarded %llu, dropped %llu",
+                 g_port, code.empty() ? "-" : code.c_str(), static_cast<unsigned long long>(peers), static_cast<unsigned long long>(sent),
                  static_cast<unsigned long long>(sent ? g_bytesSent.load() / sent : 0),
                  static_cast<unsigned long long>(g_recv.load()), static_cast<unsigned long long>(g_relayed.load()),
                  static_cast<unsigned long long>(g_dropped.load()));

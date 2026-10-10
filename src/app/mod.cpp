@@ -66,7 +66,7 @@ bool gameMatches() {
             return false;
         }
     }
-    MLOG("startup: game build recognised (%zu types)", types.size());
+    MLOG("startup: game build recognised (%llu types)", static_cast<unsigned long long>(types.size()));
     return true;
 }
 
@@ -126,8 +126,9 @@ void run(HMODULE self) {
     }
     ui::install();
     const auto& cfg = config::get();
-    if (cfg.netEnabled) net::start(cfg.port, cfg.join, cfg.loopbackOffset, cfg.name);
-    else MLOG("net: disabled in mecmp.ini");
+    if (!cfg.netEnabled) MLOG("net: disabled in mecmp.ini");
+    else if (!net::start(cfg.port, cfg.join, cfg.loopbackOffset, cfg.name))
+        MLOG("net: multiplayer is NOT running (see the net: lines above); the rest of the mod still works");
     MLOG("ready. %s F7 = spawn/show ghosts, F8 = next ghost model, F12 = hide ghosts, F9 = status (and join code).",
          cfg.join.empty() ? "Hosting: friends join with your join code (see below)." : "Joining: other players appear once the host answers.");
     monitorLoop();

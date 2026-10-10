@@ -191,7 +191,7 @@ bool apply(void* ghost, const std::string& wanted, std::string* usedName) {
     args.ch = ghost;
     args.customize = reinterpret_cast<void*>(ccd);
     reinterpret_cast<void (*)(void*, Args*)>(fn)(ghost, &args);
-    VLOG("model: ghost %p now uses '%s' (%zu pieces)", ghost, used.c_str(), visuals.size());
+    VLOG("model: ghost %p now uses '%s' (%llu pieces)", ghost, used.c_str(), static_cast<unsigned long long>(visuals.size()));
     if (usedName) *usedName = used;
     return true;
 }

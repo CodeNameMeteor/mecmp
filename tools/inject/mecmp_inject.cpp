@@ -63,7 +63,8 @@ int fail(const wchar_t* what) {
 int wmain(int argc, wchar_t** argv) {
     wchar_t dll[MAX_PATH];
     if (argc > 1) {
-        if (!GetFullPathNameW(argv[1], MAX_PATH, dll, nullptr)) return fail(L"GetFullPathName");
+        const DWORD n = GetFullPathNameW(argv[1], MAX_PATH, dll, nullptr);
+        if (n == 0 || n >= MAX_PATH) return fail(L"GetFullPathName");
     } else {
         DWORD n = GetModuleFileNameW(nullptr, dll, MAX_PATH);
         if (n == 0 || n >= MAX_PATH) return fail(L"GetModuleFileName");
@@ -100,7 +101,7 @@ int wmain(int argc, wchar_t** argv) {
 
     // kernel32 is mapped at the same address in every process of a boot session.
     auto loadLib = reinterpret_cast<LPTHREAD_START_ROUTINE>(
-        GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "LoadLibraryW"));
+        reinterpret_cast<void*>(GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "LoadLibraryW")));
     HANDLE thread = CreateRemoteThread(proc, nullptr, 0, loadLib, remote, 0, nullptr);
     if (!thread) return fail(L"CreateRemoteThread");
     wprintf(L"LoadLibraryW thread started, waiting...\n");
@@ -108,13 +109,12 @@ int wmain(int argc, wchar_t** argv) {
         wprintf(L"FAILED: LoadLibraryW did not return within 30s.\n");
         return 1;
     }
-    DWORD exitCode = 0;
-    GetExitCodeThread(thread, &exitCode); // low 32 bits of the HMODULE, 0 on failure
+    // The thread's exit code is only the low 32 bits of the HMODULE, so ask the game whether the module is there.
     CloseHandle(thread);
     VirtualFreeEx(proc, remote, 0, MEM_RELEASE);
     CloseHandle(proc);
 
-    if (exitCode == 0 || !moduleLoaded(pid, dll, true)) {
+    if (!moduleLoaded(pid, dll, true)) {
         wprintf(L"FAILED: LoadLibraryW returned 0 inside the game. The DLL could not be loaded\n"
                 L"(missing dependency, blocked file, or wrong architecture).\n");
         return 1;

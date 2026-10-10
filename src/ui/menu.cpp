@@ -15,11 +15,12 @@
 #include "game/models.h"
 #include "imgui.h"
 #include "net/net.h"
+#include "net/protocol.h"
 
 namespace mecmp::ui::menu {
 namespace {
 
-char g_name[25] = {};
+char g_name[net::protocol::kMaxNameBytes + 1] = {}; // what fits on the wire
 char g_code[64] = {};
 bool g_inited = false;
 DWORD g_hintUntil = 0;
@@ -28,9 +29,12 @@ void copyToClipboard(const std::string& text) {
     if (text.empty() || !OpenClipboard(nullptr)) return;
     EmptyClipboard();
     if (HGLOBAL h = GlobalAlloc(GMEM_MOVEABLE, text.size() + 1)) {
-        memcpy(GlobalLock(h), text.c_str(), text.size() + 1);
-        GlobalUnlock(h);
-        if (!SetClipboardData(CF_TEXT, h)) GlobalFree(h);
+        if (void* p = GlobalLock(h)) {
+            memcpy(p, text.c_str(), text.size() + 1);
+            GlobalUnlock(h);
+            if (SetClipboardData(CF_TEXT, h)) h = nullptr; // the system owns the memory now
+        }
+        if (h) GlobalFree(h);
     }
     CloseClipboard();
 }
@@ -39,7 +43,13 @@ std::string fromClipboard() {
     std::string s;
     if (!OpenClipboard(nullptr)) return s;
     if (HANDLE h = GetClipboardData(CF_TEXT)) {
-        if (const char* p = static_cast<const char*>(GlobalLock(h))) s = p;
+        // Another program wrote this: read at most the block's size, and stop at the first NUL.
+        const SIZE_T size = GlobalSize(h);
+        if (const char* p = static_cast<const char*>(GlobalLock(h))) {
+            SIZE_T len = 0;
+            while (len < size && p[len]) ++len;
+            s.assign(p, len);
+        }
         GlobalUnlock(h);
     }
     CloseClipboard();
@@ -97,7 +107,7 @@ void sessionSection() {
     ImGui::SetNextItemWidth(ImGui::GetFontSize() * 10);
     ImGui::InputText("Your name", g_name, sizeof(g_name));
     ImGui::SameLine();
-    if (ImGui::Button("Set")) {
+    if (ImGui::Button("Set name")) {
         config::mut().name = g_name[0] ? g_name : "Runner";
         net::setName(config::get().name);
         config::save();
@@ -113,10 +123,13 @@ void sessionSection() {
     ImGui::SameLine();
     if (ImGui::Button("Paste")) snprintf(g_code, sizeof(g_code), "%s", fromClipboard().c_str());
     ImGui::SameLine();
-    ImGui::BeginDisabled(g_code[0] == 0);
+    const bool noCode = g_code[0] == 0;
+    ImGui::BeginDisabled(noCode);
     if (ImGui::Button("Join")) startSession(g_code);
     ImGui::EndDisabled();
+    if (noCode && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Enter the host's join code first.");
     if (ImGui::Button("Solo test (mirror me)")) startSession("127.0.0.1:" + std::to_string(config::get().port));
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Test on your own PC: a ghost mirrors you beside you.");
 }
 
 void playersSection() {

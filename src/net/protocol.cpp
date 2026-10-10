@@ -51,6 +51,14 @@ template <class T> bool get(const char*& p, const char* end, T& v) {
     p += sizeof(T);
     return true;
 }
+
+// Positions are metres in the level's world; anything beyond this (or NaN/inf) is a broken or hostile packet.
+constexpr float kMaxCoord = 100000.f;
+bool sanePlacement(const PlayerState& s) {
+    for (float v : s.pos)
+        if (!std::isfinite(v) || std::fabs(v) > kMaxCoord) return false;
+    return std::isfinite(s.yaw);
+}
 } // namespace
 
 size_t writeState(char* buf, const Header& h, const PlayerState& s, Encoder& enc) {
@@ -86,11 +94,20 @@ size_t writeState(char* buf, const Header& h, const PlayerState& s, Encoder& enc
     return static_cast<size_t>(p - buf);
 }
 
+size_t utf8PrefixLength(const std::string& s, size_t maxBytes) {
+    if (s.size() <= maxBytes) return s.size();
+    size_t n = maxBytes;
+    // Continuation bytes look like 10xxxxxx: back up to the first byte of the character that would be cut.
+    while (n > 0 && (static_cast<unsigned char>(s[n]) & 0xC0) == 0x80) --n;
+    return n;
+}
+
 size_t writeHello(char* buf, const Header& h, const char* name) {
     char* p = buf;
     put(p, h);
+    const std::string full = name ? name : "";
     char n[kNameLen] = {};
-    strncpy(n, name ? name : "", kNameLen - 1);
+    memcpy(n, full.data(), utf8PrefixLength(full, kMaxNameBytes));
     memcpy(p, n, kNameLen);
     p += kNameLen;
     return static_cast<size_t>(p - buf);
@@ -105,11 +122,14 @@ bool readState(const char* payload, size_t n, const Decoder& dec, PlayerState& o
     if (!get(p, end, out.pos) || !get(p, end, out.yaw) || !get(p, end, out.flags) || !get(p, end, out.timeMs) || !get(p, end, nb) ||
         !get(p, end, fl) || !get(p, end, res) || !get(p, end, mask))
         return false;
+    if (!sanePlacement(out)) return false;
     full = (fl & 1) != 0;
     out.boneCount = 0;
     if (nb == 0) return true;
     if (nb > kMaxPoseBones) return false;
     if (!full && dec.baseCount != nb) return true; // no base yet: position only until a full packet
+    // The rotations (4 bytes each) come first, the translations (6 bytes each, one per mask bit) after them.
+    if (end - p < static_cast<ptrdiff_t>(nb) * 4) return false;
     const char* t = p + nb * 4;
     for (uint8_t i = 0; i < nb; ++i) {
         uint32_t w = 0;

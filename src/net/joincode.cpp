@@ -37,9 +37,13 @@ bool decode(const std::string& code, uint32_t& ip, uint16_t& port) {
         ++n;
     }
     if (n != 10) return false;
+    // encode() fills 48 bits; a first symbol of 8 or more would set bits that the address does not have.
+    if (v >> 48) return false;
     ip = static_cast<uint32_t>(v >> 16);
     port = static_cast<uint16_t>(v & 0xffff);
-    return ip != 0 && port != 0;
+    // Only unicast addresses can be a host: no 0.0.0.0, broadcast, multicast (224.0.0.0/4) or reserved (240.0.0.0/4).
+    if (ip == 0 || ip == 0xffffffffu || (ip >> 28) >= 0xe) return false;
+    return port != 0;
 }
 
 } // namespace mecmp::net::joincode

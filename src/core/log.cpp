@@ -30,7 +30,8 @@ bool moduleDir(HMODULE module, wchar_t* path) {
 
 FILE* tryOpen(const wchar_t* dir) {
     wchar_t path[MAX_PATH];
-    if (lstrlenW(dir) + 10 >= MAX_PATH) return nullptr;
+    // Longest name below is "mecmp.prev.log" (14 characters) plus the terminating NUL.
+    if (lstrlenW(dir) + 15 >= MAX_PATH) return nullptr;
     lstrcpyW(path, dir);
     lstrcatW(path, L"mecmp.log");
     // Keep the previous run's log as mecmp.prev.log (a crash run must not erase the one before it).

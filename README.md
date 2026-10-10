@@ -40,6 +40,16 @@ player host. Players on the same network can use the LAN code from the log.
 Solo test: `join=127.0.0.1:47800`. Your own packets come back and a ghost mirrors you 3 m to
 your side.
 
+## Security and privacy
+
+- Traffic is plain UDP, with no encryption and no login. Anyone who can reach the host's port can
+  send packets that look like another player. Only host sessions with people you trust.
+- The join code contains the host's public IP address and port. Anyone with the code can join.
+- Hosting asks the router to open the port with UPnP. If the router refuses a timed mapping, the
+  mapping can stay after the game closes; remove it in the router's port-forwarding page.
+- Hosting copies the join code to the clipboard. `mecmp.log` lists other players' IP addresses;
+  check it before you share it.
+
 ## Build
 
 CMake, C++17, x64. Visual Studio 2022: *File → Open → Folder*, pick the repo, build

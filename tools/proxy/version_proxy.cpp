@@ -51,7 +51,7 @@ using Fn8 = uintptr_t (*)(uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t,
 
 Fn8 resolve(const char* name) {
     HMODULE m = realVersion();
-    return m ? reinterpret_cast<Fn8>(GetProcAddress(m, name)) : nullptr;
+    return m ? reinterpret_cast<Fn8>(reinterpret_cast<void*>(GetProcAddress(m, name))) : nullptr;
 }
 
 DWORD WINAPI loadCore(LPVOID) {

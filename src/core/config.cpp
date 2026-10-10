@@ -5,10 +5,12 @@
 #endif
 #include <windows.h>
 
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 
 #include "core/log.h"
+#include "net/protocol.h"
 
 namespace mecmp::config {
 namespace {
@@ -75,13 +77,15 @@ void load(const std::wstring& dir) {
     }
     Settings& s = g_settings;
     s.netEnabled = readInt(ini, L"net", L"enabled", 1) != 0;
-    s.port = static_cast<uint16_t>(readInt(ini, L"net", L"port", 47800));
+    const int port = readInt(ini, L"net", L"port", 47800);
+    s.port = port >= 1 && port <= 65535 ? static_cast<uint16_t>(port) : 47800; // 0 and out-of-range ports are not usable
     s.join = readString(ini, L"net", L"join", "\x01");
     if (s.join == "\x01") s.join = readString(ini, L"net", L"peer", ""); // older mecmp.ini files (no join= line)
-    s.loopbackOffset = static_cast<float>(atof(readString(ini, L"net", L"loopback_offset", "3.0").c_str()));
+    const float offset = static_cast<float>(atof(readString(ini, L"net", L"loopback_offset", "3.0").c_str()));
+    s.loopbackOffset = std::isfinite(offset) ? offset : 3.0f; // "nan" or "inf" would poison the mirrored position
     s.name = readString(ini, L"player", L"name", "Runner");
     if (s.name.empty()) s.name = "Runner";
-    if (s.name.size() > 24) s.name.resize(24);
+    s.name.resize(net::protocol::utf8PrefixLength(s.name, net::protocol::kMaxNameBytes)); // what goes on the wire
     s.autoSpawn = readInt(ini, L"ghost", L"auto_spawn", 1) != 0;
     s.model = readString(ini, L"ghost", L"model", "faith");
     s.menuKey = readString(ini, L"ui", L"menu_key", "INSERT");

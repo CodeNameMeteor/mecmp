@@ -16,7 +16,8 @@ worlds in one process; the mod uses both.
    build was made from. Any mismatch: stay inactive.
 2. Read `mecmp.ini` (`core/config.cpp`).
 3. Install hooks (`game/hooks.cpp`), start the network thread (`net/net.cpp`).
-4. The mod thread then only watches for level changes and hotkeys.
+4. The mod thread then watches for level changes and hotkeys, and scans game memory for spawners
+   when they were missed (`game/level.cpp`, see `scanForMissing`).
 
 ## Hooks (`game/hooks.cpp`)
 
@@ -67,12 +68,15 @@ applies it with `character->vtbl[0x340]`; the look replicates to the client.
 UDP, one socket. Sessions have one host and any number of joiners (up to 16).
 
 - **Host** (`join=` empty): `upnp.cpp` finds the router (SSDP), asks it to forward the UDP port
-  (SOAP AddPortMapping, 1 h lease, renewed) and reads its public IP. Without UPnP a STUN request
+  (SOAP AddPortMapping, 1 h lease, renewed; if the router refuses a lease it gets a permanent mapping,
+  which is not removed when the session ends) and reads its public IP. Without UPnP a STUN request
   (stun.l.google.com) through the game socket finds the public address. `joincode.cpp` turns
   ip:port into a 10-character Crockford base32 code. The host forwards every joiner's packets
   unchanged to all other joiners, so only the host has to be reachable.
 - **Join**: send to the host only; everyone else's packets arrive through the host.
 - Packets: STATE ~30 Hz and HELLO (name) ~1 Hz. Remote players are keyed by the random session id
-  in each packet. Pose compression: rotations smallest-three 32-bit, translations i16 at 1 mm,
+  in each packet. Pose compression: rotations smallest-three 32-bit, translations i16 at 1/1024 m,
   only for bones that changed since the last full packet (one per second); about 150 bytes.
-- Receivers buffer 16 snapshots per player and show them 100 ms in the past, blended.
+- Receivers buffer 16 snapshots per player and show them 120 ms in the past, blended. Positions and angles outside a sane range are dropped.
+- At most 64 player entries are kept; an entry silent for 2 minutes is forgotten. Packets of unknown
+  type are dropped before anything is stored or forwarded.

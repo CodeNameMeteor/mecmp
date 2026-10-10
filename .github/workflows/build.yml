@@ -1,0 +1,38 @@
+name: build
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  portable-tests:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Network tests (Linux, sanitizers)
+        run: |
+          g++ -std=c++17 -Wall -Wextra -Isrc -fsanitize=address,undefined -fno-sanitize-recover=undefined -g \
+            tests/net_test.cpp src/net/protocol.cpp src/net/joincode.cpp -o net_test
+          ./net_test
+
+  windows-build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install MinGW-w64 and CMake
+        run: sudo apt-get update && sudo apt-get install -y g++-mingw-w64-x86-64 cmake ninja-build
+      - name: Configure and build (x64, Release)
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_SYSTEM_NAME=Windows \
+            -DCMAKE_CXX_COMPILER=x86_64-w64-mingw32-g++-posix \
+            -DCMAKE_C_COMPILER=x86_64-w64-mingw32-gcc-posix \
+            -DCMAKE_BUILD_TYPE=Release
+          cmake --build build
+      - name: Upload binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: mecmp-x64
+          path: |
+            build/*.dll
+            build/*.exe

@@ -121,9 +121,10 @@ void scanForMissing() {
     });
     for (const auto& g : ghosts) considerSpawner(reinterpret_cast<void*>(g.first), g.second, true);
     for (uintptr_t c : comps) onForeignClientReplayComp(reinterpret_cast<void*>(c));
-    MLOG("level: scanned %llu MB in %.1f s: %zu spawners (%zu ghost), %zu ghost clients; player spawner %s, ghost spawner %s",
-         static_cast<unsigned long long>(scanned >> 20), (GetTickCount() - start) / 1000.0, spawners.size(), ghosts.size(),
-         comps.size(), playerSpawner() ? "found" : "missing", ghostSpawner() ? "found" : "missing");
+    MLOG("level: scanned %llu MB in %.1f s: %llu spawners (%llu ghost), %llu ghost clients; player spawner %s, ghost spawner %s",
+         static_cast<unsigned long long>(scanned >> 20), (GetTickCount() - start) / 1000.0,
+         static_cast<unsigned long long>(spawners.size()), static_cast<unsigned long long>(ghosts.size()),
+         static_cast<unsigned long long>(comps.size()), playerSpawner() ? "found" : "missing", ghostSpawner() ? "found" : "missing");
 }
 
 void reset() {

@@ -33,7 +33,7 @@ constexpr const char* kDefaultIni =
     "; JOIN: paste the host's join code, e.g. join=8H3KQ-ZT1V4 (or the host's ip:port).\r\n"
     "; solo test: join=127.0.0.1:47800 (a ghost mirrors you)\r\n"
     "join=\r\n"
-    "; solo test only: how far to the side the mirrored ghost stands (metres)\r\n"
+    "; solo test only: how far the mirrored ghost stands from you, along the world X axis (metres)\r\n"
     "loopback_offset=3.0\r\n"
     "\r\n"
     "[player]\r\n"

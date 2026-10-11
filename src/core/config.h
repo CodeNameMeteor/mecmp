@@ -17,7 +17,7 @@ struct Settings {
     bool netEnabled = true;
     uint16_t port = 47800;
     std::string join;                     // join code or ip:port of the host; empty = host a session
-    float loopbackOffset = 3.0f;          // solo test: metres to the side the mirrored ghost stands
+    float loopbackOffset = 3.0f;          // solo test: metres along world X the mirrored ghost stands
     // [player]
     std::string name = "Runner";
     // [ghost]

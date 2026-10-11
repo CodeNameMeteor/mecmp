@@ -325,9 +325,9 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
     bool full = false;
     if (!proto::readState(payload, len, r.decoder, s, full)) { ++g_dropped; return; }
     if (full) proto::commitBase(r.decoder, s);
-    if (own) { // solo test: show the mirror to our right so it does not stand inside us
-        s.pos[0] += std::cos(s.yaw) * g_loopbackOffset;
-        s.pos[2] -= std::sin(s.yaw) * g_loopbackOffset;
+    if (own) { // solo test: the mirror stands a fixed distance away along the world X axis, so it does
+               // not turn with the camera and you can walk around it (to check it and its name tag)
+        s.pos[0] += g_loopbackOffset;
     }
     r.lastTick = GetTickCount();
     if (r.fill && static_cast<int32_t>(s.timeMs - r.lastTime) <= 0) return; // same capture sent twice

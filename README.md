@@ -42,8 +42,9 @@ Developer builds (CMake option `MECMP_DEBUG_KEYS`, on by default, off for releas
 | F12 | Hide all ghosts and pause automatic spawning (F7 resumes) |
 | F9 | Write a status line to `mecmp.log` (with the ghost update's cost) |
 
-Solo test: `join=127.0.0.1:47800`. Your own packets come back and a ghost mirrors you 3 m to
-your side.
+Solo test: *Solo test* in the menu, or `join=127.0.0.1:47800`. Your own packets come back and a
+ghost copies your moves 3 m away along the world X axis (`loopback_offset`); it stays put while you
+turn, so you can walk around it.
 
 ## Security and privacy
 

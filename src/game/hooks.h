@@ -10,7 +10,13 @@
 namespace mecmp::game::hooks {
 
 using TickFn = void (*)(void* world, float dt);
-// Installs everything. Returns false if the tick hook could not be installed (nothing will work).
-bool install(TickFn onTick);
+struct Installed {
+    bool tick = false;         // required
+    bool spawners = false;     // optional: spawners are also found by a memory scan
+    bool ghostClients = false; // client replay + client character: needed to show remote players
+};
+// Installs everything. Returns false if the tick hook could not be installed (nothing will work);
+// `out` says which hooks are in.
+bool install(TickFn onTick, Installed* out = nullptr);
 
 } // namespace mecmp::game::hooks

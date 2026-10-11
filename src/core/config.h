@@ -21,6 +21,7 @@ struct Settings {
     std::string menuKey = "INSERT";       // INSERT, HOME, END, DELETE or F1..F12
     // [debug]
     bool verbose = false;
+    bool ignoreBuildCheck = false;        // run even if the game build check fails (for testing a new build)
 };
 
 // Reads (and creates if missing) mecmp.ini in `dir`. Call once at startup.

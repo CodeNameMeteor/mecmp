@@ -76,26 +76,37 @@ void postUpdate(void* world, void* updateInfo) {
 }
 } // namespace
 
-bool install(TickFn onTick) {
-    bool ok = true;
-    ok &= installFactory(kSpawner, Slot_ServerCharacterSpawnFactory, Fn_ServerCharacterSpawnFactory, &spawnerFactory);
-    ok &= installFactory(kPamSpawner, Slot_PamServerCharacterSpawnFactory, Fn_PamServerCharacterSpawnFactory, &pamSpawnerFactory);
-    ok &= installFactory(kClientReplay, Slot_ClientReplayPlayerFactory, Fn_ClientReplayPlayerFactory, &clientReplayFactory);
-    ok &= installFactory(kClientCharacter, Slot_ClientCharacterFactory, Fn_ClientCharacterFactory, &clientCharacterFactory);
+bool install(TickFn onTick, Installed* out) {
+    Installed got;
+    // The tick hook first: without it nothing runs, and then no other hook is left behind either.
     const uintptr_t slot = rva(Slot_ServerWorldPostUpdate);
     uintptr_t current = 0;
     if (!mem::read(slot, current) || current != rva(Fn_ServerWorldPostUpdate)) {
         MLOG("hook tick: ServerGameWorld slot holds %p, expected %p; not hooking", reinterpret_cast<void*>(current),
              reinterpret_cast<void*>(rva(Fn_ServerWorldPostUpdate)));
+        if (out) *out = got;
         return false;
     }
+    // The factory hooks only report objects as they are created; each one that fails costs a feature,
+    // not stability (see Installed).
+    const bool sp1 = installFactory(kSpawner, Slot_ServerCharacterSpawnFactory, Fn_ServerCharacterSpawnFactory, &spawnerFactory);
+    const bool sp2 = installFactory(kPamSpawner, Slot_PamServerCharacterSpawnFactory, Fn_PamServerCharacterSpawnFactory, &pamSpawnerFactory);
+    got.spawners = sp1 && sp2;
+    const bool replay = installFactory(kClientReplay, Slot_ClientReplayPlayerFactory, Fn_ClientReplayPlayerFactory, &clientReplayFactory);
+    const bool chars = installFactory(kClientCharacter, Slot_ClientCharacterFactory, Fn_ClientCharacterFactory, &clientCharacterFactory);
+    got.ghostClients = replay && chars;
     g_onTick = onTick;
     g_origPostUpdate = reinterpret_cast<PostUpdateFn>(current);
     if (!mem::patchPointer(slot, reinterpret_cast<uintptr_t>(&postUpdate), nullptr)) {
         MLOG("hook tick: VirtualProtect failed (%lu)", GetLastError());
-        return false;
+        if (out) *out = got;
+        return false; // the factory hooks stay: they only record what the game creates
     }
-    MLOG("hooks: %s", ok ? "all installed" : "some factory hooks missing (see above)");
+    got.tick = true;
+    if (got.spawners && got.ghostClients) MLOG("hooks: all installed");
+    else MLOG("hooks: %s%s", got.spawners ? "" : "spawner hooks missing (spawners are found by a memory scan instead); ",
+              got.ghostClients ? "" : "ghost client hooks missing: remote players cannot be shown");
+    if (out) *out = got;
     return true;
 }
 

@@ -55,8 +55,16 @@ std::string between(const std::string& s, const std::string& open, const std::st
     return s.substr(a + open.size(), b - a - open.size());
 }
 
-// SSDP M-SEARCH: the LOCATION of the first Internet Gateway Device that answers.
-std::string discover() {
+// The router must describe itself on its own address: a LOCATION (or control URL) pointing at
+// another machine would make us send it this PC's address and port requests (S-11).
+bool sameHostIp(const std::string& host, const in_addr& sender) {
+    in_addr a{};
+    return inet_pton(AF_INET, host.c_str(), &a) == 1 && a.s_addr == sender.s_addr;
+}
+
+// SSDP M-SEARCH: the LOCATION of the first Internet Gateway Device that answers, if it points at
+// the device that sent the answer. `sender` receives that device's address.
+std::string discover(in_addr& sender) {
     SOCKET s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (s == INVALID_SOCKET) return {};
     DWORD timeout = 700;
@@ -78,10 +86,22 @@ std::string discover() {
         }
         for (int i = 0; i < 8 && location.empty(); ++i) {
             char buf[2048];
-            const int n = recvfrom(s, buf, sizeof(buf) - 1, 0, nullptr, nullptr);
+            sockaddr_in from{};
+            int fromLen = sizeof(from);
+            const int n = recvfrom(s, buf, sizeof(buf) - 1, 0, reinterpret_cast<sockaddr*>(&from), &fromLen);
             if (n <= 0) break;
             buf[n] = 0;
-            location = headerValue(std::string("\n") + buf, "location");
+            const std::string loc = headerValue(std::string("\n") + buf, "location");
+            Url u;
+            if (loc.empty() || !parseUrl(loc, u)) continue;
+            if (!sameHostIp(u.host, from.sin_addr)) {
+                char ip[64] = {};
+                inet_ntop(AF_INET, &from.sin_addr, ip, sizeof(ip));
+                MLOG("net: UPnP: ignoring an answer from %s that points at %s", ip, u.host.c_str());
+                continue;
+            }
+            location = loc;
+            sender = from.sin_addr;
         }
     }
     closesocket(s);
@@ -150,7 +170,8 @@ bool http(const Url& u, const std::string& method, const std::string& extraHeade
 struct Gateway { Url control; std::string serviceType; std::string localIp; };
 
 bool findGateway(Gateway& gw, std::string& error) {
-    const std::string location = discover();
+    in_addr sender{};
+    const std::string location = discover(sender);
     if (location.empty()) { error = "no UPnP router answered (UPnP may be turned off on the router)"; return false; }
     Url loc;
     if (!parseUrl(location, loc)) { error = "bad router description URL"; return false; }
@@ -173,12 +194,17 @@ bool findGateway(Gateway& gw, std::string& error) {
                 if (!ctl.empty() && ctl[0] != '/') ctl = "/" + ctl;
                 ctl = base + ctl;
             }
-            if (parseUrl(ctl, gw.control)) {
+            // Absolute control URLs (or a URLBase) must stay on the router that answered.
+            if (parseUrl(ctl, gw.control) && sameHostIp(gw.control.host, sender)) {
                 gw.serviceType = type;
                 return true;
             }
         }
         at = svc + 9;
+    }
+    if (gw.control.host.size() && !sameHostIp(gw.control.host, sender)) {
+        error = "the router's control address points at another machine; not using it";
+        return false;
     }
     error = "the router does not offer port mapping";
     return false;
@@ -218,8 +244,10 @@ Result mapUdpPort(uint16_t port, const char* description, uint32_t leaseSeconds)
                                  "</NewLeaseDuration>";
         return soap(gw, "AddPortMapping", args, reply, status) && status == 200;
     };
-    // Some routers only accept permanent mappings (lease 0); try the lease first.
-    r.mapped = add(leaseSeconds) || add(0);
+    // Only a timed lease: a permanent mapping (lease 0) would stay open on the router forever if the
+    // game crashed. Routers that only take permanent leases (UPnP error 725) need the port forwarded
+    // by hand; the log says so.
+    r.mapped = leaseSeconds > 0 && add(leaseSeconds);
     if (!r.mapped) {
         const std::string code = between(reply, "<errorCode>", "</errorCode>");
         r.error = "the router refused the port mapping" + (code.empty() ? std::string() : " (UPnP error " + code + ")");

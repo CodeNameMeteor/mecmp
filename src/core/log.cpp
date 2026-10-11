@@ -15,6 +15,10 @@ bool verbose = false;
 namespace {
 std::mutex g_mutex;
 FILE* g_file = nullptr;
+// mecmp.log stops growing at this size (S-9); the debugger output keeps everything.
+constexpr size_t kMaxLogBytes = 16u << 20;
+size_t g_written = 0;
+bool g_full = false;
 }
 
 namespace {
@@ -71,8 +75,23 @@ void open(HMODULE self) {
 const wchar_t* directory() { return g_path.c_str(); }
 
 void close() {
-    std::lock_guard<std::mutex> lock(g_mutex);
+    // Called at process exit, where a thread that held the lock may already be gone: never wait.
+    if (!g_mutex.try_lock()) return;
     if (g_file) { fclose(g_file); g_file = nullptr; }
+    g_mutex.unlock();
+}
+
+void writeUrgent(const char* line) {
+    OutputDebugStringA("[MECMP] ");
+    OutputDebugStringA(line);
+    OutputDebugStringA("\n");
+    if (!g_mutex.try_lock()) return; // the log is busy (maybe on this very thread): debugger output only
+    if (g_file && !g_full) {
+        fputs(line, g_file);
+        fputc('\n', g_file);
+        fflush(g_file);
+    }
+    g_mutex.unlock();
 }
 
 void write(const char* fmt, ...) {
@@ -91,8 +110,14 @@ void write(const char* fmt, ...) {
     std::lock_guard<std::mutex> lock(g_mutex);
     OutputDebugStringA("[MECMP] ");
     OutputDebugStringA(msg);
-    if (g_file) {
-        fputs(msg, g_file);
+    if (g_file && !g_full) {
+        if (g_written + len + 1 > kMaxLogBytes) {
+            fputs("[log] mecmp.log reached 16 MB; nothing more is written to it this session\n", g_file);
+            g_full = true;
+        } else {
+            fputs(msg, g_file);
+            g_written += len + 1;
+        }
         fflush(g_file);
     }
 }

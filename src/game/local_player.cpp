@@ -36,8 +36,9 @@ bool capturePose(net::PlayerState& st) {
 
 bool capture(net::PlayerState& st) {
     void* player = level::playerCharacter();
-    const LinearTransform* t = player ? entityTransform(player) : nullptr;
-    if (!t) return false;
+    LinearTransform xf;
+    if (!player || !readEntityTransform(player, xf)) return false;
+    const LinearTransform* t = &xf;
     st.pos[0] = t->trans[0];
     st.pos[1] = t->trans[1];
     st.pos[2] = t->trans[2];

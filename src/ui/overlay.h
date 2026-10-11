@@ -8,6 +8,9 @@
 namespace mecmp::ui {
 
 bool install();
+// Called once on the window thread when the game window is destroyed (the game is exiting), while
+// the process can still use the network. Set before install().
+void setOnWindowDestroyed(void (*fn)());
 bool menuOpen();
 
 } // namespace mecmp::ui

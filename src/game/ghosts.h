@@ -16,6 +16,12 @@ namespace mecmp::game::ghosts {
 // Hook callbacks. onClientReplayComp returns true if the component belongs to one of our ghosts.
 bool onClientReplayComp(void* comp);
 void onClientCharacter(void* ent);
+// Startup: runtime TypeInfo of PamCharacterEntityData (0 if unknown), used to validate the ghost
+// blueprint's character data before the first spawn.
+void setCharacterDataType(uintptr_t runtimeTypeInfo);
+// Startup: false when the client hooks are missing. Ghosts are then never spawned (they would sit
+// at the replay's position, unanimated); the local player is still sent to the others.
+void setEnabled(bool enabled);
 
 // Server tick: spawn ghosts for new players, drive all ghosts, keep their client side in shape.
 void tick(uint64_t tick, uint64_t ticksInLevel);

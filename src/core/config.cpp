@@ -91,6 +91,7 @@ void load(const std::wstring& dir) {
     s.menuKey = readString(ini, L"ui", L"menu_key", "INSERT");
     s.verbose = readInt(ini, L"debug", L"verbose", 0) != 0;
     log::verbose = s.verbose;
+    s.ignoreBuildCheck = readInt(ini, L"debug", L"ignore_build_check", 0) != 0;
     MLOG("config: name '%s', port %u, %s '%s', model '%s'%s", s.name.c_str(), s.port, s.join.empty() ? "hosting" : "joining",
          s.join.c_str(), s.model.c_str(),
          s.verbose ? ", verbose log" : "");

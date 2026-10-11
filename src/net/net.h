@@ -38,6 +38,8 @@ struct RemoteInfo {
 // session (the old one is stopped first).
 bool start(uint16_t port, const std::string& join, float loopbackOffset, const std::string& name);
 void stop();
+// Game exit: stop, and close the router port this session opened (waits at most routerWaitMs).
+void shutdown(uint32_t routerWaitMs = 2000);
 
 // Game thread: newest local state (sent by the network thread).
 void publishLocal(const PlayerState& s);

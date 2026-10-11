@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <cstring>
+#include <string>
 #include <vector>
 
 #include "core/log.h"
@@ -65,6 +66,16 @@ void dumpObject(const char* what, uintptr_t obj, size_t size, const Vec3& eye) {
     }
     MLOG("camera: %s %p, vtable 0x%llx", what, reinterpret_cast<void*>(obj),
          static_cast<unsigned long long>(toVa(*reinterpret_cast<uintptr_t*>(b.data()))));
+    // Angles: degrees 40..130 or radians 0.7..2.3 (a field of view), with their offsets.
+    std::string angles;
+    for (size_t o = 0; o + 4 <= size; o += 4) {
+        const float v = *reinterpret_cast<const float*>(b.data() + o);
+        if (!std::isfinite(v) || !((v >= 40.f && v <= 130.f) || (v >= 0.7f && v <= 2.3f))) continue;
+        char t[40];
+        snprintf(t, sizeof(t), " +0x%llx=%.3f", static_cast<unsigned long long>(o), v);
+        if (angles.size() < 3000) angles += t;
+    }
+    MLOG("camera:   angle-like values:%s", angles.c_str());
     for (size_t o = 0; o + 64 <= size; o += 4) {
         const auto* m = reinterpret_cast<const float*>(b.data() + o);
         float w = 0;
@@ -103,6 +114,8 @@ void run() {
         dumpObject("manager", mgr, 0x1200, eye);
         const uintptr_t cam = mgr ? mem::readOr<uintptr_t>(mgr + 0x208) : 0;
         dumpObject("active camera", cam, 0x600, eye);
+        const uintptr_t blend = mgr ? mem::readOr<uintptr_t>(mgr + 0x1130) : 0;
+        dumpObject("settings blend", blend, 0x100, eye);
         float settings[17] = {};
         if (cam && mem::read(cam + 0xac, settings, sizeof(settings)))
             MLOG("camera:   settings +0xac..+0xec: %.3f %.3f %.3f %.3f %.3f %.3f %.3f %.3f %.3f | +0xd0: %.3f %.3f %.3f %.3f %.3f %.3f %.3f %.3f",

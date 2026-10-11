@@ -14,6 +14,7 @@
 #include "core/config.h"
 #include "core/log.h"
 #include "core/mem.h"
+#include "game/ghosts.h"
 #include "imgui.h"
 #include "ui/gamepad.h"
 #include "ui/menu.h"
@@ -195,6 +196,7 @@ bool init(IDXGISwapChain* sc) {
 
 HRESULT STDMETHODCALLTYPE presentHook(IDXGISwapChain* sc, UINT sync, UINT flags) {
     if (!g_ready && !g_swapChain) g_ready = init(sc);
+    if (g_ready && sc == g_swapChain) game::ghosts::renderFrame(); // ghosts move every frame, not per server tick
     if (g_ready && sc == g_swapChain && g_rtv) {
         ImGui_ImplDX11_NewFrame();
         ImGui_ImplWin32_NewFrame();

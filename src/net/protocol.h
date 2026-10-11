@@ -59,6 +59,27 @@ size_t utf8PrefixLength(const std::string& s, size_t maxBytes);
 // rotations of `s` that point away from the same bone in `prev`, so consecutive poses stay continuous.
 void alignRotations(PlayerState& s, const PlayerState& prev);
 
+// Receivers replay a sender's poses on the sender's clock: our time = sender time + offset, where the
+// offset is the smallest (arrival - sent) seen recently (one-way delay with the least queueing). Only
+// the last `windowMs` count, so the estimate follows clocks that run slightly fast or slow.
+struct DelayEstimator {
+    static constexpr int kSamples = 64;
+    static constexpr double kWindowMs = 2000.0;
+    double at[kSamples] = {}, delta[kSamples] = {};
+    int head = 0, fill = 0;
+    // Adds (arrival, sent) in our and the sender's ms; returns the current offset.
+    double add(double arrivalMs, double sentMs) {
+        at[head] = arrivalMs;
+        delta[head] = arrivalMs - sentMs;
+        head = (head + 1) % kSamples;
+        if (fill < kSamples) ++fill;
+        double best = 1e300;
+        for (int i = 0; i < fill; ++i)
+            if (arrivalMs - at[i] <= kWindowMs && delta[i] < best) best = delta[i];
+        return best;
+    }
+};
+
 // A sender's 32-bit millisecond clock, made continuous: it wraps after 49.7 days of uptime, and a
 // wrap must not look like a 49-day jump (B-4). Each new time is taken relative to the previous one,
 // so steps of up to +-24 days in either direction come out right.

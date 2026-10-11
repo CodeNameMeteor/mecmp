@@ -57,6 +57,7 @@ struct Remote {
     // Replaying on the sender's timestamps keeps movement smooth when packets arrive in bursts.
     double minDelta = 0;
     bool haveDelta = false;
+    proto::DelayEstimator delay; // minDelta over the last 2 s
     uint32_t lastTime = 0;
     int nameLogs = 0;         // name changes logged for this player (at most kMaxNameLogs)
     proto::ClockUnwrap clock; // sender's timestamps without the 49-day wrap
@@ -336,9 +337,8 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
     if (r.fill && static_cast<int32_t>(s.timeMs - r.lastTime) <= 0) return; // same capture sent twice
     r.lastTime = s.timeMs;
     const double sent = r.clock.extend(s.timeMs);
-    const double delta = nowMs() - sent;
-    if (!r.haveDelta || delta < r.minDelta) { r.minDelta = delta; r.haveDelta = true; }
-    else r.minDelta += 0.02; // let the estimate creep up slowly (clock drift, route changes)
+    r.minDelta = r.delay.add(nowMs(), sent); // follows clock drift and route changes
+    r.haveDelta = true;
     // Same rotation sign as the snapshot before, so blending never flips a bone (in-game jitter).
     if (r.fill) proto::alignRotations(s, r.snaps[(r.head + kSnapCount - 1) % kSnapCount].s);
     r.snaps[r.head] = {s, sent};

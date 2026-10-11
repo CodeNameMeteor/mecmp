@@ -174,7 +174,18 @@ static void testDelayEstimator() {
     CHECK(e.add(33, 33 - 200) == 0); // a 200 ms late packet: the earlier 0 still counts
 }
 
+static void testLossWindow() {
+    protocol::LossWindow w;
+    CHECK(w.percent(0) == 0.f);
+    for (int i = 0; i < 90; ++i) w.add(10000 + i * 33.0, i % 10 == 9 ? 1 : 0); // 1 in 10 missed
+    CHECK(std::fabs(w.percent(13000) - 100.f * 9 / 99) < 0.01f);
+    CHECK(w.percent(20000) == 0.f); // old seconds no longer count
+    for (int i = 0; i < 10; ++i) w.add(20000 + i * 33.0, 0);
+    CHECK(w.percent(20500) == 0.f);
+}
+
 int main() {
+    testLossWindow();
     testDelayEstimator();
     testAlignRotations();
     testClockWrap();

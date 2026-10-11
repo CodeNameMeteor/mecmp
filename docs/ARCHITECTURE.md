@@ -119,6 +119,9 @@ UDP, one socket. Sessions have one host and any number of joiners (up to 16).
   only for bones that changed since the last full packet (one per second); about 150 bytes.
 - Receivers buffer 16 snapshots per player and show them 120 ms in the past, blended. The sender's
   32-bit millisecond clock is unwrapped (`protocol::ClockUnwrap`), so a 49-day uptime wrap is harmless. Positions and angles outside a sane range are dropped.
+- Packet loss per player (`protocol::LossWindow`): gaps in their sequence numbers over the last 5 s;
+  shown in the menu's player list. Join/leave notices (`ui/notices.cpp`) come from the same player
+  list: a named player appearing, or silent for 5 s (as for their ghost).
 - At most 64 player entries are kept; an entry silent for 2 minutes is forgotten. Packets of unknown
   type are dropped before anything is stored or forwarded.
 

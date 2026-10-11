@@ -95,6 +95,30 @@ struct ClockUnwrap {
     }
 };
 
+// Share of a player's packets lost over the last few seconds, from gaps in their sequence numbers
+// (a packet arriving out of order is dropped by the receiver, so it counts as lost too).
+struct LossWindow {
+    static constexpr int kSeconds = 5;
+    int64_t second[kSeconds] = {};
+    uint32_t got[kSeconds] = {}, lost[kSeconds] = {};
+    // A packet arrived at `nowMs`; `missed` packets before it never did.
+    void add(double nowMs, uint32_t missed) {
+        const int64_t s = static_cast<int64_t>(nowMs / 1000.0);
+        const int i = static_cast<int>(((s % kSeconds) + kSeconds) % kSeconds);
+        if (second[i] != s) { second[i] = s; got[i] = 0; lost[i] = 0; }
+        ++got[i];
+        lost[i] += missed;
+    }
+    // Percent lost in the seconds before `nowMs` (0 when nothing was heard).
+    float percent(double nowMs) const {
+        const int64_t s = static_cast<int64_t>(nowMs / 1000.0);
+        uint64_t g = 0, l = 0;
+        for (int i = 0; i < kSeconds; ++i)
+            if (second[i] > s - kSeconds && second[i] <= s) { g += got[i]; l += lost[i]; }
+        return g + l ? 100.f * static_cast<float>(l) / static_cast<float>(g + l) : 0.f;
+    }
+};
+
 size_t writeState(char* buf, const Header& h, const PlayerState& s, Encoder& enc);
 size_t writeHello(char* buf, const Header& h, const char* name);
 // Decodes a STATE payload (after the header). `full` tells whether to commit it as the new base.

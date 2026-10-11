@@ -143,7 +143,7 @@ void playersSection() {
         ImGui::TextDisabled("Nobody else here yet.");
         return;
     }
-    if (ImGui::BeginTable("players", 2, ImGuiTableFlags_SizingStretchProp)) {
+    if (ImGui::BeginTable("players", 3, ImGuiTableFlags_SizingStretchProp)) {
         for (const auto& r : remotes) {
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
@@ -151,6 +151,16 @@ void playersSection() {
             ImGui::TableNextColumn();
             if (r.ageMs < 1000) ImGui::TextColored(ImVec4(0.4f, 1.f, 0.4f, 1.f), "live");
             else ImGui::TextColored(ImVec4(1.f, 0.6f, 0.3f, 1.f), "%.1f s ago", r.ageMs / 1000.f);
+            ImGui::TableNextColumn();
+            if (r.loopback || r.ageMs >= 1000) {
+                ImGui::TextUnformatted("");
+            } else if (r.lossPct < 2.f) {
+                ImGui::TextColored(ImVec4(0.4f, 1.f, 0.4f, 1.f), "good");
+            } else {
+                const ImVec4 c = r.lossPct < 10.f ? ImVec4(1.f, 0.85f, 0.3f, 1.f) : ImVec4(1.f, 0.4f, 0.35f, 1.f);
+                ImGui::TextColored(c, "%s, %.0f%% lost", r.lossPct < 10.f ? "fair" : "poor", r.lossPct);
+            }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Share of their updates that did not arrive in the last 5 s.");
         }
         ImGui::EndTable();
     }
@@ -173,6 +183,9 @@ void lookSection() {
     bool showNames = config::get()->showNames;
     if (ImGui::Checkbox("Names above players", &showNames))
         config::change([showNames](config::Settings& c) { c.showNames = showNames; });
+    bool showNotices = config::get()->showNotices;
+    if (ImGui::Checkbox("Join/leave notices", &showNotices))
+        config::change([showNotices](config::Settings& c) { c.showNotices = showNotices; });
     if (ImGui::Button("Show ghosts")) game::ghosts::requestSpawnOrRefresh();
     ImGui::SameLine();
     if (ImGui::Button("Hide ghosts")) game::ghosts::requestHideAll();

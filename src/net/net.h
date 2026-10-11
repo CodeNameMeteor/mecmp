@@ -31,6 +31,7 @@ struct RemoteInfo {
     std::string name;
     bool loopback = false;  // our own packets (solo test)
     uint32_t ageMs = 0;     // since the last state arrived
+    float lossPct = 0;      // their packets lost over the last 5 s
 };
 
 // join: empty = host; otherwise a join code or ip:port of the host. Calling it again switches

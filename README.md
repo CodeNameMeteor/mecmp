@@ -18,7 +18,8 @@ Status: experimental. Ghosts are visual only (no collision).
 **In game, press INSERT, or click both sticks (LS+RS) on a gamepad,** for the MECMP menu: host a
 session, paste a join code and join, set your name, see who is connected and pick how other players
 look. Other players' names float above their ghosts (*Names above players* in the menu turns
-them off). The menu works with mouse, keyboard or gamepad; while it is open the game does not see the
+them off), and a short notice shows when someone joins or leaves (*Join/leave notices*). The player
+list shows each player's connection: *good*, or the share of their updates that did not arrive. The menu works with mouse, keyboard or gamepad; while it is open the game does not see the
 gamepad. Both menu buttons can be changed under *Controls*. Everything can also be set in
 `mecmp.ini` (the menu saves to it).
 

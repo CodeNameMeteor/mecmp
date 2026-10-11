@@ -1,6 +1,5 @@
 #include "game/camera_finder.h"
 
-#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <vector>
@@ -12,7 +11,6 @@
 namespace mecmp::game::camera_finder {
 namespace {
 
-constexpr size_t kViewProjOffset = 0x4a0; // in the render view (DebugRenderer_drawPrimitiveBatches)
 constexpr uintptr_t kImageBase = 0x140000000;
 
 struct Vec3 { float x, y, z; };
@@ -38,46 +36,51 @@ bool looksLikeViewProj(const float* m, const Vec3& eye, bool transposed, float& 
     return std::fabs(wAtEye) < 2.5f;
 }
 
-template <class Fn> void forEachHeapChunk(std::vector<uint8_t>& buf, Fn fn) {
-    MEMORY_BASIC_INFORMATION mbi{};
-    for (uintptr_t addr = 0x10000; VirtualQuery(reinterpret_cast<void*>(addr), &mbi, sizeof(mbi)) == sizeof(mbi);
-         addr = reinterpret_cast<uintptr_t>(mbi.BaseAddress) + mbi.RegionSize) {
-        if (mbi.State != MEM_COMMIT || (mbi.Type != MEM_PRIVATE && mbi.Type != MEM_MAPPED) || mbi.Protect != PAGE_READWRITE)
-            continue;
-        const uintptr_t base = reinterpret_cast<uintptr_t>(mbi.BaseAddress);
-        const uintptr_t own = reinterpret_cast<uintptr_t>(buf.data());
-        if (own >= base && own < base + mbi.RegionSize) continue; // our own read buffer holds stale copies
-        for (size_t off = 0; off < mbi.RegionSize; off += buf.size()) {
-            const size_t n = std::min(buf.size(), static_cast<size_t>(mbi.RegionSize - off));
-            if (mem::read(base + off, buf.data(), n)) fn(base + off, buf.data(), n);
-        }
-    }
-}
-
-// Writable sections of the game image (globals).
-template <class Fn> void forEachImageGlobal(Fn fn) {
-    const auto* img = reinterpret_cast<const uint8_t*>(mem::moduleBase());
-    const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(img);
-    const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(img + dos->e_lfanew);
-    const IMAGE_SECTION_HEADER* sec = IMAGE_FIRST_SECTION(nt);
-    for (unsigned i = 0; i < nt->FileHeader.NumberOfSections; ++i, ++sec) {
-        if (!(sec->Characteristics & IMAGE_SCN_MEM_WRITE)) continue;
-        const uintptr_t start = reinterpret_cast<uintptr_t>(img) + sec->VirtualAddress;
-        std::vector<uintptr_t> q(sec->Misc.VirtualSize / 8);
-        for (size_t k = 0; k < q.size(); k += 4096) {
-            const size_t n = std::min<size_t>(4096, q.size() - k);
-            if (!mem::read(start + k * 8, &q[k], n * 8)) memset(&q[k], 0, n * 8);
-        }
-        for (size_t k = 0; k < q.size(); ++k) fn(start + k * 8, q[k]);
-    }
-}
-
 uintptr_t toVa(uintptr_t a) { return a - mem::moduleBase() + kImageBase; }
 
-struct Candidate { uintptr_t addr; bool transposed; float w; float m[16]; };
-struct Holder { uintptr_t at; uintptr_t target; size_t cand; }; // *at = target, a pointer into candidate's object
 } // namespace
 
+namespace {
+// Rows 0-2 orthonormal and row 3 near the eye: a camera transform.
+bool looksLikeCameraTransform(const float* m, const Vec3& eye) {
+    for (int i = 0; i < 16; ++i)
+        if (!std::isfinite(m[i])) return false;
+    for (int r = 0; r < 3; ++r) {
+        const float l = m[r * 4] * m[r * 4] + m[r * 4 + 1] * m[r * 4 + 1] + m[r * 4 + 2] * m[r * 4 + 2];
+        if (l < 0.97f || l > 1.03f) return false;
+    }
+    const float d = std::fabs(m[0] * m[4] + m[1] * m[5] + m[2] * m[6]) + std::fabs(m[0] * m[8] + m[1] * m[9] + m[2] * m[10]);
+    if (d > 0.05f) return false;
+    const float dx = m[12] - eye.x, dy = m[13] - eye.y, dz = m[14] - eye.z;
+    return dx * dx + dy * dy + dz * dz < 9.f;
+}
+
+// Logs camera transforms and view-projection matrices inside [obj, obj + size).
+void dumpObject(const char* what, uintptr_t obj, size_t size, const Vec3& eye) {
+    std::vector<uint8_t> b(size);
+    if (!obj || !mem::read(obj, b.data(), size)) {
+        MLOG("camera: %s %p not readable", what, reinterpret_cast<void*>(obj));
+        return;
+    }
+    MLOG("camera: %s %p, vtable 0x%llx", what, reinterpret_cast<void*>(obj),
+         static_cast<unsigned long long>(toVa(*reinterpret_cast<uintptr_t*>(b.data()))));
+    for (size_t o = 0; o + 64 <= size; o += 4) {
+        const auto* m = reinterpret_cast<const float*>(b.data() + o);
+        float w = 0;
+        if (looksLikeCameraTransform(m, eye))
+            MLOG("camera:   +0x%03llx transform: right %.3f %.3f %.3f / up %.3f %.3f %.3f / fwd %.3f %.3f %.3f / pos %.2f %.2f %.2f",
+                 static_cast<unsigned long long>(o), m[0], m[1], m[2], m[4], m[5], m[6], m[8], m[9], m[10], m[12], m[13], m[14]);
+        for (bool t : {false, true})
+            if (looksLikeViewProj(m, eye, t, w))
+                MLOG("camera:   +0x%03llx view-projection (%s), w(eye) %.2f: %.3f %.3f %.3f %.3f / %.3f %.3f %.3f %.3f / %.3f %.3f %.3f %.3f / %.2f %.2f %.2f %.2f",
+                     static_cast<unsigned long long>(o), t ? "col" : "row", w, m[0], m[1], m[2], m[3], m[4], m[5], m[6], m[7],
+                     m[8], m[9], m[10], m[11], m[12], m[13], m[14], m[15]);
+    }
+}
+} // namespace
+
+// g_clientCameraViewManagers (0x142415e50) -> +0x08 vector of ClientCameraViewManager* (one per local
+// player) -> +0x208 active camera (ClientCameraViewManager_postSimUpdate, 0x14327c2a0).
 void run() {
     void* player = level::playerCharacter();
     LinearTransform xf;
@@ -85,123 +88,28 @@ void run() {
         MLOG("camera: load into a level first");
         return;
     }
-    const Vec3 eye{xf.trans[0], xf.trans[1] + 1.7f, xf.trans[2]}; // Faith's eyes, roughly
-    MLOG("camera: looking for the view-projection matrix (eye about %.1f %.1f %.1f); keep the camera moving a little",
-         eye.x, eye.y, eye.z);
-    const DWORD start = GetTickCount();
-    std::vector<uint8_t> buf(4 << 20);
-    constexpr size_t kMaxCands = 32768;
-
-    // 1) Every matrix with the camera's projection signature, in the heap and in the game's globals.
-    std::vector<Candidate> cands;
-    cands.reserve(kMaxCands);
-    const uintptr_t candsAt = reinterpret_cast<uintptr_t>(cands.data()), candsEnd = candsAt + kMaxCands * sizeof(Candidate);
-    auto scan = [&](uintptr_t base, const uint8_t* p, size_t n) {
-        for (size_t o = 0; o + 64 <= n && cands.size() < kMaxCands; o += 16) {
-            if (base + o >= candsAt && base + o < candsEnd) continue; // our own copies
-            const auto* m = reinterpret_cast<const float*>(p + o);
-            float w = 0;
-            for (bool t : {false, true})
-                if (looksLikeViewProj(m, eye, t, w)) {
-                    Candidate c{base + o, t, w, {}};
-                    memcpy(c.m, m, 64);
-                    cands.push_back(c);
-                    break;
-                }
-        }
-    };
-    forEachHeapChunk(buf, scan);
-    {
-        const auto* img = reinterpret_cast<const uint8_t*>(mem::moduleBase());
-        const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(img + reinterpret_cast<const IMAGE_DOS_HEADER*>(img)->e_lfanew);
-        const IMAGE_SECTION_HEADER* sec = IMAGE_FIRST_SECTION(nt);
-        for (unsigned i = 0; i < nt->FileHeader.NumberOfSections; ++i, ++sec) {
-            if (!(sec->Characteristics & IMAGE_SCN_MEM_WRITE)) continue;
-            const uintptr_t a = reinterpret_cast<uintptr_t>(img) + sec->VirtualAddress;
-            for (size_t off = 0; off < sec->Misc.VirtualSize; off += buf.size()) {
-                const size_t n = std::min<size_t>(buf.size(), sec->Misc.VirtualSize - off);
-                if (mem::read(a + off, buf.data(), n)) scan(a + off, buf.data(), n);
-            }
-        }
+    const Vec3 eye{xf.trans[0], xf.trans[1] + 1.7f, xf.trans[2]};
+    MLOG("camera: following g_clientCameraViewManagers (eye about %.1f %.1f %.1f)", eye.x, eye.y, eye.z);
+    const uintptr_t managers = mem::readOr<uintptr_t>(rva(0x142415e50));
+    uintptr_t vec[2] = {};
+    if (!managers || !mem::read(managers + 8, vec, sizeof(vec)) || vec[1] < vec[0] || vec[1] - vec[0] > 64) {
+        MLOG("camera: manager list %p not readable", reinterpret_cast<void*>(managers));
+        return;
     }
-
-    // 2) Keep the ones that still have the signature 0.3 s and 0.6 s later (scratch copies get reused).
-    std::vector<bool> stable(cands.size(), true);
-    std::vector<float> moved(cands.size(), 0.f);
-    for (int pass = 0; pass < 2; ++pass) {
-        Sleep(300);
-        for (size_t i = 0; i < cands.size(); ++i) {
-            float now[16], w = 0;
-            if (!stable[i] || !mem::read(cands[i].addr, now, 64) || !looksLikeViewProj(now, eye, cands[i].transposed, w)) {
-                stable[i] = false;
-                continue;
-            }
-            for (int k = 0; k < 16; ++k) moved[i] = std::max(moved[i], std::fabs(now[k] - cands[i].m[k]));
-        }
+    MLOG("camera: %llu camera view manager(s)", static_cast<unsigned long long>((vec[1] - vec[0]) / 8));
+    for (uintptr_t at = vec[0]; at < vec[1]; at += 8) {
+        const uintptr_t mgr = mem::readOr<uintptr_t>(at);
+        dumpObject("manager", mgr, 0x1200, eye);
+        const uintptr_t cam = mgr ? mem::readOr<uintptr_t>(mgr + 0x208) : 0;
+        dumpObject("active camera", cam, 0x600, eye);
+        float settings[17] = {};
+        if (cam && mem::read(cam + 0xac, settings, sizeof(settings)))
+            MLOG("camera:   settings +0xac..+0xec: %.3f %.3f %.3f %.3f %.3f %.3f %.3f %.3f %.3f | +0xd0: %.3f %.3f %.3f %.3f %.3f %.3f %.3f %.3f",
+                 settings[0], settings[1], settings[2], settings[3], settings[4], settings[5], settings[6], settings[7],
+                 settings[8], settings[9], settings[10], settings[11], settings[12], settings[13], settings[14], settings[15],
+                 settings[16]);
     }
-    size_t nStable = 0;
-    for (bool b : stable) nStable += b;
-    MLOG("camera: %llu matrices with the projection signature, %llu still valid after 0.6 s",
-         static_cast<unsigned long long>(cands.size()), static_cast<unsigned long long>(nStable));
-
-    // 3) Who points at the object around each stable one: globals directly, or through one heap object.
-    constexpr uintptr_t kObjBefore = 0x2000;
-    std::vector<size_t> order; // stable candidates sorted by address, for lookups
-    for (size_t i = 0; i < cands.size(); ++i)
-        if (stable[i]) order.push_back(i);
-    std::sort(order.begin(), order.end(), [&](size_t a, size_t b) { return cands[a].addr < cands[b].addr; });
-    auto candFor = [&](uintptr_t p) -> long { // first stable candidate at p .. p + kObjBefore
-        auto it = std::lower_bound(order.begin(), order.end(), p, [&](size_t i, uintptr_t x) { return cands[i].addr < x; });
-        return it != order.end() && cands[*it].addr - p <= kObjBefore ? static_cast<long>(*it) : -1;
-    };
-    std::vector<int> refs(cands.size(), 0);
-    int direct = 0;
-    forEachImageGlobal([&](uintptr_t at, uintptr_t v) {
-        const long c = v ? candFor(v) : -1;
-        if (c < 0) return;
-        ++refs[c];
-        if (direct++ < 40)
-            MLOG("camera: global 0x%llx -> object, matrix [%ld] at +0x%llx", static_cast<unsigned long long>(toVa(at)), c,
-                 static_cast<unsigned long long>(cands[c].addr - v));
-    });
-    std::vector<Holder> holders;
-    forEachHeapChunk(buf, [&](uintptr_t base, const uint8_t* p, size_t n) {
-        const auto* q = reinterpret_cast<const uintptr_t*>(p);
-        for (size_t i = 0; i < n / 8 && holders.size() < 200000; ++i) {
-            const long c = q[i] > 0x10000 ? candFor(q[i]) : -1;
-            if (c >= 0) holders.push_back({base + i * 8, q[i], static_cast<size_t>(c)});
-        }
-    });
-    std::sort(holders.begin(), holders.end(), [](const Holder& a, const Holder& b) { return a.at < b.at; });
-    int chains = 0;
-    constexpr uintptr_t kHolderBefore = 0x1000;
-    forEachImageGlobal([&](uintptr_t at, uintptr_t v) {
-        if (!v) return;
-        auto it = std::lower_bound(holders.begin(), holders.end(), v, [](const Holder& h, uintptr_t x) { return h.at < x; });
-        for (; it != holders.end() && it->at - v <= kHolderBefore; ++it) {
-            ++refs[it->cand];
-            if (chains++ < 80)
-                MLOG("camera: global 0x%llx -> +0x%llx -> object, matrix [%llu] at +0x%llx",
-                     static_cast<unsigned long long>(toVa(at)), static_cast<unsigned long long>(it->at - v),
-                     static_cast<unsigned long long>(it->cand), static_cast<unsigned long long>(cands[it->cand].addr - it->target));
-        }
-    });
-
-    // 4) The stable candidates (referenced ones first), with their values.
-    int shown = 0;
-    for (int pass = 0; pass < 1; ++pass)
-        for (size_t i : order) {
-            if (refs[i] == 0 || shown >= 60) continue;
-            ++shown;
-            const Candidate& c = cands[i];
-            const bool inImage = c.addr >= mem::moduleBase() && c.addr < mem::moduleBase() + 0x727b000;
-            MLOG("camera: [%llu] %p%s %s refs=%d moved=%.3f w(eye)=%.2f | %.3f %.3f %.3f %.3f / %.3f %.3f %.3f %.3f / %.3f %.3f %.3f %.3f / %.2f %.2f %.2f %.2f",
-                 static_cast<unsigned long long>(i), reinterpret_cast<void*>(c.addr), inImage ? " (game global)" : "",
-                 c.transposed ? "col" : "row", refs[i], moved[i], c.w, c.m[0], c.m[1], c.m[2], c.m[3], c.m[4], c.m[5], c.m[6],
-                 c.m[7], c.m[8], c.m[9], c.m[10], c.m[11], c.m[12], c.m[13], c.m[14], c.m[15]);
-        }
-    MLOG("camera: done in %.1f s (%d direct, %d through one object). The render view keeps its matrix at +0x%llx.",
-         (GetTickCount() - start) / 1000.0, direct, chains, static_cast<unsigned long long>(kViewProjOffset));
+    MLOG("camera: done");
 }
 
 } // namespace mecmp::game::camera_finder

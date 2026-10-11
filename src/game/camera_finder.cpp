@@ -26,9 +26,8 @@ bool looksLikeViewProj(const float* m, const Vec3& eye, bool transposed, float& 
         if (!std::isfinite(m[i]) || std::fabs(m[i]) > 1e5f) return false;
     // at(k, i): coefficient of input i (x, y, z, 1) in clip component k (x, y, z, w)
     auto at = [&](int k, int i) { return transposed ? m[k * 4 + i] : m[i * 4 + k]; };
-    if (std::fabs(at(2, 0)) > 1e-4f || std::fabs(at(2, 1)) > 1e-4f || std::fabs(at(2, 2)) > 1e-4f) return false;
-    const float nearZ = at(2, 3);
-    if (nearZ < 0.01f || nearZ > 1.f) return false;
+    // No requirement on the clip-z part: the render view may store its matrix with another depth mapping
+    // than the shader copies (those use reversed infinite depth: z row 0,0,0,0.06).
     const float fx = at(3, 0), fy = at(3, 1), fz = at(3, 2);
     const float len = std::sqrt(fx * fx + fy * fy + fz * fz);
     if (len < 0.98f || len > 1.02f) return false;
@@ -91,7 +90,7 @@ void run() {
          eye.x, eye.y, eye.z);
     const DWORD start = GetTickCount();
     std::vector<uint8_t> buf(4 << 20);
-    constexpr size_t kMaxCands = 4096;
+    constexpr size_t kMaxCands = 32768;
 
     // 1) Every matrix with the camera's projection signature, in the heap and in the game's globals.
     std::vector<Candidate> cands;
@@ -146,7 +145,7 @@ void run() {
          static_cast<unsigned long long>(cands.size()), static_cast<unsigned long long>(nStable));
 
     // 3) Who points at the object around each stable one: globals directly, or through one heap object.
-    constexpr uintptr_t kObjBefore = 0x1000;
+    constexpr uintptr_t kObjBefore = 0x2000;
     std::vector<size_t> order; // stable candidates sorted by address, for lookups
     for (size_t i = 0; i < cands.size(); ++i)
         if (stable[i]) order.push_back(i);
@@ -168,7 +167,7 @@ void run() {
     std::vector<Holder> holders;
     forEachHeapChunk(buf, [&](uintptr_t base, const uint8_t* p, size_t n) {
         const auto* q = reinterpret_cast<const uintptr_t*>(p);
-        for (size_t i = 0; i < n / 8 && holders.size() < 20000; ++i) {
+        for (size_t i = 0; i < n / 8 && holders.size() < 200000; ++i) {
             const long c = q[i] > 0x10000 ? candFor(q[i]) : -1;
             if (c >= 0) holders.push_back({base + i * 8, q[i], static_cast<size_t>(c)});
         }
@@ -190,9 +189,9 @@ void run() {
 
     // 4) The stable candidates (referenced ones first), with their values.
     int shown = 0;
-    for (int pass = 0; pass < 2; ++pass)
+    for (int pass = 0; pass < 1; ++pass)
         for (size_t i : order) {
-            if ((pass == 0) != (refs[i] > 0) || shown >= 40) continue;
+            if (refs[i] == 0 || shown >= 60) continue;
             ++shown;
             const Candidate& c = cands[i];
             const bool inImage = c.addr >= mem::moduleBase() && c.addr < mem::moduleBase() + 0x727b000;

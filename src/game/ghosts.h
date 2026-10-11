@@ -10,6 +10,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace mecmp::game::ghosts {
 
@@ -34,5 +35,7 @@ void requestNextModel();      // F8
 void requestModel(const std::string& name); // menu: use this model for everyone's ghost
 
 std::string status();
+// Players whose ghost is in the level and shown now (for name tags). Any thread.
+std::vector<uint32_t> shownPeers();
 
 } // namespace mecmp::game::ghosts

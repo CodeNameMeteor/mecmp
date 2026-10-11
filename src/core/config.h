@@ -26,6 +26,7 @@ struct Settings {
     // [ui]
     std::string menuKey = "INSERT";       // INSERT, HOME, END, DELETE, PAGEUP, PAGEDOWN, PAUSE or F1..F12
     std::string menuPad = "LS+RS";        // gamepad buttons held together, e.g. LS+RS or BACK+Y; empty = none
+    bool showNames = true;                // names above other players' ghosts
     // [debug]
     bool verbose = false;
     bool ignoreBuildCheck = false;        // run even if the game build check fails (for testing a new build)

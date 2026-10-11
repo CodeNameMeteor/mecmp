@@ -570,6 +570,14 @@ void requestModel(const std::string& name) {
     g_reqModel = name;
 }
 
+std::vector<uint32_t> shownPeers() {
+    std::vector<uint32_t> v;
+    std::lock_guard<std::mutex> lock(g_m);
+    for (const auto& g : g_ghosts)
+        if (g.character && g.clientChar && !g.hidden && g.posing && !g_paused) v.push_back(g.peer);
+    return v;
+}
+
 std::string status() {
     std::lock_guard<std::mutex> lock(g_m);
     std::string s = std::to_string(g_ghosts.size()) + " ghost(s)";

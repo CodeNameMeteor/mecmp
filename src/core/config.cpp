@@ -53,6 +53,8 @@ constexpr const char* kDefaultIni =
     "; gamepad buttons that open it, held together: A B X Y LB RB LS RS BACK START UP DOWN LEFT RIGHT\r\n"
     "; joined with +, e.g. LS+RS or BACK+Y. Empty = no gamepad button. Both can be changed in the menu.\r\n"
     "menu_pad=LS+RS\r\n"
+    "; 1 = show player names above their ghosts\r\n"
+    "show_names=1\r\n"
     "\r\n"
     "[debug]\r\n"
     "; 1 = detailed diagnostic log (for bug reports)\r\n"
@@ -99,6 +101,7 @@ void load(const std::wstring& dir) {
     s.model = readString(ini, L"ghost", L"model", "faith");
     s.menuKey = readString(ini, L"ui", L"menu_key", "INSERT");
     s.menuPad = readString(ini, L"ui", L"menu_pad", "LS+RS");
+    s.showNames = readInt(ini, L"ui", L"show_names", 1) != 0;
     s.verbose = readInt(ini, L"debug", L"verbose", 0) != 0;
     log::verbose = s.verbose;
     s.ignoreBuildCheck = readInt(ini, L"debug", L"ignore_build_check", 0) != 0;
@@ -144,6 +147,7 @@ void applyPending() {
     put(L"ghost", L"model", snapshot.model);
     put(L"ui", L"menu_key", snapshot.menuKey);
     put(L"ui", L"menu_pad", snapshot.menuPad);
+    put(L"ui", L"show_names", snapshot.showNames ? "1" : "0");
     MLOG("config: saved");
 }
 

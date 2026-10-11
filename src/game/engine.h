@@ -18,6 +18,13 @@ using mem::rva;
 // --- Globals -------------------------------------------------------------------------------------
 constexpr uintptr_t kTypeInfoListHead = 0x14215d028;
 constexpr uintptr_t kServerGameWorld = 0x1425469e0; // ServerGameWorld* (null between levels)
+// Camera: ClientCameraViewManagers list (ClientCameraViewManagers_postSimUpdateAll, ..._postSimUpdate)
+constexpr uintptr_t kClientCameraViewManagers = 0x142415e50;
+constexpr uintptr_t Code_LoadCameraViewManagers = 0x1431a24fb; // mov rcx, [kClientCameraViewManagers]
+constexpr size_t CamMgrs_List = 0x08;         // vector<ClientCameraViewManager*> (one per local player)
+constexpr size_t CamMgr_Transform = 0x90;     // LinearTransform: right, up, forward, position
+constexpr size_t CamMgr_ActiveCamera = 0x208; // active camera object
+constexpr size_t Camera_FovYDeg = 0xac;       // vertical field of view, degrees
 constexpr uintptr_t kXInputGetStatePtr = 0x14256d7e0; // the game's XInputGetState (set once by 0x1437ba6c0)
 constexpr uintptr_t Code_StoreXInputGetState = 0x1437ba76f; // mov [kXInputGetStatePtr], rax
 

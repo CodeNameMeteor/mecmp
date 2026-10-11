@@ -108,6 +108,16 @@ UDP, one socket. Sessions have one host and any number of joiners (up to 16).
 - At most 64 player entries are kept; an entry silent for 2 minutes is forgotten. Packets of unknown
   type are dropped before anything is stored or forwarded.
 
+## Name tags (`ui/nametags.cpp`, `game/camera.cpp`)
+
+Each frame (render thread) the camera is read through `g_clientCameraViewManagers` (`0x142415e50`,
+loaded by `clientWorldFrameTick`; the load is in the build check): `+0x08` vector of
+`ClientCameraViewManager*` (one per local player), manager `+0x90` = final camera transform
+(right, up, forward, position), manager `+0x208` = active camera, whose `+0xac` is the vertical field
+of view in degrees. Each shown ghost's head (2.05 m above its trajectory bone) is projected with that
+camera (`game/camera_math.h`, unit-tested on Linux) and its player's name drawn with ImGui: full
+until 40 m, fading out by 150 m, smaller with distance. Names are drawn through walls.
+
 ## Settings (`core/config.cpp`)
 
 `config::get()` returns a copy taken under a short lock. Changes (menu, F8) are queued with

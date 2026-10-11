@@ -170,6 +170,9 @@ void lookSection() {
         }
         ImGui::EndCombo();
     }
+    bool showNames = config::get().showNames;
+    if (ImGui::Checkbox("Names above players", &showNames))
+        config::change([showNames](config::Settings& c) { c.showNames = showNames; });
     if (ImGui::Button("Show ghosts")) game::ghosts::requestSpawnOrRefresh();
     ImGui::SameLine();
     if (ImGui::Button("Hide ghosts")) game::ghosts::requestHideAll();

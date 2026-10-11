@@ -28,6 +28,7 @@ add_library(mecmp SHARED
   src/core/config.cpp
   src/core/log.cpp
   src/core/typeinfo.cpp
+  src/game/camera.cpp
   src/game/camera_finder.cpp
   src/game/fingerprint.cpp
   src/game/hooks.cpp
@@ -42,6 +43,7 @@ add_library(mecmp SHARED
   src/ui/overlay.cpp
   src/ui/menu.cpp
   src/ui/gamepad.cpp
+  src/ui/nametags.cpp
   third_party/imgui/imgui.cpp
   third_party/imgui/imgui_draw.cpp
   third_party/imgui/imgui_tables.cpp

@@ -124,11 +124,7 @@ void run() {
                  settings[16]);
     }
     CameraView view;
-    float base = 0, mult = 0, forced = 0;
-    if (camera::read(view)) {
-        camera::describe(base, mult, forced);
-        MLOG("camera: field of view %.1f (base %.1f, FovMultiplier %.3f, ForceFov %.1f)", view.fovYDeg, base, mult, forced);
-    }
+    if (camera::read(view)) MLOG("camera: name tags use a vertical field of view of %.1f", view.fovYDeg);
     MLOG("camera: done");
 }
 

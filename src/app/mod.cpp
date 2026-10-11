@@ -7,7 +7,6 @@
 #include "core/config.h"
 #include "core/log.h"
 #include "core/typeinfo.h"
-#include "game/camera.h"
 #include "game/camera_finder.h"
 #include "game/engine.h"
 #include "game/fingerprint.h"
@@ -72,8 +71,6 @@ bool gameMatches() {
     }
     if (const TypeEntry* t = types.find("PamCharacterEntityData")) game::ghosts::setCharacterDataType(t->ti);
     else MLOG("startup: PamCharacterEntityData not in the type list");
-    if (const TypeEntry* t = types.find("GameRenderSettings")) game::camera::setSettingsType(t->ti);
-    else MLOG("startup: GameRenderSettings not in the type list (name tags assume the default field of view)");
     MLOG("startup: game build recognised (%llu types)", static_cast<unsigned long long>(types.size()));
     return true;
 }
@@ -115,11 +112,6 @@ void monitorLoop() {
                 MLOG("level: still missing spawners after %d scans; not scanning this level again", scans);
         }
         config::applyPending(); // menu and game changes, in order (and mecmp.ini)
-        static DWORD lastSettings = 0;
-        if (GetTickCount() - lastSettings >= 1000) { // the player may change the FOV setting at any time
-            lastSettings = GetTickCount();
-            game::camera::refreshSettings();
-        }
         ui::gamepad::maintain();  // once the game has loaded XInput
 #if MECMP_DEBUG_KEYS
         for (Key& k : keys) {

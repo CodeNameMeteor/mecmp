@@ -113,10 +113,9 @@ UDP, one socket. Sessions have one host and any number of joiners (up to 16).
 Each frame (render thread) the camera is read through `g_clientCameraViewManagers` (`0x142415e50`,
 loaded by `clientWorldFrameTick`; the load is in the build check): `+0x08` vector of
 `ClientCameraViewManager*` (one per local player), manager `+0x90` = final camera transform
-(right, up, forward, position; the camera looks along minus forward), manager `+0x208` = active camera, whose `+0xac` is the vertical field
-of view in degrees, scaled by the player's FOV setting: `GameRenderSettings.FovMultiplier` (`+0x58`;
-`ForceFov` at `+0x54` replaces it when set), looked up once a second with
-`SettingsManager_getByType(g_settingsManager, TypeInfo)`. Each shown ghost's head (2.05 m above its trajectory bone) is projected with that
+(right, up, forward, position; the camera looks along minus forward), manager `+0x80` = the vertical
+field of view the renderer uses, in degrees, with the player's FOV setting applied (the active camera's
+`+0xac` is only its base value, 55). Each shown ghost's head (2.05 m above its trajectory bone) is projected with that
 camera (`game/camera_math.h`, unit-tested on Linux) and its player's name drawn with ImGui: full
 until 40 m, fading out by 150 m, smaller with distance. Names are drawn through walls.
 

@@ -43,11 +43,6 @@ const Code kCode[] = {
     {"XInput pointer store", Code_StoreXInputGetState, 0, {0x48, 0x89, 0x05, 0x6A, 0x30, 0xDB, 0xFE}, 7},
     // mov rcx,[rip-0D8C6B2h]: clientWorldFrameTick loading the camera view managers (name tags read them)
     {"camera managers load", Code_LoadCameraViewManagers, 0, {0x48, 0x8B, 0x0D, 0x4E, 0x39, 0x27, 0xFF}, 7},
-    // mov rcx,[rip-11F2A66h]: RenderSystem_ctor loading g_settingsManager
-    {"settings manager load", Code_LoadSettingsManager, 0, {0x48, 0x8B, 0x0D, 0x9A, 0xD5, 0xE0, 0xFE}, 7},
-    // push rdi; sub rsp,40h; mov qword [rsp+20h],-2
-    {"SettingsManager_getByType", Fn_SettingsManager_getByType, 0,
-     {0x57, 0x48, 0x83, 0xEC, 0x40, 0x48, 0xC7, 0x44, 0x24, 0x20, 0xFE, 0xFF, 0xFF, 0xFF}, 14},
     // (after mov rax,rcx) mov rcx,[rcx]; test rcx,rcx; jz +19h
     {"rbtree increment", Fn_RbTreeIncrement, 3, {0x48, 0x8B, 0x09, 0x48, 0x85, 0xC9, 0x74, 0x19}, 8},
 };

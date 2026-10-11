@@ -23,14 +23,9 @@ constexpr uintptr_t kClientCameraViewManagers = 0x142415e50;
 constexpr uintptr_t Code_LoadCameraViewManagers = 0x1431a24fb; // mov rcx, [kClientCameraViewManagers]
 constexpr size_t CamMgrs_List = 0x08;         // vector<ClientCameraViewManager*> (one per local player)
 constexpr size_t CamMgr_Transform = 0x90;     // LinearTransform: right, up, forward, position
+constexpr size_t CamMgr_FovYDeg = 0x80;       // final vertical field of view in degrees (with the FOV setting)
 constexpr size_t CamMgr_ActiveCamera = 0x208; // active camera object
-constexpr size_t Camera_FovYDeg = 0xac;       // vertical field of view, degrees
-// Settings: g_settingsManager and SettingsManager_getByType(manager, TypeInfo*) (locks the manager).
-constexpr uintptr_t kSettingsManager = 0x142374a88;
-constexpr uintptr_t Fn_SettingsManager_getByType = 0x142ab21c0;
-constexpr uintptr_t Code_LoadSettingsManager = 0x1435674e7; // mov rcx, [kSettingsManager] (RenderSystem_ctor)
-constexpr size_t GameRenderSettings_ForceFov = 0x54;        // PC layout (types/pc/ps4_vs_pc_diff.txt)
-constexpr size_t GameRenderSettings_FovMultiplier = 0x58;
+constexpr size_t Camera_BaseFovYDeg = 0xac;   // the camera's own vertical FOV before the player's setting (55)
 constexpr uintptr_t kXInputGetStatePtr = 0x14256d7e0; // the game's XInputGetState (set once by 0x1437ba6c0)
 constexpr uintptr_t Code_StoreXInputGetState = 0x1437ba76f; // mov [kXInputGetStatePtr], rax
 

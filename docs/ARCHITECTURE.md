@@ -103,6 +103,9 @@ UDP, one socket. Sessions have one host and any number of joiners (up to 16).
 - Packets: STATE ~30 Hz and HELLO (name) ~1 Hz. Remote players are keyed by the random session id
   in each packet. Pose compression: rotations smallest-three 32-bit, translations i16 at 1/1024 m,
   only for bones that changed since the last full packet (one per second); about 150 bytes.
+  i16 reaches only +-32 m, but some bones (the trajectory bone, and others) hold world-space
+  translations. Those go as an offset from the player's position and are in every packet;
+  sent as-is they were clamped, so far from the level's origin the body drifted from the name tag.
 - Receivers buffer 16 snapshots per player and show them 120 ms in the past, blended. The sender's
   32-bit millisecond clock is unwrapped (`protocol::ClockUnwrap`), so a 49-day uptime wrap is harmless. Positions and angles outside a sane range are dropped.
 - At most 64 player entries are kept; an entry silent for 2 minutes is forgotten. Packets of unknown

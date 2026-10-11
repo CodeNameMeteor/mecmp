@@ -174,7 +174,35 @@ static void testDelayEstimator() {
     CHECK(e.add(33, 33 - 200) == 0); // a 200 ms late packet: the earlier 0 still counts
 }
 
+// Bones far from the level's origin (world-space ones) must survive the trip, at any height.
+static void testWorldSpaceBones() {
+    protocol::Header h{protocol::kMagic, protocol::kProtocol, protocol::kTypeState, 1, 1};
+    protocol::Encoder enc;
+    protocol::Decoder dec;
+    PlayerState s{};
+    s.pos[0] = -310.f; s.pos[1] = 70.f; s.pos[2] = 455.f;
+    s.boneCount = 4;
+    for (int i = 0; i < 4; ++i) { s.bones[i][3] = 1; s.bones[i][7] = 1; }
+    s.bones[1][0] = 0.1f; s.bones[1][1] = 0.2f; // local bone
+    for (int j = 0; j < 3; ++j) s.bones[2][j] = s.pos[j];                 // trajectory: at pos
+    s.bones[3][0] = s.pos[0] + 0.3f; s.bones[3][1] = s.pos[1] + 1.1f; s.bones[3][2] = s.pos[2]; // world-space hips
+    for (int step = 0; step < 3; ++step) {
+        char buf[protocol::kMaxPacket];
+        const size_t n = protocol::writeState(buf, h, s, enc);
+        PlayerState out;
+        bool full = false;
+        CHECK(protocol::readState(buf + sizeof(h), n - sizeof(h), dec, out, full));
+        CHECK(out.boneCount == 4);
+        if (full) protocol::commitBase(dec, out);
+        for (int b = 0; b < 4; ++b)
+            for (int j = 0; j < 3; ++j) CHECK(std::fabs(out.bones[b][j] - s.bones[b][j]) < 2e-3f);
+        // Move up: world-space bones move with the player, so a delta packet must carry them.
+        s.pos[1] += 5.f; s.bones[2][1] += 5.f; s.bones[3][1] += 5.f;
+    }
+}
+
 int main() {
+    testWorldSpaceBones();
     testDelayEstimator();
     testAlignRotations();
     testClockWrap();

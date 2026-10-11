@@ -38,6 +38,13 @@ void decodeQuat(uint32_t w, float* q) {
     q[big] = std::sqrt(sum < 1.f ? 1.f - sum : 0.f);
 }
 
+constexpr float kMaxT = 32767.f / kTransScale;
+bool fitsT(const float* v) {
+    for (int j = 0; j < 3; ++j)
+        if (!(std::fabs(v[j]) <= kMaxT)) return false;
+    return true;
+}
+
 int16_t quantT(float v) {
     float x = v * kTransScale;
     x = x < -32767.f ? -32767.f : (x > 32767.f ? 32767.f : x);
@@ -71,9 +78,17 @@ size_t writeState(char* buf, const Header& h, const PlayerState& s, Encoder& enc
     const uint8_t nb = static_cast<uint8_t>(s.boneCount <= kMaxPoseBones ? s.boneCount : 0);
     const bool full = nb && (nb != enc.lastFullCount || ++enc.sinceFull >= kFullEvery);
     int16_t qt[kMaxPoseBones][3];
-    uint32_t mask = 0;
+    uint32_t mask = 0, rel = 0;
     for (uint8_t i = 0; i < nb; ++i) {
-        for (int j = 0; j < 3; ++j) qt[i][j] = quantT(s.bones[i][j]);
+        const float* b = s.bones[i];
+        const float d[3] = {b[0] - s.pos[0], b[1] - s.pos[1], b[2] - s.pos[2]};
+        if (!fitsT(b) && fitsT(d)) { // world space: send the offset from pos, in every packet
+            rel |= 1u << i;
+            mask |= 1u << i;
+            for (int j = 0; j < 3; ++j) qt[i][j] = quantT(d[j]);
+            continue;
+        }
+        for (int j = 0; j < 3; ++j) qt[i][j] = quantT(b[j]);
         if (full || memcmp(qt[i], enc.lastFullT[i], sizeof(qt[i])) != 0) mask |= 1u << i;
     }
     if (full) {
@@ -85,6 +100,7 @@ size_t writeState(char* buf, const Header& h, const PlayerState& s, Encoder& enc
     put(p, static_cast<uint8_t>(full ? 1 : 0));
     put(p, static_cast<uint16_t>(0));
     put(p, mask);
+    put(p, rel);
     for (uint8_t i = 0; i < nb; ++i) put(p, encodeQuat(&s.bones[i][4]));
     for (uint8_t i = 0; i < nb; ++i)
         if (mask & (1u << i)) {
@@ -128,9 +144,9 @@ bool readState(const char* payload, size_t n, const Decoder& dec, PlayerState& o
     const char* end = payload + n;
     uint8_t nb = 0, fl = 0;
     uint16_t res = 0;
-    uint32_t mask = 0;
+    uint32_t mask = 0, rel = 0;
     if (!get(p, end, out.pos) || !get(p, end, out.yaw) || !get(p, end, out.flags) || !get(p, end, out.timeMs) || !get(p, end, nb) ||
-        !get(p, end, fl) || !get(p, end, res) || !get(p, end, mask))
+        !get(p, end, fl) || !get(p, end, res) || !get(p, end, mask) || !get(p, end, rel))
         return false;
     if (!sanePlacement(out)) return false;
     full = (fl & 1) != 0;
@@ -150,7 +166,8 @@ bool readState(const char* payload, size_t n, const Decoder& dec, PlayerState& o
             if (end - t < 6) return false;
             memcpy(tv, t, 6);
             t += 6;
-            for (int j = 0; j < 3; ++j) out.bones[i][j] = tv[j] / kTransScale;
+            const bool r = (rel & (1u << i)) != 0;
+            for (int j = 0; j < 3; ++j) out.bones[i][j] = tv[j] / kTransScale + (r ? out.pos[j] : 0.f);
         } else {
             for (int j = 0; j < 3; ++j) out.bones[i][j] = dec.baseT[i][j];
         }

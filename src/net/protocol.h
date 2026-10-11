@@ -4,12 +4,14 @@
 // Header (16 bytes): u32 magic "MECM" | u16 protocol | u16 type | u32 session | u32 seq
 //
 // type 1 STATE: f32 pos[3] | f32 yaw | u32 flags | u32 timeMs | pose
-//   pose: u8 boneCount | u8 flags (bit0 = full) | u16 0 | u32 translation mask
+//   pose: u8 boneCount | u8 flags (bit0 = full) | u16 0 | u32 translation mask | u32 relative mask
 //         | boneCount x u32 rotation (smallest-three: 2-bit index + 3 x 10 bits)
-//         | per mask bit: 3 x i16 translation (1/1024 m)
+//         | per mask bit: 3 x i16 translation (1/1024 m, so at most +-32 m)
 //   Bones whose translation is not in the packet keep the last full packet's value (a full packet,
-//   with every translation, goes out every kFullEvery packets). The trajectory bone's translation
-//   is world space and is clamped; receivers place it at pos instead.
+//   with every translation, goes out every kFullEvery packets).
+//   Some bones (the trajectory bone among them) hold world-space translations, which do not fit in
+//   +-32 m away from the level's origin. Those are sent relative to pos (relative mask bit set) and
+//   are always in the packet, since their value moves with the player.
 // type 2 HELLO (about once a second): char name[24] (UTF-8, at most 23 bytes, NUL padded)
 
 #include <cstddef>
@@ -21,7 +23,7 @@
 namespace mecmp::net::protocol {
 
 constexpr uint32_t kMagic = 0x4d43454d; // "MECM"
-constexpr uint16_t kProtocol = 5;
+constexpr uint16_t kProtocol = 6;
 constexpr uint16_t kTypeState = 1;
 constexpr uint16_t kTypeHello = 2;
 constexpr size_t kNameLen = 24;

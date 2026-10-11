@@ -28,6 +28,7 @@ add_library(mecmp SHARED
   src/core/config.cpp
   src/core/log.cpp
   src/core/typeinfo.cpp
+  src/game/camera_finder.cpp
   src/game/fingerprint.cpp
   src/game/hooks.cpp
   src/game/level.cpp

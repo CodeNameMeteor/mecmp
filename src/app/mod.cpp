@@ -7,6 +7,7 @@
 #include "core/config.h"
 #include "core/log.h"
 #include "core/typeinfo.h"
+#include "game/camera_finder.h"
 #include "game/engine.h"
 #include "game/fingerprint.h"
 #include "game/ghosts.h"
@@ -86,6 +87,7 @@ void monitorLoop() {
         {VK_F8, false, [] { game::ghosts::requestNextModel(); }},
         {VK_F9, false, [] { MLOG("status: net %s | %s", net::describe().c_str(), game::ghosts::status().c_str()); }},
         {VK_F12, false, [] { game::ghosts::requestHideAll(); }},
+        {VK_F10, false, [] { game::camera_finder::run(); }},
     };
 #endif
     while (g_running) {
@@ -166,7 +168,8 @@ void run(HMODULE self) {
          cfg.join.empty() ? "Hosting: friends join with your join code (see below)." : "Joining: other players appear once the host answers.",
          cfg.menuKey.c_str(), cfg.menuPad.empty() ? "" : " or ", cfg.menuPad.c_str());
 #if MECMP_DEBUG_KEYS
-    MLOG("developer keys: F7 = spawn/show ghosts, F8 = next ghost model, F12 = hide ghosts, F9 = status");
+    MLOG("developer keys: F7 = spawn/show ghosts, F8 = next ghost model, F12 = hide ghosts, F9 = status, "
+         "F10 = find the camera matrix");
 #endif
     monitorLoop();
 }

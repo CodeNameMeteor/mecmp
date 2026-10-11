@@ -50,7 +50,8 @@ struct Remote {
     bool loopback = false;
     uint32_t lastSeq = 0;
     bool haveSeq = false;
-    DWORD lastTick = 0;
+    DWORD lastTick = 0;  // last STATE (player data)
+    DWORD lastHeard = 0; // last packet of any kind (a player who only sent a HELLO yet is still there)
     proto::Decoder decoder;
     // Sender clock -> our clock: the smallest (arrival - sent) seen = one-way delay + clock offset.
     // Replaying on the sender's timestamps keeps movement smooth when packets arrive in bursts.
@@ -279,7 +280,8 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
             if (!sameAddr(m.addr, from))
                 if (sendto(g_sock, buf, n, 0, reinterpret_cast<const sockaddr*>(&m.addr), sizeof(m.addr)) == n) ++g_relayed;
     }
-    if (!own && g_role == Role::Join && sameAddr(from, g_hostAddr) && !g_heardFromHost) {
+    // Joining: the host answered. A solo test joins itself, so its own packets coming back count too.
+    if (g_role == Role::Join && sameAddr(from, g_hostAddr) && !g_heardFromHost) {
         g_heardFromHost = true;
         MLOG("net: connected to the host %s", addrToString(from).c_str());
     }
@@ -289,12 +291,13 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
             // Flood or spoofed session ids: keep memory bounded by replacing the entry heard from longest ago.
             auto stalest = g_remotes.begin();
             for (auto it = g_remotes.begin(); it != g_remotes.end(); ++it)
-                if (it->second.lastTick < stalest->second.lastTick) stalest = it;
+                if (it->second.lastHeard < stalest->second.lastHeard) stalest = it;
             g_remotes.erase(stalest);
         }
         found = g_remotes.emplace(h.session, Remote{}).first;
     }
     Remote& r = found->second;
+    r.lastHeard = GetTickCount();
     if (!r.id) {
         r.id = h.session;
         r.addr = from;
@@ -507,7 +510,7 @@ void threadMain() {
             lastHousekeeping = now;
             std::lock_guard<std::mutex> lock(g_m);
             for (auto it = g_remotes.begin(); it != g_remotes.end();) {
-                if (now - it->second.lastTick > kRemoteForgetMs) it = g_remotes.erase(it);
+                if (now - it->second.lastHeard > kRemoteForgetMs) it = g_remotes.erase(it);
                 else ++it;
             }
             if (g_role == Role::Host) {

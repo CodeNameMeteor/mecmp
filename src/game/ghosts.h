@@ -24,6 +24,11 @@ void setCharacterDataType(uintptr_t runtimeTypeInfo);
 // at the replay's position, unanimated); the local player is still sent to the others.
 void setEnabled(bool enabled);
 
+// Render thread, every frame: writes each shown ghost's pose, interpolated for this moment, into its
+// client side. The server tick runs at 30 Hz; without this the ghost would only move 30 times a
+// second, which judders on faster displays.
+void renderFrame();
+
 // Server tick: spawn ghosts for new players, drive all ghosts, keep their client side in shape.
 void tick(uint64_t tick, uint64_t ticksInLevel);
 void levelChanged(); // forget ghosts of the old level

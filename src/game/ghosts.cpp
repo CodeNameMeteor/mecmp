@@ -30,6 +30,11 @@ constexpr size_t kMaxGhosts = 15;
 // So a ghost being hidden is also moved this far below where it was, for long enough to replicate.
 constexpr float kParkDepth = 1000.f;
 constexpr DWORD kParkMs = 1500;
+// Once a ghost's client side is driven every rendered frame (renderFrame), the server stops
+// replicating its pose after this long: replication only arrives once per server tick with an older
+// pose and would make the ghost step back and forth. Until then (and without a client component)
+// replication is what shows the pose.
+constexpr DWORD kReplicateMs = 2000;
 
 bool setClientVisible(void* ent, bool visible);
 
@@ -45,6 +50,7 @@ struct Ghost {
     int visibleCalls = 0;
     bool hidden = false;
     bool posing = false;
+    DWORD posingSince = 0;        // when the current player started driving it
     float lastPos[3] = {0, 0, 0}; // where it was last driven
     DWORD parkUntil = 0;          // while hidden: keep it parked below lastPos until then
 };
@@ -201,6 +207,7 @@ void drive(Ghost& g, const net::PlayerState& st) {
         memcpy(pose, st.bones, N * 0x20);
         if (!g.posing) {
             g.posing = true;
+            g.posingSince = GetTickCount();
             VLOG("ghost: player %08x now drives ghost %p with %u bones", g.peer, g.character, N);
         }
     }
@@ -211,7 +218,8 @@ void drive(Ghost& g, const net::PlayerState& st) {
             t[4] = 0.f; t[5] = std::sin(st.yaw * 0.5f); t[6] = 0.f; t[7] = std::cos(st.yaw * 0.5f);
         }
     }
-    setNetDirty(c + SRP_NetState, 2 | 4); // frames + pose
+    const bool clientDriven = g.posing && g.clientComp && GetTickCount() - g.posingSince > kReplicateMs;
+    if (!clientDriven) setNetDirty(c + SRP_NetState, 2 | 4); // frames + pose
 }
 
 // Client side: a ghost client normally plays its own replay and parks the body at a fixed
@@ -223,6 +231,8 @@ void fixClient(Ghost& g, const net::PlayerState& st) {
     if (mem::readOr<uint32_t>(c + CRP_PlaybackState) != 0) poke<uint32_t>(c + CRP_PlaybackState, 0);
     if (mem::readOr<uint8_t>(c + CRP_PlaybackForced) != 0) poke<uint8_t>(c + CRP_PlaybackForced, 0);
     if (mem::readOr<uint8_t>(c + CRP_SkipRoot) != 0) poke<uint8_t>(c + CRP_SkipRoot, 0);
+    // Driven every rendered frame (renderFrame): the anchor is set there, for the frame's own moment.
+    if (g.posing && GetTickCount() - g.posingSince > kReplicateMs) return;
     const uintptr_t pose = mem::readOr<uintptr_t>(c + CRP_ReceivedPose);
     const uint32_t n = mem::readOr<uint32_t>(c + CRP_ExpectedBones);
     uint32_t idx[kMaxBones];
@@ -389,6 +399,39 @@ void onClientCharacter(void* ent) {
 }
 
 void setCharacterDataType(uintptr_t runtimeTypeInfo) { g_tiCharData = runtimeTypeInfo; }
+
+void renderFrame() {
+    struct Target { uint32_t peer; void* comp; void* ch; };
+    Target targets[kMaxGhosts];
+    size_t n = 0;
+    {
+        std::lock_guard<std::mutex> lock(g_m);
+        for (const auto& g : g_ghosts)
+            if (n < kMaxGhosts && g.posing && !g.hidden && g.clientComp && !g_paused &&
+                GetTickCount() - g.posingSince > kReplicateMs)
+                targets[n++] = {g.peer, g.clientComp, g.clientChar};
+    }
+    static net::PlayerState st; // large; render thread only
+    for (size_t i = 0; i < n; ++i) {
+        uint32_t age = 0;
+        if (!net::remoteState(targets[i].peer, st, age) || age >= kHideAfterMs) continue;
+        if (!clientCompAlive(targets[i].comp, targets[i].ch)) continue;
+        const uintptr_t c = reinterpret_cast<uintptr_t>(targets[i].comp);
+        const uintptr_t pose = mem::readOr<uintptr_t>(c + CRP_ReceivedPose);
+        const uint32_t bones = mem::readOr<uint32_t>(c + CRP_ExpectedBones);
+        uint32_t idx[kMaxBones];
+        const uintptr_t idxPtr = mem::readOr<uintptr_t>(c + CRP_Setup + 0x10);
+        if (!pose || bones != st.boneCount || !bones || bones > kMaxBones || !idxPtr || !mem::read(idxPtr, idx, bones * 4))
+            continue;
+        float buf[kMaxBones][8];
+        memcpy(buf, st.bones, bones * 0x20);
+        for (uint32_t b = 0; b < bones; ++b)
+            if ((idx[b] & 0xff) == 1) { // the trajectory bone: the body's anchor, at the player's position
+                buf[b][0] = st.pos[0]; buf[b][1] = st.pos[1]; buf[b][2] = st.pos[2]; buf[b][3] = 1.f;
+            }
+        poke(pose, buf, bones * 0x20);
+    }
+}
 void setEnabled(bool enabled) { g_enabled = enabled; }
 
 namespace {
@@ -415,6 +458,7 @@ bool reuseFreeGhost(const Present& p, const std::vector<Present>& present) {
     pick->peer = p.id;
     pick->name = p.name;
     pick->posing = false;
+    pick->posingSince = 0;
     pick->visibleCalls = 0;
     pick->hidden = true;               // the tick shows it again on its next pass
     pick->clientCharAt = GetTickCount();
@@ -554,6 +598,7 @@ void tick(uint64_t tick, uint64_t ticksInLevel) {
             if (g_ghosts[k].character == g.character) live = &g_ghosts[k];
         if (live && live->peer == g.peer) {
             live->posing = g.posing;
+            live->posingSince = g.posingSince;
             memcpy(live->lastPos, g.lastPos, sizeof(live->lastPos));
             if (visibilityChanged) { live->hidden = g.hidden; live->visibleCalls = g.visibleCalls; live->parkUntil = g.parkUntil; }
             else if (have) live->parkUntil = 0;

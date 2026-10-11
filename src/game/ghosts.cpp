@@ -24,6 +24,12 @@ constexpr uint64_t kSettleTicks = 90;   // ~3 s after a level starts before spaw
 // left is hidden and handed to the next player that needs one. So the level holds at most as many
 // ghosts as players were ever there at the same time, and never more than this.
 constexpr size_t kMaxGhosts = 15;
+// Hiding the client character leaves its hair drawn (a separate mesh setVisible does not reach).
+// So a ghost being hidden is also moved this far below where it was, for long enough to replicate.
+constexpr float kParkDepth = 1000.f;
+constexpr DWORD kParkMs = 1500;
+
+bool setClientVisible(void* ent, bool visible);
 
 struct Ghost {
     uint32_t peer = 0;          // player driving it (a free ghost keeps its last player's id)
@@ -37,7 +43,26 @@ struct Ghost {
     int visibleCalls = 0;
     bool hidden = false;
     bool posing = false;
+    float lastPos[3] = {0, 0, 0}; // where it was last driven
+    DWORD parkUntil = 0;          // while hidden: keep it parked below lastPos until then
 };
+
+// Starts hiding a ghost: client character hidden, and parked below its last position.
+void startHiding(Ghost& g) {
+    if (g.clientChar) setClientVisible(g.clientChar, false);
+    g.hidden = true;
+    g.parkUntil = GetTickCount() + kParkMs;
+}
+
+bool parking(const Ghost& g) { return g.hidden && g.parkUntil && static_cast<int32_t>(GetTickCount() - g.parkUntil) < 0; }
+
+net::PlayerState parkedState(const Ghost& g) {
+    net::PlayerState p; // no pose: only the trajectory bone (the body's anchor) moves
+    p.pos[0] = g.lastPos[0];
+    p.pos[1] = g.lastPos[1] - kParkDepth;
+    p.pos[2] = g.lastPos[2];
+    return p;
+}
 
 std::mutex g_m;               // guards g_ghosts (client hooks read/write the client fields)
 std::vector<Ghost> g_ghosts;
@@ -277,10 +302,7 @@ void handleRequests() {
     if (g_reqHide.exchange(false)) {
         g_paused = true;
         std::lock_guard<std::mutex> lock(g_m);
-        for (auto& g : g_ghosts) {
-            if (g.clientChar) setClientVisible(g.clientChar, false);
-            g.hidden = true;
-        }
+        for (auto& g : g_ghosts) startHiding(g);
         MLOG("ghosts: hidden, automatic spawning paused (F7 resumes)");
     }
     if (g_reqNextModel.exchange(false)) {
@@ -482,19 +504,24 @@ void tick(uint64_t tick, uint64_t ticksInLevel) {
         Ghost& g = ghosts[i];
         if (!g.character) continue;
         const bool present = !g_paused && isPresent(players, g.peer);
-        if (!present && g.hidden) continue;
+        if (!present && g.hidden && !parking(g)) continue;
         uint32_t age = 0;
         const bool have = present && net::remoteState(g.peer, st, age);
         // Visibility: the client character starts hidden (the time-trial marker normally shows it);
         // show it a few times after creation and every 3 s after that, hide it when the player left.
         bool visibilityChanged = false;
-        if (g.clientChar) {
-            const DWORD since = GetTickCount() - g.clientCharAt;
-            if (!present) {
-                setClientVisible(g.clientChar, false);
-                g.hidden = true;
+        if (!present) {
+            if (!g.hidden) {
+                startHiding(g);
                 visibilityChanged = true;
-            } else {
+            }
+            static net::PlayerState park; // large; game thread only
+            park = parkedState(g);
+            drive(g, park);
+            fixClient(g, park);
+        } else if (g.clientChar) {
+            const DWORD since = GetTickCount() - g.clientCharAt;
+            {
                 static const DWORD kAt[] = {300, 1000, 2500, 5000};
                 const DWORD due = g.visibleCalls < 4 ? kAt[g.visibleCalls] : 5000u + 3000u * static_cast<DWORD>(g.visibleCalls - 3);
                 if (g.hidden || since >= due) {
@@ -504,13 +531,12 @@ void tick(uint64_t tick, uint64_t ticksInLevel) {
                     visibilityChanged = true;
                 }
             }
-        } else if (!present) {
-            g.hidden = true; // nothing to hide on the client yet; stop driving it
-            visibilityChanged = true;
         }
         if (have) {
             drive(g, st);
             fixClient(g, st);
+            memcpy(g.lastPos, st.pos, sizeof(g.lastPos));
+            g.parkUntil = 0;
         }
         // Write back what this tick changed. The list only changes on this thread (spawn/erase/reuse)
         // or by the client hooks filling in client pointers, so the entry is normally still at i.
@@ -520,7 +546,9 @@ void tick(uint64_t tick, uint64_t ticksInLevel) {
             if (g_ghosts[k].character == g.character) live = &g_ghosts[k];
         if (live && live->peer == g.peer) {
             live->posing = g.posing;
-            if (visibilityChanged) { live->hidden = g.hidden; live->visibleCalls = g.visibleCalls; }
+            memcpy(live->lastPos, g.lastPos, sizeof(live->lastPos));
+            if (visibilityChanged) { live->hidden = g.hidden; live->visibleCalls = g.visibleCalls; live->parkUntil = g.parkUntil; }
+            else if (have) live->parkUntil = 0;
         }
     }
     recordCost(nowUs() - t0, ghosts.size());

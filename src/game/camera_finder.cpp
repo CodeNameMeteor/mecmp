@@ -6,6 +6,7 @@
 
 #include "core/log.h"
 #include "game/engine.h"
+#include "game/camera.h"
 #include "game/level.h"
 
 namespace mecmp::game::camera_finder {
@@ -108,6 +109,12 @@ void run() {
                  settings[0], settings[1], settings[2], settings[3], settings[4], settings[5], settings[6], settings[7],
                  settings[8], settings[9], settings[10], settings[11], settings[12], settings[13], settings[14], settings[15],
                  settings[16]);
+    }
+    CameraView view;
+    float base = 0, mult = 0, forced = 0;
+    if (camera::read(view)) {
+        camera::describe(base, mult, forced);
+        MLOG("camera: field of view %.1f (base %.1f, FovMultiplier %.3f, ForceFov %.1f)", view.fovYDeg, base, mult, forced);
     }
     MLOG("camera: done");
 }

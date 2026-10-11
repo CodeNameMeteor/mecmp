@@ -33,6 +33,7 @@ ID3D11DeviceContext* g_context = nullptr;
 ID3D11RenderTargetView* g_rtv = nullptr;
 HWND g_window = nullptr;
 WNDPROC g_origWndProc = nullptr;
+std::atomic<void (*)()> g_onDestroyed{nullptr};
 bool g_ready = false;
 std::atomic<bool> g_open{false};
 int g_toggleKey = VK_INSERT;
@@ -115,6 +116,9 @@ void applyRawMouse() {
 bool isMouseMessage(UINT msg) { return msg >= WM_MOUSEFIRST && msg <= WM_MOUSELAST; }
 
 LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
+    if (msg == WM_DESTROY && hwnd == g_window) {
+        if (auto fn = g_onDestroyed.exchange(nullptr)) fn();
+    }
     if (msg == WM_KEYDOWN && static_cast<int>(w) == g_toggleKey && !(l & (1 << 30))) {
         const bool open = !g_open;
         g_open = open;
@@ -203,6 +207,8 @@ HRESULT STDMETHODCALLTYPE resizeHook(IDXGISwapChain* sc, UINT count, UINT w, UIN
     return hr;
 }
 } // namespace
+
+void setOnWindowDestroyed(void (*fn)()) { g_onDestroyed = fn; }
 
 bool menuOpen() { return g_open.load(); }
 

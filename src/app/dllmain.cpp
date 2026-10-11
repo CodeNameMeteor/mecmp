@@ -27,9 +27,14 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID reserved) {
     if (reason == DLL_PROCESS_ATTACH) {
         g_self = inst;
         DisableThreadLibraryCalls(inst);
+        // Pin the DLL: the hooks point into it, so it must never be unloaded while the game runs
+        // (a stray FreeLibrary would otherwise leave the game calling freed code).
+        HMODULE pinned = nullptr;
+        GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_PIN | GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+                           reinterpret_cast<LPCWSTR>(&DllMain), &pinned);
         if (HANDLE t = CreateThread(nullptr, 0, modThread, nullptr, 0, nullptr)) CloseHandle(t);
-    } else if (reason == DLL_PROCESS_DETACH && reserved == nullptr) {
-        // The hooks stay in place: the DLL is never unloaded while the game runs.
+    } else if (reason == DLL_PROCESS_DETACH && reserved != nullptr) {
+        // Process exit (the DLL is pinned, so there is no other detach): flush and close the log.
         mecmp::app::shutdown();
     }
     return TRUE;

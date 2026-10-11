@@ -13,6 +13,9 @@ void open(HMODULE self);
 // Folder the log was written to (empty if none could be opened).
 const wchar_t* directory();
 void close();
+// For the exception handler: no allocation, never waits for the log lock (falls back to the
+// debugger output when the log is busy).
+void writeUrgent(const char* line);
 // Detailed diagnostics (VLOG) are written only when mecmp.ini [debug] verbose=1.
 extern bool verbose;
 void write(const char* fmt, ...)

@@ -52,6 +52,15 @@ bool capture(net::PlayerState& st) {
         st.pos[1] = st.bones[1][1];
         st.pos[2] = st.bones[1][2];
     }
+    // While a level loads the transform and the recorder can hold garbage: never send it.
+    for (float v : st.pos)
+        if (!std::isfinite(v) || std::fabs(v) > 100000.f) return false;
+    for (uint32_t b = 0; b < st.boneCount; ++b)
+        for (float v : st.bones[b])
+            if (!std::isfinite(v) || std::fabs(v) > 100000.f) {
+                st.boneCount = 0; // keep the position, drop the pose
+                break;
+            }
     static const double freq = [] { LARGE_INTEGER f; QueryPerformanceFrequency(&f); return static_cast<double>(f.QuadPart); }();
     LARGE_INTEGER c;
     QueryPerformanceCounter(&c);

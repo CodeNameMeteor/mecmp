@@ -339,6 +339,8 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
     const double delta = nowMs() - sent;
     if (!r.haveDelta || delta < r.minDelta) { r.minDelta = delta; r.haveDelta = true; }
     else r.minDelta += 0.02; // let the estimate creep up slowly (clock drift, route changes)
+    // Same rotation sign as the snapshot before, so blending never flips a bone (in-game jitter).
+    if (r.fill) proto::alignRotations(s, r.snaps[(r.head + kSnapCount - 1) % kSnapCount].s);
     r.snaps[r.head] = {s, sent};
     r.head = (r.head + 1) % kSnapCount;
     if (r.fill < kSnapCount) ++r.fill;

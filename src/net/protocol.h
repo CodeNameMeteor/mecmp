@@ -11,6 +11,7 @@
 //   with every translation, goes out every kFullEvery packets). The trajectory bone's translation
 //   is world space and is clamped; receivers place it at pos instead.
 // type 2 HELLO (about once a second): char name[24] (UTF-8, at most 23 bytes, NUL padded)
+//   | u32 look (0 = Faith, else the game's echo CustomizationHash; absent from older versions = 0)
 
 #include <cstddef>
 #include <cstdint>
@@ -120,7 +121,9 @@ struct LossWindow {
 };
 
 size_t writeState(char* buf, const Header& h, const PlayerState& s, Encoder& enc);
-size_t writeHello(char* buf, const Header& h, const char* name);
+size_t writeHello(char* buf, const Header& h, const char* name, uint32_t look = 0);
+// HELLO payload (after the header). `name` = the raw field (cleaned by the caller); `look` = 0 if absent.
+bool readHello(const char* payload, size_t n, std::string& name, uint32_t& look);
 // Decodes a STATE payload (after the header). `full` tells whether to commit it as the new base.
 bool readState(const char* payload, size_t n, const Decoder& dec, PlayerState& out, bool& full);
 void commitBase(Decoder& dec, const PlayerState& s);

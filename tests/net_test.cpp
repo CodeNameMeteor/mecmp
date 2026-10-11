@@ -54,7 +54,7 @@ static void testHelloName() {
     protocol::Header h{protocol::kMagic, protocol::kProtocol, protocol::kTypeHello, 7, 1};
     const std::string name = std::string(22, 'x') + "\xC3\xA9"; // 24 bytes: only 23 fit on the wire
     const size_t n = protocol::writeHello(buf, h, name.c_str());
-    CHECK(n == sizeof(protocol::Header) + protocol::kNameLen);
+    CHECK(n == sizeof(protocol::Header) + protocol::kNameLen + sizeof(uint32_t)); // name + look
     const char* field = buf + sizeof(protocol::Header);
     CHECK(std::strlen(field) == 22); // the é is dropped whole, not cut in half
 }
@@ -184,8 +184,23 @@ static void testLossWindow() {
     CHECK(w.percent(20500) == 0.f);
 }
 
+static void testHelloLook() {
+    char buf[protocol::kMaxPacket];
+    protocol::Header h{};
+    const size_t n = protocol::writeHello(buf, h, "Meteor", 0x1234abcdu);
+    std::string name;
+    uint32_t look = 0;
+    CHECK(protocol::readHello(buf + sizeof(h), n - sizeof(h), name, look));
+    CHECK(name == "Meteor" && look == 0x1234abcdu);
+    // An older version's HELLO (name only): look 0 = Faith.
+    CHECK(protocol::readHello(buf + sizeof(h), protocol::kNameLen, name, look) && look == 0 && name == "Meteor");
+    // A short packet keeps what is there.
+    CHECK(protocol::readHello(buf + sizeof(h), 3, name, look) && name == "Met" && look == 0);
+}
+
 int main() {
     testLossWindow();
+    testHelloLook();
     testDelayEstimator();
     testAlignRotations();
     testClockWrap();

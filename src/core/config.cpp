@@ -8,13 +8,18 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <mutex>
+#include <vector>
 
 #include "core/log.h"
 #include "net/protocol.h"
 
 namespace mecmp::config {
 namespace {
+std::mutex g_m;             // guards g_settings and g_queue
 Settings g_settings;
+struct Change { std::function<void(Settings&)> edit; bool persist; };
+std::vector<Change> g_queue;
 std::wstring g_dir;
 
 constexpr const char* kDefaultIni =
@@ -24,7 +29,7 @@ constexpr const char* kDefaultIni =
     "; UDP port this game uses\r\n"
     "port=47800\r\n"
     "; HOST: leave join empty. The mod opens the port on your router (UPnP) and writes your\r\n"
-    ";       join code to the log, to join_code.txt and to the clipboard.\r\n"
+    ";       join code to the log and to join_code.txt (the menu's Copy button copies it).\r\n"
     "; JOIN: paste the host's join code, e.g. join=8H3KQ-ZT1V4 (or the host's ip:port).\r\n"
     "; solo test: join=127.0.0.1:47800 (a ghost mirrors you)\r\n"
     "join=\r\n"
@@ -39,12 +44,15 @@ constexpr const char* kDefaultIni =
     "; spawn other players' ghosts automatically when their packets arrive\r\n"
     "auto_spawn=1\r\n"
     "; how other players look: faith (your current outfit) or part of a model name,\r\n"
-    "; e.g. RunVis (the red time-trial ghost). F8 cycles through the loaded models in game.\r\n"
+    "; e.g. RunVis (the red time-trial ghost). The in-game menu lists the loaded models.\r\n"
     "model=faith\r\n"
     "\r\n"
     "[ui]\r\n"
-    "; key that opens the in-game menu: INSERT, HOME, END, DELETE or F1..F12\r\n"
+    "; key that opens the in-game menu: INSERT, HOME, END, DELETE, PAGEUP, PAGEDOWN, PAUSE or F1..F12\r\n"
     "menu_key=INSERT\r\n"
+    "; gamepad buttons that open it, held together: A B X Y LB RB LS RS BACK START UP DOWN LEFT RIGHT\r\n"
+    "; joined with +, e.g. LS+RS or BACK+Y. Empty = no gamepad button. Both can be changed in the menu.\r\n"
+    "menu_pad=LS+RS\r\n"
     "\r\n"
     "[debug]\r\n"
     "; 1 = detailed diagnostic log (for bug reports)\r\n"
@@ -75,6 +83,7 @@ void load(const std::wstring& dir) {
             MLOG("config: wrote default %ls", ini.c_str());
         }
     }
+    std::lock_guard<std::mutex> lock(g_m);
     Settings& s = g_settings;
     s.netEnabled = readInt(ini, L"net", L"enabled", 1) != 0;
     const int port = readInt(ini, L"net", L"port", 47800);
@@ -89,6 +98,7 @@ void load(const std::wstring& dir) {
     s.autoSpawn = readInt(ini, L"ghost", L"auto_spawn", 1) != 0;
     s.model = readString(ini, L"ghost", L"model", "faith");
     s.menuKey = readString(ini, L"ui", L"menu_key", "INSERT");
+    s.menuPad = readString(ini, L"ui", L"menu_pad", "LS+RS");
     s.verbose = readInt(ini, L"debug", L"verbose", 0) != 0;
     log::verbose = s.verbose;
     s.ignoreBuildCheck = readInt(ini, L"debug", L"ignore_build_check", 0) != 0;
@@ -97,21 +107,44 @@ void load(const std::wstring& dir) {
          s.verbose ? ", verbose log" : "");
 }
 
-const Settings& get() { return g_settings; }
+Settings get() {
+    std::lock_guard<std::mutex> lock(g_m);
+    return g_settings;
+}
 const std::wstring& dir() { return g_dir; }
 
-void save() {
+void change(std::function<void(Settings&)> edit, bool persist) {
+    std::lock_guard<std::mutex> lock(g_m);
+    if (g_queue.size() < 256) g_queue.push_back({std::move(edit), persist});
+}
+
+void applyPending() {
+    std::vector<Change> todo;
+    Settings snapshot;
+    bool persist = false;
+    {
+        std::lock_guard<std::mutex> lock(g_m);
+        if (g_queue.empty()) return;
+        todo.swap(g_queue);
+        for (auto& c : todo) {
+            c.edit(g_settings);
+            persist = persist || c.persist;
+        }
+        snapshot = g_settings;
+    }
+    if (!persist) return;
     const std::wstring ini = g_dir + L"mecmp.ini";
     auto put = [&](const wchar_t* sec, const wchar_t* key, const std::string& v) {
         wchar_t w[512] = {};
         MultiByteToWideChar(CP_UTF8, 0, v.c_str(), -1, w, 512);
         WritePrivateProfileStringW(sec, key, w, ini.c_str());
     };
-    put(L"player", L"name", g_settings.name);
-    put(L"net", L"join", g_settings.join);
-    put(L"ghost", L"model", g_settings.model);
+    put(L"player", L"name", snapshot.name);
+    put(L"net", L"join", snapshot.join);
+    put(L"ghost", L"model", snapshot.model);
+    put(L"ui", L"menu_key", snapshot.menuKey);
+    put(L"ui", L"menu_pad", snapshot.menuPad);
     MLOG("config: saved");
 }
-Settings& mut() { return g_settings; }
 
 } // namespace mecmp::config

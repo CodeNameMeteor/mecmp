@@ -16,6 +16,8 @@
 #include "imgui.h"
 #include "net/net.h"
 #include "net/protocol.h"
+#include "ui/gamepad.h"
+#include "ui/overlay.h"
 
 namespace mecmp::ui::menu {
 namespace {
@@ -23,6 +25,7 @@ namespace {
 char g_name[net::protocol::kMaxNameBytes + 1] = {}; // what fits on the wire
 char g_code[64] = {};
 bool g_inited = false;
+bool g_keyCapture = false; // waiting for a new menu key
 DWORD g_hintUntil = 0;
 
 void copyToClipboard(const std::string& text) {
@@ -66,12 +69,13 @@ std::string shortModel(const std::string& m) {
     return s;
 }
 
+std::string enteredName() { return g_name[0] ? std::string(g_name) : std::string("Runner"); }
+
 void startSession(const std::string& join) {
-    auto& cfg = config::mut();
-    cfg.name = g_name[0] ? g_name : "Runner";
-    cfg.join = join;
-    net::start(cfg.port, cfg.join, cfg.loopbackOffset, cfg.name);
-    config::save();
+    const config::Settings cfg = config::get();
+    const std::string name = enteredName();
+    net::start(cfg.port, join, cfg.loopbackOffset, name);
+    config::change([name, join](config::Settings& c) { c.name = name; c.join = join; });
 }
 
 void sessionSection() {
@@ -108,9 +112,9 @@ void sessionSection() {
     ImGui::InputText("Your name", g_name, sizeof(g_name));
     ImGui::SameLine();
     if (ImGui::Button("Set name")) {
-        config::mut().name = g_name[0] ? g_name : "Runner";
-        net::setName(config::get().name);
-        config::save();
+        const std::string name = enteredName();
+        net::setName(name);
+        config::change([name](config::Settings& c) { c.name = name; });
     }
 
     ImGui::Spacing();
@@ -155,14 +159,13 @@ void playersSection() {
 void lookSection() {
     ImGui::SeparatorText("How other players look");
     const auto names = game::models::names();
-    const std::string& cur = config::get().model;
+    const std::string cur = config::get().model;
     ImGui::SetNextItemWidth(ImGui::GetFontSize() * 14);
     if (ImGui::BeginCombo("Model", shortModel(cur).c_str())) {
         for (const auto& n : names) {
             if (ImGui::Selectable(shortModel(n).c_str(), n == cur)) {
                 game::ghosts::requestModel(n);
-                config::mut().model = n;
-                config::save();
+                config::change([n](config::Settings& c) { c.model = n; });
             }
         }
         ImGui::EndCombo();
@@ -170,6 +173,74 @@ void lookSection() {
     if (ImGui::Button("Show ghosts")) game::ghosts::requestSpawnOrRefresh();
     ImGui::SameLine();
     if (ImGui::Button("Hide ghosts")) game::ghosts::requestHideAll();
+}
+void controlsSection() {
+    ImGui::SeparatorText("Controls");
+    const config::Settings cfg = config::get();
+    // Keyboard key that opens the menu.
+    ImGui::AlignTextToFramePadding();
+    ImGui::Text("Menu key:");
+    ImGui::SameLine();
+    if (g_keyCapture) {
+        ImGui::TextColored(ImVec4(1.f, 0.85f, 0.3f, 1.f), "press a key (Esc cancels)");
+        int count = 0;
+        const ui::MenuKey* keys = ui::menuKeys(count);
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+            g_keyCapture = false;
+        } else {
+            for (int i = 0; i < count; ++i) {
+                if (!ImGui::IsKeyPressed(static_cast<ImGuiKey>(keys[i].imguiKey), false)) continue;
+                const std::string name = keys[i].name;
+                ui::setMenuKey(name);
+                config::change([name](config::Settings& c) { c.menuKey = name; });
+                g_keyCapture = false;
+                break;
+            }
+        }
+        if (!g_keyCapture) ui::setKeyCapture(false);
+    } else {
+        ImGui::Text("%s", cfg.menuKey.c_str());
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Change##key")) {
+            g_keyCapture = true;
+            ui::setKeyCapture(true);
+        }
+    }
+    // Gamepad buttons that open it.
+    ImGui::AlignTextToFramePadding();
+    ImGui::Text("Gamepad:");
+    ImGui::SameLine();
+    uint16_t got = 0;
+    if (gamepad::capturing()) {
+        if (gamepad::captureDone(got)) {
+            const std::string combo = gamepad::format(got);
+            gamepad::setBinding(got);
+            config::change([combo](config::Settings& c) { c.menuPad = combo; });
+        } else {
+            ImGui::TextColored(ImVec4(1.f, 0.85f, 0.3f, 1.f), "hold the buttons together, then let go");
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Cancel##pad")) gamepad::cancelCapture();
+        }
+    } else {
+        const uint16_t bits = gamepad::parse(cfg.menuPad);
+        ImGui::Text("%s", bits ? gamepad::format(bits).c_str() : "none");
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Change##pad")) gamepad::beginCapture();
+        if (bits) {
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Clear##pad")) {
+                gamepad::setBinding(0);
+                config::change([](config::Settings& c) { c.menuPad.clear(); });
+            }
+        }
+        if (!gamepad::active()) ImGui::TextDisabled("No gamepad seen yet.");
+    }
+}
+
+// "INSERT or LS+RS"
+std::string openKeys(const config::Settings& cfg) {
+    const uint16_t pad = gamepad::parse(cfg.menuPad);
+    return pad ? cfg.menuKey + " or " + gamepad::format(pad) : cfg.menuKey;
 }
 } // namespace
 
@@ -206,7 +277,7 @@ void draw(bool open) {
             ImGui::SetNextWindowBgAlpha(0.6f);
             ImGui::Begin("##hint", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
                                                 ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav);
-            ImGui::Text("MECMP %s: press %s for the multiplayer menu", app::kVersion, config::get().menuKey.c_str());
+            ImGui::Text("MECMP %s: press %s for the multiplayer menu", app::kVersion, openKeys(config::get()).c_str());
             ImGui::End();
         }
         return;
@@ -221,8 +292,9 @@ void draw(bool open) {
     sessionSection();
     playersSection();
     lookSection();
+    controlsSection();
     ImGui::Spacing();
-    ImGui::TextDisabled("%s closes this menu", config::get().menuKey.c_str());
+    ImGui::TextDisabled("%s closes this menu", openKeys(config::get()).c_str());
     ImGui::End();
 }
 

@@ -108,6 +108,28 @@ UDP, one socket. Sessions have one host and any number of joiners (up to 16).
 - At most 64 player entries are kept; an entry silent for 2 minutes is forgotten. Packets of unknown
   type are dropped before anything is stored or forwarded.
 
+## Settings (`core/config.cpp`)
+
+`config::get()` returns a copy taken under a short lock. Changes (menu, F8) are queued with
+`config::change()` and applied in order by the mod thread every 50 ms, which also writes
+`mecmp.ini`. No thread reads a setting while another writes it, and no file is written on the
+render or game thread.
+
+## Menu input (`ui/overlay.cpp`, `ui/gamepad.cpp`)
+
+- Keyboard: the menu key (INSERT by default, changeable in the menu) toggles it in the window
+  procedure. While open, mouse and keyboard go to the menu (virtual cursor from raw input).
+- Gamepad: the game loads XInput itself and keeps `XInputGetState` in a data pointer
+  (`0x14256d7e0`, written once by `0x1437ba6c0`). The mod swaps that pointer (the build check
+  verifies the store instruction). Its function calls the real one, opens/closes the menu on the
+  bound button combination (LS+RS by default), and while the menu is open hands the game a pad
+  at rest (with a fresh packet number, so the game drops the values it held). After the
+  combination closes the menu, its buttons stay hidden from the game until released. The
+  controller-detection pointer (`0x142607db8`) is left alone. ImGui navigates the menu through its
+  own XInput access.
+- The join code only reaches the clipboard through the menu's *Copy* button.
+- Developer hotkeys F7/F8/F9/F12 exist only with the CMake option `MECMP_DEBUG_KEYS`.
+
 ## Logging
 
 `mecmp.log` stops at 16 MB. Messages caused by other players (joins, leaves, new session ids,

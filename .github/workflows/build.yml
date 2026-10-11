@@ -27,7 +27,8 @@ jobs:
             -DCMAKE_SYSTEM_NAME=Windows \
             -DCMAKE_CXX_COMPILER=x86_64-w64-mingw32-g++-posix \
             -DCMAKE_C_COMPILER=x86_64-w64-mingw32-gcc-posix \
-            -DCMAKE_BUILD_TYPE=Release
+            -DCMAKE_BUILD_TYPE=Release \
+            -DMECMP_DEBUG_KEYS=OFF
           cmake --build build
       - name: Upload binaries
         uses: actions/upload-artifact@v4

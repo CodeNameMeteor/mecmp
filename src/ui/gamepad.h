@@ -1,0 +1,35 @@
+#pragma once
+// Gamepad: opening the menu with a button combination, and keeping the game from seeing the pad
+// while the menu is open.
+//
+// The game loads XInput itself and keeps XInputGetState in a data pointer (0x14256d7e0, written
+// once by 0x1437ba6c0). The mod swaps that pointer for its own function, which calls the real one:
+//   - it sees every button press, so the menu combination works in game;
+//   - while the menu is open (and until the combination is released) it hands the game a neutral
+//     pad, so menu navigation does not move Faith.
+// The game's controller-detection pointer (0x142607db8) is left alone, so the pad never looks
+// unplugged. The menu itself reads the pad through Dear ImGui's own XInput access.
+
+#include <cstdint>
+#include <string>
+
+namespace mecmp::ui::gamepad {
+
+// Mod thread, regularly: installs the pointer swap once the game has loaded XInput.
+void maintain();
+
+// Button sets use XINPUT_GAMEPAD_* bits. Names: A B X Y LB RB LS RS BACK START UP DOWN LEFT RIGHT.
+uint16_t parse(const std::string& combo); // "LS+RS" -> bits (0 for empty or unknown)
+std::string format(uint16_t buttons);     // bits -> "LS+RS"
+void setBinding(uint16_t buttons);        // the combination that opens/closes the menu (0 = none)
+
+// Binding from the menu: start, then poll until it returns true (the buttons held together,
+// reported once all are released). cancelCapture() stops it.
+void beginCapture();
+bool captureDone(uint16_t& buttons);
+void cancelCapture();
+bool capturing();
+
+bool active(); // the game's pad reads go through the mod (some pad was seen)
+
+} // namespace mecmp::ui::gamepad

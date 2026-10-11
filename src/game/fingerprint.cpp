@@ -39,6 +39,8 @@ const Code kCode[] = {
     // mov [rsp+8],rbx; mov [rsp+10h],rsi; push rdi; sub rsp,20h; cmp qword [rcx],0
     {"Arena::allocFromMember", Fn_Arena_allocFromMember, 0,
      {0x48, 0x89, 0x5C, 0x24, 0x08, 0x48, 0x89, 0x74, 0x24, 0x10, 0x57, 0x48, 0x83, 0xEC, 0x20}, 15},
+    // mov [rip-124CF96h],rax: where the game stores XInputGetState (the gamepad hook swaps it)
+    {"XInput pointer store", Code_StoreXInputGetState, 0, {0x48, 0x89, 0x05, 0x6A, 0x30, 0xDB, 0xFE}, 7},
     // (after mov rax,rcx) mov rcx,[rcx]; test rcx,rcx; jz +19h
     {"rbtree increment", Fn_RbTreeIncrement, 3, {0x48, 0x8B, 0x09, 0x48, 0x85, 0xC9, 0x74, 0x19}, 8},
 };

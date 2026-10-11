@@ -18,6 +18,8 @@ using mem::rva;
 // --- Globals -------------------------------------------------------------------------------------
 constexpr uintptr_t kTypeInfoListHead = 0x14215d028;
 constexpr uintptr_t kServerGameWorld = 0x1425469e0; // ServerGameWorld* (null between levels)
+constexpr uintptr_t kXInputGetStatePtr = 0x14256d7e0; // the game's XInputGetState (set once by 0x1437ba6c0)
+constexpr uintptr_t Code_StoreXInputGetState = 0x1437ba76f; // mov [kXInputGetStatePtr], rax
 
 // --- TypeInfo (runtime ClassInfo) ----------------------------------------------------------------
 constexpr uintptr_t TI_ServerCharacterEntity = 0x1427fe1e0;

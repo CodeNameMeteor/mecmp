@@ -151,6 +151,7 @@ bool readState(const char* payload, size_t n, const Decoder& dec, PlayerState& o
     if (!sanePlacement(out)) return false;
     full = (fl & 1) != 0;
     out.boneCount = 0;
+    out.worldBones = 0;
     if (nb == 0) return true;
     if (nb > kMaxPoseBones) return false;
     if (!full && dec.baseCount != nb) return true; // no base yet: position only until a full packet
@@ -174,6 +175,7 @@ bool readState(const char* payload, size_t n, const Decoder& dec, PlayerState& o
         out.bones[i][3] = 1.f;
     }
     out.boneCount = nb;
+    out.worldBones = rel & mask & (nb < 32 ? (1u << nb) - 1 : 0xffffffffu);
     return true;
 }
 

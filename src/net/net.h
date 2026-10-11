@@ -24,6 +24,8 @@ struct PlayerState {
     // Bone order = the recorder's, which maps 1:1 onto a ghost's replay pose. 0 = no pose.
     uint32_t boneCount = 0;
     float bones[kMaxPoseBones][8] = {};
+    // Receiver side: bones whose translation is in world space (sent relative to pos), one bit each.
+    uint32_t worldBones = 0;
 };
 
 struct RemoteInfo {

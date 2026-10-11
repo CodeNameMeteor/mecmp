@@ -332,6 +332,8 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
     if (own) { // solo test: the mirror stands a fixed distance away along the world X axis, so it does
                // not turn with the camera and you can walk around it (to check it and its name tag)
         s.pos[0] += g_loopbackOffset;
+        for (uint32_t b = 0; b < s.boneCount; ++b) // world-space bones go along with it
+            if (s.worldBones & (1u << b)) s.bones[b][0] += g_loopbackOffset;
     }
     r.lastTick = GetTickCount();
     if (r.fill && static_cast<int32_t>(s.timeMs - r.lastTime) <= 0) return; // same capture sent twice

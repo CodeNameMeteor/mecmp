@@ -1,7 +1,9 @@
 #include "game/local_player.h"
 
 #include <cmath>
+#include <cstdio>
 #include <cstring>
+#include <string>
 
 #include "core/log.h"
 #include "game/engine.h"
@@ -64,6 +66,29 @@ bool capture(net::PlayerState& st) {
         st.pos[0] = st.bones[1][0];
         st.pos[1] = st.bones[1][1];
         st.pos[2] = st.bones[1][2];
+    }
+    // Diagnostic: which bones hold world-space translations (beyond the +-32 m a bone is normally
+    // within), and where they are relative to the anchor. Logged when that set changes.
+    if (posed) {
+        static uint32_t lastWorld = 0;
+        static DWORD lastLog = 0;
+        uint32_t world = 0;
+        for (uint32_t b = 0; b < st.boneCount && b < 32; ++b)
+            for (int j = 0; j < 3; ++j)
+                if (std::fabs(st.bones[b][j]) > 32.f) world |= 1u << b;
+        if (world != lastWorld && GetTickCount() - lastLog > 5000) { // near +-32 m the set flickers
+            lastWorld = world;
+            lastLog = GetTickCount();
+            std::string list;
+            char item[96];
+            for (uint32_t b = 0; b < st.boneCount && b < 32; ++b)
+                if (world & (1u << b)) {
+                    snprintf(item, sizeof(item), " %u (%.2f %.2f %.2f from the anchor)", b, st.bones[b][0] - st.pos[0],
+                             st.bones[b][1] - st.pos[1], st.bones[b][2] - st.pos[2]);
+                    list += item;
+                }
+            MLOG("pose: world-space bones (at %.1f %.1f %.1f):%s", st.pos[0], st.pos[1], st.pos[2], world ? list.c_str() : " none");
+        }
     }
     // While a level loads the transform and the recorder can hold garbage: never send it.
     for (float v : st.pos)

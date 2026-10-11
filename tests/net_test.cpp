@@ -193,6 +193,7 @@ static void testWorldSpaceBones() {
         bool full = false;
         CHECK(protocol::readState(buf + sizeof(h), n - sizeof(h), dec, out, full));
         CHECK(out.boneCount == 4);
+        CHECK(out.worldBones == ((1u << 2) | (1u << 3))); // the bones far from the origin
         if (full) protocol::commitBase(dec, out);
         for (int b = 0; b < 4; ++b)
             for (int j = 0; j < 3; ++j) CHECK(std::fabs(out.bones[b][j] - s.bones[b][j]) < 2e-3f);

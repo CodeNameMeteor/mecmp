@@ -79,16 +79,16 @@ bool capture(net::PlayerState& st) {
     QueryPerformanceCounter(&c);
     const uint32_t now = static_cast<uint32_t>(static_cast<uint64_t>(static_cast<double>(c.QuadPart) * 1000.0 / freq));
     // Time each pose by its keyframe's own time, so receivers see the true spacing between poses
-    // (reading them on server ticks adds up to a tick of uneven delay). Re-anchored to the real clock
-    // when the recorder's time jumps (level start, rewinds) or drifts more than 200 ms away.
+    // (reading them on server ticks adds up to a tick of uneven delay). The keyframe clock is used as
+    // it is (receivers follow slow drift, see protocol::DelayEstimator); it is only re-anchored to the
+    // real clock when it jumps (level start, rewinds: backwards or more than 1 s forward).
     static uint32_t lastMs = 0;
+    static double anchorMs = 0; // keyframe time 0 on our clock
     uint32_t ms = now;
     if (posed) {
         const float step = keyTime - lastKeyTime;
-        if (lastKeyTime >= 0.f && step > 0.f && step < 1.f) {
-            ms = lastMs + static_cast<uint32_t>(step * 1000.f + 0.5f);
-            if (std::abs(static_cast<int32_t>(ms - now)) > 200) ms = now;
-        }
+        if (lastKeyTime < 0.f || step <= 0.f || step > 1.f) anchorMs = static_cast<double>(now) - keyTime * 1000.0;
+        ms = static_cast<uint32_t>(static_cast<int64_t>(anchorMs + keyTime * 1000.0));
         lastKeyTime = keyTime;
     }
     if (static_cast<int32_t>(ms - lastMs) <= 0) ms = lastMs + 1; // strictly increasing for receivers

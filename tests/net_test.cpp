@@ -156,7 +156,26 @@ static void testAlignRotations() {
     CHECK(c.bones[0][4] == -q[0]);
 }
 
+static void testDelayEstimator() {
+    // A sender whose clock runs 1% slow: (arrival - sent) grows by 10 ms per second. The estimate
+    // must follow it (an all-time minimum would fall 10 ms further behind every second).
+    protocol::DelayEstimator d;
+    double est = 0;
+    for (int i = 0; i <= 300; ++i) { // 10 s of packets every 33 ms
+        const double arrival = 1000.0 + i * 33.0;
+        const double sent = (arrival - 50.0) * 0.99; // 50 ms delay, slow clock
+        est = d.add(arrival + (i % 5) * 4.0, sent);   // some queueing jitter
+    }
+    const double trueDelta = (1000.0 + 300 * 33.0) - (1000.0 + 300 * 33.0 - 50.0) * 0.99;
+    CHECK(std::fabs(est - trueDelta) < 25.0); // within the 2 s window's drift (20 ms) plus jitter
+    // Queueing spikes do not raise it while a fast packet is in the window.
+    protocol::DelayEstimator e;
+    e.add(0, 0);
+    CHECK(e.add(33, 33 - 200) == 0); // a 200 ms late packet: the earlier 0 still counts
+}
+
 int main() {
+    testDelayEstimator();
     testAlignRotations();
     testClockWrap();
     testJoinCodes();

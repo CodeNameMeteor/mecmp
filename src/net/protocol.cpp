@@ -94,6 +94,16 @@ size_t writeState(char* buf, const Header& h, const PlayerState& s, Encoder& enc
     return static_cast<size_t>(p - buf);
 }
 
+void alignRotations(PlayerState& s, const PlayerState& prev) {
+    if (s.boneCount != prev.boneCount) return;
+    for (uint32_t i = 0; i < s.boneCount && i < kMaxPoseBones; ++i) {
+        float* q = &s.bones[i][4];
+        const float* p = &prev.bones[i][4];
+        if (q[0] * p[0] + q[1] * p[1] + q[2] * p[2] + q[3] * p[3] < 0.f)
+            for (int j = 0; j < 4; ++j) q[j] = -q[j];
+    }
+}
+
 size_t utf8PrefixLength(const std::string& s, size_t maxBytes) {
     if (s.size() <= maxBytes) return s.size();
     size_t n = maxBytes;

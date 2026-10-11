@@ -11,7 +11,8 @@ namespace mecmp::game::local_player {
 namespace {
 
 // Newest keyframe of the recorder ring: {f32 time; u32 flags; pad[8]; bone[n] {vec4 t; quat q}}.
-bool capturePose(net::PlayerState& st) {
+// `keyTime` = the keyframe's own time (recorder seconds).
+bool capturePose(net::PlayerState& st, float& keyTime) {
     void* ch = reinterpret_cast<void* (*)()>(rva(Fn_LocalClientCharacter))();
     if (!ch) return false;
     void* comp = getComponent(ch, TI_PamClientReplayRecordingComponent);
@@ -28,7 +29,13 @@ bool capturePose(net::PlayerState& st) {
     uint32_t best = head % cap;
     const uint32_t prev = (head + cap - 1) % cap;
     if (mem::readOr<float>(base + prev * stride) > mem::readOr<float>(base + best * stride)) best = prev;
-    if (!mem::read(base + best * stride + 0x10, st.bones, n * 0x20)) return false;
+    // The game thread of the client writes this ring while we read it: read the keyframe's time before
+    // and after the bones, and drop the read if the slot was rewritten in between (a torn pose).
+    const uintptr_t slot = base + best * stride;
+    float before = 0, after = 0;
+    if (!mem::read(slot, before) || !mem::read(slot + 0x10, st.bones, n * 0x20) || !mem::read(slot, after) || before != after)
+        return false;
+    keyTime = before;
     st.boneCount = n;
     return true;
 }
@@ -45,7 +52,13 @@ bool capture(net::PlayerState& st) {
     st.yaw = std::atan2(t->forward[0], t->forward[2]);
     st.flags = 1;
     st.boneCount = 0;
-    if (capturePose(st) && st.boneCount > 1) {
+    float keyTime = 0;
+    const bool posed = capturePose(st, keyTime) && st.boneCount > 1;
+    // The recorder writes keyframes less often than the server ticks: a keyframe already sent is not
+    // sent again with a new time (that made motion stop and jump). Nothing new: nothing to publish.
+    static float lastKeyTime = -1.f;
+    if (posed && keyTime == lastKeyTime) return false;
+    if (posed) {
         // Bone slot 1 is the AITrajectory bone: the world anchor the game itself places ghosts by.
         // Using it (instead of the entity position) keeps body and root consistent (no height offset).
         st.pos[0] = st.bones[1][0];
@@ -64,7 +77,23 @@ bool capture(net::PlayerState& st) {
     static const double freq = [] { LARGE_INTEGER f; QueryPerformanceFrequency(&f); return static_cast<double>(f.QuadPart); }();
     LARGE_INTEGER c;
     QueryPerformanceCounter(&c);
-    st.timeMs = static_cast<uint32_t>(static_cast<uint64_t>(static_cast<double>(c.QuadPart) * 1000.0 / freq));
+    const uint32_t now = static_cast<uint32_t>(static_cast<uint64_t>(static_cast<double>(c.QuadPart) * 1000.0 / freq));
+    // Time each pose by its keyframe's own time, so receivers see the true spacing between poses
+    // (reading them on server ticks adds up to a tick of uneven delay). Re-anchored to the real clock
+    // when the recorder's time jumps (level start, rewinds) or drifts more than 200 ms away.
+    static uint32_t lastMs = 0;
+    uint32_t ms = now;
+    if (posed) {
+        const float step = keyTime - lastKeyTime;
+        if (lastKeyTime >= 0.f && step > 0.f && step < 1.f) {
+            ms = lastMs + static_cast<uint32_t>(step * 1000.f + 0.5f);
+            if (std::abs(static_cast<int32_t>(ms - now)) > 200) ms = now;
+        }
+        lastKeyTime = keyTime;
+    }
+    if (static_cast<int32_t>(ms - lastMs) <= 0) ms = lastMs + 1; // strictly increasing for receivers
+    lastMs = ms;
+    st.timeMs = ms;
     return true;
 }
 

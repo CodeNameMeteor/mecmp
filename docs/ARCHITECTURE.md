@@ -56,6 +56,12 @@ Per remote player:
 3. **Client fixes** (every tick): a ghost client normally plays its own replay and parks the body.
    Stop its playback (+0x40, +0xb0), set skipRoot (+0x2e6) to 0 so the body is placed from the
    trajectory bone, and pin that bone in the received pose (+0x180) to the player's position.
+   **Placement**: the client update (`PamClientReplayPlayerComponent_update`, 0x1439501a0) puts the
+   body at `bone0.t + bone0.t.w * rotate(bone0.q, bone1.t)`. Bone 0 has a small rotation from the
+   animation; with the world position written into bone 1 as is, the body was off by that angle
+   times the distance from the level's origin (metres, growing with height; a pause, which stops
+   this update, put it right). Bone 1 is written so the formula gives the position (`pose_math.h`,
+   tested in `tests/pose_test.cpp`).
 4. **Visibility**: ghost client characters start hidden (time-trial markers normally show them).
    Call `clientCharacter->vtbl[0x3d8](true)` after creation and every few seconds; `false` when
    the player stops sending.

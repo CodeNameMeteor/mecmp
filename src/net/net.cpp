@@ -32,7 +32,8 @@ constexpr int kSnapCount = 16;
 constexpr double kInterpDelayMs = 120.0; // remote players are shown this far behind their own clock
 constexpr size_t kMaxPeers = 16;
 constexpr size_t kMaxRemotes = 64;        // player entries kept at once (a session has at most kMaxPeers players)
-constexpr DWORD kRemoteForgetMs = 120000; // entries silent this long are dropped (the ghosts use 65 s)
+constexpr DWORD kRemoteForgetMs = 120000;
+constexpr int kMaxNameLogs = 3; // entries silent this long are dropped (the ghosts use 65 s)
 
 double nowMs() {
     static const LARGE_INTEGER f = [] { LARGE_INTEGER x; QueryPerformanceFrequency(&x); return x; }();
@@ -56,6 +57,8 @@ struct Remote {
     double minDelta = 0;
     bool haveDelta = false;
     uint32_t lastTime = 0;
+    int nameLogs = 0;         // name changes logged for this player (at most kMaxNameLogs)
+    proto::ClockUnwrap clock; // sender's timestamps without the 49-day wrap
     Snap snaps[kSnapCount];
     int head = 0, fill = 0;
 };
@@ -86,7 +89,50 @@ SOCKET g_sock = INVALID_SOCKET;
 uint32_t g_session = 0;
 float g_loopbackOffset = 3.0f;
 uint16_t g_port = 47800;
+// Router port mapping (host). Map and unmap calls are serialised, and an unmap is skipped when a
+// newer session wants the same port mapped again (re-hosting reuses the mapping).
+std::mutex g_routerM;
+uint16_t g_routerMapped = 0; // port we mapped (0 = none)
+std::atomic<uint16_t> g_routerWanted{0}; // port the current session wants mapped (0 = none); not under g_routerM
+
+bool routerMap(uint16_t port, upnp::Result* out) {
+    std::lock_guard<std::mutex> lock(g_routerM);
+    if (g_routerWanted != port) return false; // the session changed meanwhile
+    upnp::Result r = upnp::mapUdpPort(port, "MECMP", 3600);
+    if (r.mapped) g_routerMapped = port;
+    if (out) *out = r;
+    return r.mapped;
+}
+
+void routerUnmap() {
+    std::lock_guard<std::mutex> lock(g_routerM);
+    if (!g_routerMapped || g_routerWanted == g_routerMapped) return;
+    upnp::unmapUdpPort(g_routerMapped);
+    MLOG("net: router port %u closed", g_routerMapped);
+    g_routerMapped = 0;
+}
+
 std::atomic<uint64_t> g_sent{0}, g_recv{0}, g_dropped{0}, g_bytesSent{0}, g_relayed{0};
+
+// Messages caused by other players' packets (joins, leaves, names, new session ids) share a budget:
+// 20 at once, then one every 3 s, so a flood of fake players cannot fill the log (S-9).
+// Called with g_m held or from the network thread only.
+int g_peerLogTokens = 20;
+DWORD g_peerLogRefill = 0;
+uint32_t g_peerLogSuppressed = 0;
+bool peerLogAllowed() {
+    const DWORD now = GetTickCount();
+    if (!g_peerLogRefill) g_peerLogRefill = now;
+    while (now - g_peerLogRefill >= 3000 && g_peerLogTokens < 20) { ++g_peerLogTokens; g_peerLogRefill += 3000; }
+    if (g_peerLogTokens >= 20) g_peerLogRefill = now;
+    if (g_peerLogTokens <= 0) { ++g_peerLogSuppressed; return false; }
+    --g_peerLogTokens;
+    if (g_peerLogSuppressed) {
+        MLOG("net: (%u messages about other players were not logged)", g_peerLogSuppressed);
+        g_peerLogSuppressed = 0;
+    }
+    return true;
+}
 
 std::string addrToString(const sockaddr_in& a) {
     char ip[64] = {};
@@ -225,8 +271,9 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
             }
             g_members.push_back({from, GetTickCount()});
             g_sendTo.push_back(from);
-            MLOG("net: %s joined (%llu player(s) connected)", addrToString(from).c_str(),
-                 static_cast<unsigned long long>(g_members.size()));
+            if (peerLogAllowed())
+                MLOG("net: %s joined (%llu player(s) connected)", addrToString(from).c_str(),
+                     static_cast<unsigned long long>(g_members.size()));
         }
         for (const auto& m : g_members)
             if (!sameAddr(m.addr, from))
@@ -252,7 +299,7 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
         r.id = h.session;
         r.addr = from;
         r.loopback = own;
-        MLOG("net: new player %08x from %s%s", h.session, addrToString(from).c_str(), own ? " (our own packets: solo test)" : "");
+        if (peerLogAllowed()) MLOG("net: new player %08x from %s%s", h.session, addrToString(from).c_str(), own ? " (our own packets: solo test)" : "");
     }
     // Sequence numbers restart when a player restarts the game: accept a large backwards jump.
     if (r.haveSeq && h.seq <= r.lastSeq && r.lastSeq - h.seq < 1000) return;
@@ -265,7 +312,11 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
         const std::string name = cleanName(payload, len < proto::kNameLen ? len : proto::kNameLen);
         if (r.name != name) {
             r.name = name;
-            MLOG("net: player %08x is '%s'", r.id, name.c_str());
+            if (r.nameLogs < kMaxNameLogs && peerLogAllowed()) {
+                ++r.nameLogs;
+                MLOG("net: player %08x is '%s'%s", r.id, name.c_str(),
+                     r.nameLogs == kMaxNameLogs ? " (further name changes of this player are not logged)" : "");
+            }
         }
         return;
     }
@@ -281,10 +332,11 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
     r.lastTick = GetTickCount();
     if (r.fill && static_cast<int32_t>(s.timeMs - r.lastTime) <= 0) return; // same capture sent twice
     r.lastTime = s.timeMs;
-    const double delta = nowMs() - static_cast<double>(s.timeMs);
+    const double sent = r.clock.extend(s.timeMs);
+    const double delta = nowMs() - sent;
     if (!r.haveDelta || delta < r.minDelta) { r.minDelta = delta; r.haveDelta = true; }
     else r.minDelta += 0.02; // let the estimate creep up slowly (clock drift, route changes)
-    r.snaps[r.head] = {s, static_cast<double>(s.timeMs)};
+    r.snaps[r.head] = {s, sent};
     r.head = (r.head + 1) % kSnapCount;
     if (r.fill < kSnapCount) ++r.fill;
 }
@@ -380,7 +432,11 @@ void publishCode(const std::string& code, const std::string& lan) {
 }
 
 void hostSetup(uint32_t generation) {
-    const upnp::Result r = upnp::mapUdpPort(g_port, "MECMP", 3600);
+    upnp::Result r;
+    if (!routerMap(g_port, &r)) {
+        if (generation != g_generation) return;
+        if (r.error.empty()) r.error = "not attempted";
+    }
     const uint32_t lanIp = parseIp(r.localIp);
     const std::string lan = lanIp ? joincode::encode(lanIp, g_port) : std::string();
     uint32_t pub = parseIp(r.externalIp);
@@ -469,7 +525,7 @@ void threadMain() {
             if (g_role == Role::Host) {
                 for (size_t i = 0; i < g_members.size();) {
                     if (now - g_members[i].lastSeen < 15000) { ++i; continue; }
-                    MLOG("net: %s left", addrToString(g_members[i].addr).c_str());
+                    if (peerLogAllowed()) MLOG("net: %s left", addrToString(g_members[i].addr).c_str());
                     for (size_t k = 0; k < g_sendTo.size(); ++k)
                         if (sameAddr(g_sendTo[k], g_members[i].addr)) { g_sendTo.erase(g_sendTo.begin() + static_cast<long>(k)); break; }
                     g_members.erase(g_members.begin() + static_cast<long>(i));
@@ -482,7 +538,8 @@ void threadMain() {
         }
         if (g_role == Role::Host && now - lastLease > 30 * 60 * 1000) { // renew the router mapping
             lastLease = now;
-            std::thread([] { upnp::mapUdpPort(g_port, "MECMP", 3600); }).detach();
+            const uint16_t port = g_port;
+            std::thread([port] { routerMap(port, nullptr); }).detach();
         }
     }
 }
@@ -491,6 +548,8 @@ void threadMain() {
 bool start(uint16_t port, const std::string& join, float loopbackOffset, const std::string& name) {
     if (g_run) stop();
     ++g_generation;
+    g_routerWanted = join.empty() ? port : 0;
+    std::thread(routerUnmap).detach(); // an old mapping this session does not use (blocks a few seconds)
     {
         std::lock_guard<std::mutex> lock(g_m);
         g_remotes.clear();
@@ -561,11 +620,23 @@ bool start(uint16_t port, const std::string& join, float loopbackOffset, const s
 
 void stop() {
     if (!g_run.exchange(false)) return;
-    // The router mapping is left to expire (1 h lease): unmapping blocks, and re-hosting reuses it.
+    // The router mapping stays until the next start() (re-hosting reuses it) or shutdown().
     if (g_thread.joinable()) g_thread.join();
     if (g_sock != INVALID_SOCKET) closesocket(g_sock);
     g_sock = INVALID_SOCKET;
     WSACleanup();
+}
+
+void shutdown(uint32_t routerWaitMs) {
+    stop();
+    g_routerWanted = 0;
+    // Closing the router port needs the network; give it a bounded time, the game is exiting.
+    HANDLE t = CreateThread(nullptr, 0, [](LPVOID) -> DWORD { routerUnmap(); return 0; }, nullptr, 0, nullptr);
+    if (t) {
+        if (WaitForSingleObject(t, routerWaitMs) != WAIT_OBJECT_0)
+            MLOG("net: the router did not answer in time; its port mapping expires within an hour");
+        CloseHandle(t);
+    }
 }
 
 void publishLocal(const PlayerState& s) {

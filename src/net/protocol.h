@@ -54,6 +54,21 @@ constexpr size_t kMaxNameBytes = kNameLen - 1;
 // Length of the longest prefix of `s` that is at most `maxBytes` long and does not split a UTF-8 character.
 size_t utf8PrefixLength(const std::string& s, size_t maxBytes);
 
+// A sender's 32-bit millisecond clock, made continuous: it wraps after 49.7 days of uptime, and a
+// wrap must not look like a 49-day jump (B-4). Each new time is taken relative to the previous one,
+// so steps of up to +-24 days in either direction come out right.
+struct ClockUnwrap {
+    bool have = false;
+    uint32_t last = 0;
+    double ext = 0;
+    double extend(uint32_t t) {
+        if (!have) { have = true; ext = t; }
+        else ext += static_cast<double>(static_cast<int32_t>(t - last));
+        last = t;
+        return ext;
+    }
+};
+
 size_t writeState(char* buf, const Header& h, const PlayerState& s, Encoder& enc);
 size_t writeHello(char* buf, const Header& h, const char* name);
 // Decodes a STATE payload (after the header). `full` tells whether to commit it as the new base.

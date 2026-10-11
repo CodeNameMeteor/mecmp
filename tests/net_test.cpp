@@ -112,7 +112,29 @@ static void testReadState() {
     }
 }
 
+static void testClockWrap() {
+    // A sender whose 32-bit millisecond clock wraps (after 49.7 days of uptime) keeps a steady clock.
+    protocol::ClockUnwrap c;
+    const uint32_t start = 0xFFFFFF00u;
+    const double first = c.extend(start);
+    CHECK(first == static_cast<double>(start));
+    double prev = first;
+    for (uint32_t k = 1; k <= 20; ++k) { // 33 ms steps across the wrap
+        const double t = c.extend(start + k * 33u);
+        CHECK(t - prev == 33.0);
+        prev = t;
+    }
+    CHECK(prev - first == 20 * 33.0);
+    // A packet that arrives late (older timestamp) steps back, it does not jump a whole wrap.
+    const double late = c.extend(start + 19u * 33u);
+    CHECK(prev - late == 33.0);
+    // A long silence (one hour) is still a forward step.
+    const double later = c.extend(start + 19u * 33u + 3600000u);
+    CHECK(later - late == 3600000.0);
+}
+
 int main() {
+    testClockWrap();
     testJoinCodes();
     testUtf8Prefix();
     testHelloName();

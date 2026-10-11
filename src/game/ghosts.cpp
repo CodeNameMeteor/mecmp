@@ -60,6 +60,11 @@ void startHiding(Ghost& g) {
     if (g.clientChar) setClientVisible(g.clientChar, false);
     g.hidden = true;
     g.parkUntil = GetTickCount() + kParkMs;
+    // Back to server-driven: the park position must replicate (and be pinned on the client side).
+    // Left client-driven, renderFrame skips the hidden ghost and the server no longer replicates,
+    // so the body never moved down and its hair stayed drawn where the player was.
+    g.posing = false;
+    g.posingSince = 0;
 }
 
 bool parking(const Ghost& g) { return g.hidden && g.parkUntil && static_cast<int32_t>(GetTickCount() - g.parkUntil) < 0; }

@@ -20,6 +20,16 @@ void noteTemplate(uintptr_t spawnerData, const std::string& spawnerName); // fro
 void reset();                                                               // level changed
 void tick();  // game thread: switches the shared ghost-shader flag back on after a look was built
 
+// The game's own echo (runner ghost) looks: style x colour, identified by the game's hash.
+struct Echo {
+    uint32_t hash = 0;
+    uintptr_t ccd = 0; // CustomizeCharacterData
+    std::string name, style, colour;
+};
+std::vector<Echo> echoes(); // empty until findEchoes() succeeded (in a level with time-trial markers)
+bool findEchoes();          // mod thread: memory scan, a second at most; true if the list is known
+bool applyEcho(void* ghost, uint32_t hash); // game thread
+
 std::vector<std::string> names(); // available now, "faith" first
 // Applies a model to a ghost (game thread). `wanted` = "faith" or part of a model name.
 bool apply(void* ghost, const std::string& wanted, std::string* usedName = nullptr);

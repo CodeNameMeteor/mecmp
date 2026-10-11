@@ -17,7 +17,7 @@ struct Settings {
     bool netEnabled = true;
     uint16_t port = 47800;
     std::string join;                     // join code or ip:port of the host; empty = host a session
-    float loopbackOffset = 3.0f;          // solo test: metres to the side the mirrored ghost stands
+    float loopbackOffset = 3.0f;          // solo test: metres along world X the mirrored ghost stands
     // [player]
     std::string name = "Runner";
     // [ghost]
@@ -26,6 +26,7 @@ struct Settings {
     // [ui]
     std::string menuKey = "INSERT";       // INSERT, HOME, END, DELETE, PAGEUP, PAGEDOWN, PAUSE or F1..F12
     std::string menuPad = "LS+RS";        // gamepad buttons held together, e.g. LS+RS or BACK+Y; empty = none
+    bool showNames = true;                // names above other players' ghosts
     // [debug]
     bool verbose = false;
     bool ignoreBuildCheck = false;        // run even if the game build check fails (for testing a new build)

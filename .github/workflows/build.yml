@@ -14,6 +14,11 @@ jobs:
           g++ -std=c++17 -Wall -Wextra -Isrc -fsanitize=address,undefined -fno-sanitize-recover=undefined -g \
             tests/net_test.cpp src/net/protocol.cpp src/net/joincode.cpp -o net_test
           ./net_test
+      - name: Name-tag projection test (Linux, sanitizers)
+        run: |
+          g++ -std=c++17 -Wall -Wextra -Isrc -fsanitize=address,undefined -fno-sanitize-recover=undefined -g \
+            tests/camera_test.cpp -o camera_test
+          ./camera_test
 
   windows-build:
     runs-on: ubuntu-24.04

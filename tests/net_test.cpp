@@ -133,7 +133,31 @@ static void testClockWrap() {
     CHECK(later - late == 3600000.0);
 }
 
+static void testAlignRotations() {
+    // The same rotation sent twice can come back as q and -q; the second is flipped back to q.
+    PlayerState a, b;
+    a.boneCount = b.boneCount = 2;
+    const float q[4] = {0.70710677f, 0.f, 0.f, 0.70710677f};
+    for (int j = 0; j < 4; ++j) {
+        a.bones[0][4 + j] = q[j];
+        b.bones[0][4 + j] = -q[j];
+        a.bones[1][4 + j] = b.bones[1][4 + j] = q[j]; // already the same sign: unchanged
+    }
+    protocol::alignRotations(b, a);
+    for (int j = 0; j < 4; ++j) {
+        CHECK(b.bones[0][4 + j] == q[j]);
+        CHECK(b.bones[1][4 + j] == q[j]);
+    }
+    // Different bone counts: left alone.
+    PlayerState c = b;
+    c.boneCount = 1;
+    c.bones[0][4] = -q[0];
+    protocol::alignRotations(c, a);
+    CHECK(c.bones[0][4] == -q[0]);
+}
+
 int main() {
+    testAlignRotations();
     testClockWrap();
     testJoinCodes();
     testUtf8Prefix();

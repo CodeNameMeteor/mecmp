@@ -54,6 +54,11 @@ constexpr size_t kMaxNameBytes = kNameLen - 1;
 // Length of the longest prefix of `s` that is at most `maxBytes` long and does not split a UTF-8 character.
 size_t utf8PrefixLength(const std::string& s, size_t maxBytes);
 
+// q and -q are the same rotation, and decoding may give either. The game blends replayed poses
+// component by component, so a bone whose sign flips between two poses shakes on screen. Flips the
+// rotations of `s` that point away from the same bone in `prev`, so consecutive poses stay continuous.
+void alignRotations(PlayerState& s, const PlayerState& prev);
+
 // A sender's 32-bit millisecond clock, made continuous: it wraps after 49.7 days of uptime, and a
 // wrap must not look like a 49-day jump (B-4). Each new time is taken relative to the previous one,
 // so steps of up to +-24 days in either direction come out right.

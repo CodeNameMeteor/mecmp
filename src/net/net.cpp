@@ -50,7 +50,8 @@ struct Remote {
     bool loopback = false;
     uint32_t lastSeq = 0;
     bool haveSeq = false;
-    DWORD lastTick = 0;
+    DWORD lastTick = 0;  // last STATE (player data)
+    DWORD lastHeard = 0; // last packet of any kind (a player who only sent a HELLO yet is still there)
     proto::Decoder decoder;
     // Sender clock -> our clock: the smallest (arrival - sent) seen = one-way delay + clock offset.
     // Replaying on the sender's timestamps keeps movement smooth when packets arrive in bursts.
@@ -279,7 +280,8 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
             if (!sameAddr(m.addr, from))
                 if (sendto(g_sock, buf, n, 0, reinterpret_cast<const sockaddr*>(&m.addr), sizeof(m.addr)) == n) ++g_relayed;
     }
-    if (!own && g_role == Role::Join && sameAddr(from, g_hostAddr) && !g_heardFromHost) {
+    // Joining: the host answered. A solo test joins itself, so its own packets coming back count too.
+    if (g_role == Role::Join && sameAddr(from, g_hostAddr) && !g_heardFromHost) {
         g_heardFromHost = true;
         MLOG("net: connected to the host %s", addrToString(from).c_str());
     }
@@ -289,12 +291,13 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
             // Flood or spoofed session ids: keep memory bounded by replacing the entry heard from longest ago.
             auto stalest = g_remotes.begin();
             for (auto it = g_remotes.begin(); it != g_remotes.end(); ++it)
-                if (it->second.lastTick < stalest->second.lastTick) stalest = it;
+                if (it->second.lastHeard < stalest->second.lastHeard) stalest = it;
             g_remotes.erase(stalest);
         }
         found = g_remotes.emplace(h.session, Remote{}).first;
     }
     Remote& r = found->second;
+    r.lastHeard = GetTickCount();
     if (!r.id) {
         r.id = h.session;
         r.addr = from;
@@ -325,9 +328,9 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
     bool full = false;
     if (!proto::readState(payload, len, r.decoder, s, full)) { ++g_dropped; return; }
     if (full) proto::commitBase(r.decoder, s);
-    if (own) { // solo test: show the mirror to our right so it does not stand inside us
-        s.pos[0] += std::cos(s.yaw) * g_loopbackOffset;
-        s.pos[2] -= std::sin(s.yaw) * g_loopbackOffset;
+    if (own) { // solo test: the mirror stands a fixed distance away along the world X axis, so it does
+               // not turn with the camera and you can walk around it (to check it and its name tag)
+        s.pos[0] += g_loopbackOffset;
     }
     r.lastTick = GetTickCount();
     if (r.fill && static_cast<int32_t>(s.timeMs - r.lastTime) <= 0) return; // same capture sent twice
@@ -336,6 +339,8 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
     const double delta = nowMs() - sent;
     if (!r.haveDelta || delta < r.minDelta) { r.minDelta = delta; r.haveDelta = true; }
     else r.minDelta += 0.02; // let the estimate creep up slowly (clock drift, route changes)
+    // Same rotation sign as the snapshot before, so blending never flips a bone (in-game jitter).
+    if (r.fill) proto::alignRotations(s, r.snaps[(r.head + kSnapCount - 1) % kSnapCount].s);
     r.snaps[r.head] = {s, sent};
     r.head = (r.head + 1) % kSnapCount;
     if (r.fill < kSnapCount) ++r.fill;
@@ -507,7 +512,7 @@ void threadMain() {
             lastHousekeeping = now;
             std::lock_guard<std::mutex> lock(g_m);
             for (auto it = g_remotes.begin(); it != g_remotes.end();) {
-                if (now - it->second.lastTick > kRemoteForgetMs) it = g_remotes.erase(it);
+                if (now - it->second.lastHeard > kRemoteForgetMs) it = g_remotes.erase(it);
                 else ++it;
             }
             if (g_role == Role::Host) {

@@ -133,7 +133,7 @@ void sessionSection() {
     ImGui::EndDisabled();
     if (noCode && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Enter the host's join code first.");
     if (ImGui::Button("Solo test (mirror me)")) startSession("127.0.0.1:" + std::to_string(config::get().port));
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Test on your own PC: a ghost mirrors you beside you.");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Test on your own PC: a ghost copies your moves 3 m away (it does not turn with you; look around for it).");
 }
 
 void playersSection() {
@@ -170,6 +170,9 @@ void lookSection() {
         }
         ImGui::EndCombo();
     }
+    bool showNames = config::get().showNames;
+    if (ImGui::Checkbox("Names above players", &showNames))
+        config::change([showNames](config::Settings& c) { c.showNames = showNames; });
     if (ImGui::Button("Show ghosts")) game::ghosts::requestSpawnOrRefresh();
     ImGui::SameLine();
     if (ImGui::Button("Hide ghosts")) game::ghosts::requestHideAll();

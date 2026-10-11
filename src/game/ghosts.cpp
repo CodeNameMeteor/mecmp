@@ -10,6 +10,8 @@
 #include "game/engine.h"
 #include "game/level.h"
 #include "game/models.h"
+#include "game/motion_stats.h"
+#include <map>
 #include "net/net.h"
 
 namespace mecmp::game::ghosts {
@@ -79,6 +81,8 @@ DWORD g_costWindowAt = 0;
 DWORD g_lastSpawnAt = 0;
 std::atomic<bool> g_paused{false};
 std::atomic<bool> g_enabled{true};
+std::mutex g_motionM;                  // guards g_motion (written by the game thread, read by status())
+std::map<uint32_t, MotionStats> g_motion; // per player: what the ghost was driven with, tick to tick
 std::atomic<bool> g_reqSpawn{false}, g_reqHide{false}, g_reqNextModel{false};
 std::mutex g_reqModelMutex;
 std::string g_reqModel; // set by the menu, applied on the game thread
@@ -533,6 +537,10 @@ void tick(uint64_t tick, uint64_t ticksInLevel) {
             }
         }
         if (have) {
+            {
+                std::lock_guard<std::mutex> lock(g_motionM);
+                g_motion[g.peer].add(st);
+            }
             drive(g, st);
             fixClient(g, st);
             memcpy(g.lastPos, st.pos, sizeof(g.lastPos));
@@ -570,6 +578,14 @@ void requestModel(const std::string& name) {
     g_reqModel = name;
 }
 
+std::vector<uint32_t> shownPeers() {
+    std::vector<uint32_t> v;
+    std::lock_guard<std::mutex> lock(g_m);
+    for (const auto& g : g_ghosts)
+        if (g.character && g.clientChar && !g.hidden && g.posing && !g_paused) v.push_back(g.peer);
+    return v;
+}
+
 std::string status() {
     std::lock_guard<std::mutex> lock(g_m);
     std::string s = std::to_string(g_ghosts.size()) + " ghost(s)";
@@ -579,6 +595,18 @@ std::string status() {
         s += b;
     }
     if (g_paused) s += ", paused";
+    {
+        std::lock_guard<std::mutex> mlock(g_motionM);
+        for (auto it = g_motion.begin(); it != g_motion.end();) {
+            bool alive = false;
+            for (auto& g : g_ghosts) alive = alive || g.peer == it->first;
+            if (!alive) { it = g_motion.erase(it); continue; }
+            char id[16];
+            snprintf(id, sizeof(id), "%08x", it->first);
+            s += std::string(" | ghost of ") + id + " " + it->second.report();
+            ++it;
+        }
+    }
     char cost[96];
     snprintf(cost, sizeof(cost), ", ghost tick %.0f us avg / %.0f us max (%u ghosts)", g_costShownAvg.load(),
              g_costShownMax.load(), g_costShownGhosts.load());

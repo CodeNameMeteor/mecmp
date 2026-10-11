@@ -1,18 +1,21 @@
 #include "app/mod.h"
 
 #include <atomic>
+#include <mutex>
 #include <string>
 
 #include "app/diagnostics.h"
 #include "core/config.h"
 #include "core/log.h"
 #include "core/typeinfo.h"
+#include "game/camera_finder.h"
 #include "game/engine.h"
 #include "game/fingerprint.h"
 #include "game/ghosts.h"
 #include "game/hooks.h"
 #include "game/level.h"
 #include "game/local_player.h"
+#include "game/motion_stats.h"
 #include "net/net.h"
 #include "ui/gamepad.h"
 #include "ui/overlay.h"
@@ -21,6 +24,8 @@ namespace mecmp::app {
 namespace {
 std::atomic<bool> g_running{true};
 std::atomic<uint64_t> g_ticks{0};
+std::mutex g_localMotionM;
+game::MotionStats g_localMotion; // what this player captures, tick to tick (F9)
 uint64_t g_levelStartTick = 0;
 
 // Server game thread, once per simulation tick.
@@ -34,7 +39,11 @@ void onTick(void* world, float dt) {
     const uint64_t n = ++g_ticks;
     if (n == 1) VLOG("tick: first server tick (dt %.4f)", dt);
     static net::PlayerState local; // large; game thread only
-    if (game::local_player::capture(local)) net::publishLocal(local);
+    if (game::local_player::capture(local)) {
+        net::publishLocal(local);
+        std::lock_guard<std::mutex> lock(g_localMotionM);
+        g_localMotion.add(local);
+    }
     game::ghosts::tick(n, n - g_levelStartTick);
 }
 
@@ -84,8 +93,16 @@ void monitorLoop() {
     Key keys[] = {
         {VK_F7, false, [] { game::ghosts::requestSpawnOrRefresh(); }},
         {VK_F8, false, [] { game::ghosts::requestNextModel(); }},
-        {VK_F9, false, [] { MLOG("status: net %s | %s", net::describe().c_str(), game::ghosts::status().c_str()); }},
+        {VK_F9, false, [] {
+             std::string local;
+             {
+                 std::lock_guard<std::mutex> lock(g_localMotionM);
+                 local = g_localMotion.report();
+             }
+             MLOG("status: net %s | %s | local capture %s", net::describe().c_str(), game::ghosts::status().c_str(), local.c_str());
+         }},
         {VK_F12, false, [] { game::ghosts::requestHideAll(); }},
+        {VK_F10, false, [] { game::camera_finder::run(); }},
     };
 #endif
     while (g_running) {
@@ -166,7 +183,8 @@ void run(HMODULE self) {
          cfg.join.empty() ? "Hosting: friends join with your join code (see below)." : "Joining: other players appear once the host answers.",
          cfg.menuKey.c_str(), cfg.menuPad.empty() ? "" : " or ", cfg.menuPad.c_str());
 #if MECMP_DEBUG_KEYS
-    MLOG("developer keys: F7 = spawn/show ghosts, F8 = next ghost model, F12 = hide ghosts, F9 = status");
+    MLOG("developer keys: F7 = spawn/show ghosts, F8 = next ghost model, F12 = hide ghosts, F9 = status, "
+         "F10 = find the camera matrix");
 #endif
     monitorLoop();
 }

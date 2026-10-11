@@ -14,6 +14,7 @@
 #include "game/level.h"
 #include "game/local_player.h"
 #include "net/net.h"
+#include "ui/gamepad.h"
 #include "ui/overlay.h"
 
 namespace mecmp::app {
@@ -77,6 +78,8 @@ void monitorLoop() {
     uintptr_t lastWorld = 0;
     DWORD levelSince = GetTickCount(), nextScanAt = 15000;
     int scans = 0;
+#if MECMP_DEBUG_KEYS
+    // Developer hotkeys (not in release builds; see CMakeLists.txt).
     struct Key { int vk; bool down; void (*action)(); };
     Key keys[] = {
         {VK_F7, false, [] { game::ghosts::requestSpawnOrRefresh(); }},
@@ -84,6 +87,7 @@ void monitorLoop() {
         {VK_F9, false, [] { MLOG("status: net %s | %s", net::describe().c_str(), game::ghosts::status().c_str()); }},
         {VK_F12, false, [] { game::ghosts::requestHideAll(); }},
     };
+#endif
     while (g_running) {
         const uintptr_t world = game::level::serverWorld();
         if (world != lastWorld) {
@@ -105,11 +109,15 @@ void monitorLoop() {
             if (scans == kMaxScansPerLevel && !game::level::complete())
                 MLOG("level: still missing spawners after %d scans; not scanning this level again", scans);
         }
+        config::applyPending(); // menu and game changes, in order (and mecmp.ini)
+        ui::gamepad::maintain();  // once the game has loaded XInput
+#if MECMP_DEBUG_KEYS
         for (Key& k : keys) {
             const bool d = (GetAsyncKeyState(k.vk) & 0x8000) != 0;
             if (d && !k.down && world) k.action();
             k.down = d;
         }
+#endif
         Sleep(50);
     }
 }
@@ -150,12 +158,16 @@ void run(HMODULE self) {
         net::shutdown(2000);
     });
     ui::install();
-    const auto& cfg = config::get();
+    const config::Settings cfg = config::get();
     if (!cfg.netEnabled) MLOG("net: disabled in mecmp.ini");
     else if (!net::start(cfg.port, cfg.join, cfg.loopbackOffset, cfg.name))
         MLOG("net: multiplayer is NOT running (see the net: lines above); the rest of the mod still works");
-    MLOG("ready. %s F7 = spawn/show ghosts, F8 = next ghost model, F12 = hide ghosts, F9 = status (and join code).",
-         cfg.join.empty() ? "Hosting: friends join with your join code (see below)." : "Joining: other players appear once the host answers.");
+    MLOG("ready. %s Menu: %s%s%s.",
+         cfg.join.empty() ? "Hosting: friends join with your join code (see below)." : "Joining: other players appear once the host answers.",
+         cfg.menuKey.c_str(), cfg.menuPad.empty() ? "" : " or ", cfg.menuPad.c_str());
+#if MECMP_DEBUG_KEYS
+    MLOG("developer keys: F7 = spawn/show ghosts, F8 = next ghost model, F12 = hide ghosts, F9 = status");
+#endif
     monitorLoop();
 }
 

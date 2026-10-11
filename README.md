@@ -15,13 +15,15 @@ Status: experimental. Ghosts are visual only (no collision).
 1. Put `mecmp.dll` and `mecmp_inject.exe` in one folder. The first run creates `mecmp.ini` there.
 2. Start the game, run `mecmp_inject.exe` (two beeps = the mod is active), load into free roam.
 
-**In game, press INSERT** for the MECMP menu: host a session, paste a join code and join, set your
-name, see who is connected and pick how other players look. Everything can also be set in
+**In game, press INSERT, or click both sticks (LS+RS) on a gamepad,** for the MECMP menu: host a
+session, paste a join code and join, set your name, see who is connected and pick how other players
+look. The menu works with mouse, keyboard or gamepad; while it is open the game does not see the
+gamepad. Both menu buttons can be changed under *Controls*. Everything can also be set in
 `mecmp.ini` (the menu saves to it).
 
 **Hosting** (the menu's *Host a session*, or `join=` empty in `mecmp.ini`): the mod asks your router to open UDP port 47800
-(UPnP) and makes a **join code** like `2HMAS-W9ENR`. It is copied to your clipboard, saved in
-`join_code.txt` and written to `mecmp.log` (F9 shows it again). Send it to your friends. The host
+(UPnP) and makes a **join code** like `2HMAS-W9ENR`. It is shown in the menu (*Copy* puts it on
+the clipboard), saved in `join_code.txt` and written to `mecmp.log`. Send it to your friends. The host
 forwards everyone's movement to everyone, so friends need nothing opened on their side.
 
 **Joining**: paste the host's code in the menu and press *Join* (or set `join=2HMAS-W9ENR`).
@@ -30,12 +32,14 @@ If the host's router has UPnP turned off, forward UDP 47800 to the host's PC by 
 says the address is not reachable (carrier-grade NAT, common on mobile internet), let another
 player host. Players on the same network can use the LAN code from the log.
 
+Developer builds (CMake option `MECMP_DEBUG_KEYS`, on by default, off for release builds) also have:
+
 | Key | Action |
 |---|---|
 | F7 | Spawn missing ghosts now / show them again / refresh their look |
 | F8 | Next ghost model (Faith outfits, the time-trial projection ghosts) |
 | F12 | Hide all ghosts and pause automatic spawning (F7 resumes) |
-| F9 | Write a status line to `mecmp.log` |
+| F9 | Write a status line to `mecmp.log` (with the ghost update's cost) |
 
 Solo test: `join=127.0.0.1:47800`. Your own packets come back and a ghost mirrors you 3 m to
 your side.
@@ -45,10 +49,10 @@ your side.
 - Traffic is plain UDP, with no encryption and no login. Anyone who can reach the host's port can
   send packets that look like another player. Only host sessions with people you trust.
 - The join code contains the host's public IP address and port. Anyone with the code can join.
-- Hosting asks the router to open the port with UPnP. If the router refuses a timed mapping, the
-  mapping can stay after the game closes; remove it in the router's port-forwarding page.
-- Hosting copies the join code to the clipboard. `mecmp.log` lists other players' IP addresses;
-  check it before you share it.
+- Hosting asks the router to open the port with UPnP, for one hour at a time (renewed while
+  hosting). The mapping is removed when the game closes. Routers that only allow permanent
+  mappings are not used; forward the port by hand there.
+- `mecmp.log` lists other players' IP addresses; check it before you share it.
 
 ## Build
 

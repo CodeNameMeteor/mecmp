@@ -5,6 +5,8 @@
 // vtable (found through a throwaway device + swap chain), and subclasses the game window for
 // input. While the menu is open, mouse and keyboard go to the menu instead of the game.
 
+#include <string>
+
 namespace mecmp::ui {
 
 bool install();
@@ -12,5 +14,12 @@ bool install();
 // the process can still use the network. Set before install().
 void setOnWindowDestroyed(void (*fn)());
 bool menuOpen();
+void toggleMenu(); // any thread (keyboard on the window thread, gamepad on the game's input thread)
+
+// Keys that can open the menu. `name` as in mecmp.ini (INSERT, F5, ...).
+struct MenuKey { const char* name; int vk; int imguiKey; };
+const MenuKey* menuKeys(int& count);
+void setMenuKey(const std::string& name);  // takes effect at once
+void setKeyCapture(bool on);               // while the menu waits for a new key, the old one does not close it
 
 } // namespace mecmp::ui

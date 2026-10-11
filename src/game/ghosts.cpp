@@ -285,7 +285,7 @@ void handleRequests() {
     }
     if (g_reqNextModel.exchange(false)) {
         const auto names = models::names();
-        std::string& cur = config::mut().model;
+        const std::string cur = config::get().model;
         size_t at = 0;
         for (size_t i = 0; i < names.size(); ++i)
             if (names[i] == cur) at = i;
@@ -297,7 +297,7 @@ void handleRequests() {
         for (size_t step = 1; step <= names.size(); ++step) { // next model that actually applies
             const std::string& next = names[(at + step) % names.size()];
             if (!probe || models::apply(probe, next)) {
-                cur = next;
+                config::change([next](config::Settings& c) { c.model = next; }, false);
                 applyModelToAll(next);
                 MLOG("ghosts: model '%s'", next.c_str());
                 break;
@@ -310,8 +310,7 @@ void handleRequests() {
             std::lock_guard<std::mutex> lock(g_reqModelMutex);
             want.swap(g_reqModel);
         }
-        if (!want.empty()) {
-            config::mut().model = want;
+        if (!want.empty()) { // the menu also queued the config change
             applyModelToAll(want);
             MLOG("ghosts: model '%s'", want.c_str());
         }

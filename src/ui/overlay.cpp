@@ -15,6 +15,7 @@
 #include "core/log.h"
 #include "core/mem.h"
 #include "imgui.h"
+#include "ui/gamepad.h"
 #include "ui/menu.h"
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND, UINT, WPARAM, LPARAM);
@@ -36,7 +37,18 @@ WNDPROC g_origWndProc = nullptr;
 std::atomic<void (*)()> g_onDestroyed{nullptr};
 bool g_ready = false;
 std::atomic<bool> g_open{false};
-int g_toggleKey = VK_INSERT;
+std::atomic<int> g_toggleKey{VK_INSERT};
+std::atomic<bool> g_keyCapture{false};
+std::atomic<bool> g_justOpened{false}; // focus the menu window on the next frame (gamepad navigation)
+
+const MenuKey kMenuKeys[] = {
+    {"INSERT", VK_INSERT, ImGuiKey_Insert}, {"HOME", VK_HOME, ImGuiKey_Home}, {"END", VK_END, ImGuiKey_End},
+    {"DELETE", VK_DELETE, ImGuiKey_Delete}, {"PAGEUP", VK_PRIOR, ImGuiKey_PageUp}, {"PAGEDOWN", VK_NEXT, ImGuiKey_PageDown},
+    {"PAUSE", VK_PAUSE, ImGuiKey_Pause}, {"F1", VK_F1, ImGuiKey_F1}, {"F2", VK_F2, ImGuiKey_F2}, {"F3", VK_F3, ImGuiKey_F3},
+    {"F4", VK_F4, ImGuiKey_F4}, {"F5", VK_F5, ImGuiKey_F5}, {"F6", VK_F6, ImGuiKey_F6}, {"F7", VK_F7, ImGuiKey_F7},
+    {"F8", VK_F8, ImGuiKey_F8}, {"F9", VK_F9, ImGuiKey_F9}, {"F10", VK_F10, ImGuiKey_F10}, {"F11", VK_F11, ImGuiKey_F11},
+    {"F12", VK_F12, ImGuiKey_F12},
+};
 
 void createRtv() {
     ID3D11Texture2D* back = nullptr;
@@ -119,19 +131,12 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
     if (msg == WM_DESTROY && hwnd == g_window) {
         if (auto fn = g_onDestroyed.exchange(nullptr)) fn();
     }
-    if (msg == WM_KEYDOWN && static_cast<int>(w) == g_toggleKey && !(l & (1 << 30))) {
-        const bool open = !g_open;
-        g_open = open;
-        if (open) {
-            ClipCursor(nullptr);
-            RECT rc{};
-            GetClientRect(g_window, &rc);
-            g_cursorX = (rc.right - rc.left) * 0.5f; // start in the middle of the screen
-            g_cursorY = (rc.bottom - rc.top) * 0.5f;
-            g_rawMouse = false;
-        }
+    if (msg == WM_KEYDOWN && static_cast<int>(w) == g_toggleKey.load() && !(l & (1 << 30)) && !g_keyCapture.load()) {
+        toggleMenu();
         return 0;
     }
+    // A pad plugged in later: let the backend look for it again (it only sets a flag).
+    if (msg == WM_DEVICECHANGE && g_ready) ImGui_ImplWin32_WndProcHandler(hwnd, msg, w, l);
     if (g_open && g_ready) {
         if (msg == WM_INPUT) {
             handleRawMouse(l);
@@ -145,13 +150,8 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
 }
 
 int keyFromName(const std::string& n) {
-    if (n.size() >= 2 && (n[0] == 'F' || n[0] == 'f')) {
-        const int f = atoi(n.c_str() + 1);
-        if (f >= 1 && f <= 12) return VK_F1 + f - 1;
-    }
-    if (_stricmp(n.c_str(), "HOME") == 0) return VK_HOME;
-    if (_stricmp(n.c_str(), "END") == 0) return VK_END;
-    if (_stricmp(n.c_str(), "DELETE") == 0) return VK_DELETE;
+    for (const MenuKey& k : kMenuKeys)
+        if (_stricmp(n.c_str(), k.name) == 0) return k.vk;
     return VK_INSERT;
 }
 
@@ -168,13 +168,21 @@ bool init(IDXGISwapChain* sc) {
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
     io.IniFilename = nullptr; // no imgui.ini next to the game
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-    // Readable on big screens: Segoe UI scaled with the window height.
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad;
+    // Readable on big screens: Segoe UI scaled with the window height. Without it, ImGui's built-in
+    // font at the same size (A-1: it used to stay at its 13 px default).
     RECT rc{};
     GetClientRect(g_window, &rc);
-    const float px = (rc.bottom - rc.top) > 0 ? (rc.bottom - rc.top) / 55.f : 18.f;
+    float px = (rc.bottom - rc.top) > 0 ? (rc.bottom - rc.top) / 55.f : 18.f;
+    if (px < 16.f) px = 16.f;
+    ImFont* font = nullptr;
     if (GetFileAttributesW(L"C:\\Windows\\Fonts\\segoeui.ttf") != INVALID_FILE_ATTRIBUTES)
-        io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeui.ttf", px < 16.f ? 16.f : px);
+        font = io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeui.ttf", px);
+    if (!font) {
+        ImFontConfig fc;
+        fc.SizePixels = px;
+        io.Fonts->AddFontDefault(&fc);
+    }
     menu::applyStyle();
     ImGui_ImplWin32_Init(g_window);
     ImGui_ImplDX11_Init(g_device, g_context);
@@ -190,7 +198,12 @@ HRESULT STDMETHODCALLTYPE presentHook(IDXGISwapChain* sc, UINT sync, UINT flags)
         ImGui_ImplDX11_NewFrame();
         ImGui_ImplWin32_NewFrame();
         if (g_open && g_rawMouse) applyRawMouse(); // after the backend's own cursor read, so ours wins
+        // While a gamepad binding is being recorded, the pad must not also click through the menu.
+        ImGuiIO& io = ImGui::GetIO();
+        if (gamepad::capturing()) io.ConfigFlags &= ~ImGuiConfigFlags_NavEnableGamepad;
+        else io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
         ImGui::NewFrame();
+        if (g_justOpened.exchange(false)) ImGui::SetWindowFocus("###mecmp");
         ImGui::GetIO().MouseDrawCursor = g_open.load();
         menu::draw(g_open.load());
         ImGui::Render();
@@ -210,10 +223,36 @@ HRESULT STDMETHODCALLTYPE resizeHook(IDXGISwapChain* sc, UINT count, UINT w, UIN
 
 void setOnWindowDestroyed(void (*fn)()) { g_onDestroyed = fn; }
 
+void toggleMenu() {
+    const bool open = !g_open.load();
+    if (open && g_window) {
+        ClipCursor(nullptr);
+        RECT rc{};
+        GetClientRect(g_window, &rc);
+        g_cursorX = (rc.right - rc.left) * 0.5f; // start in the middle of the screen
+        g_cursorY = (rc.bottom - rc.top) * 0.5f;
+        g_rawMouse = false;
+        g_justOpened = true;
+    }
+    if (!open) {
+        g_keyCapture = false;
+        gamepad::cancelCapture();
+    }
+    g_open = open;
+}
+
+const MenuKey* menuKeys(int& count) {
+    count = static_cast<int>(sizeof(kMenuKeys) / sizeof(kMenuKeys[0]));
+    return kMenuKeys;
+}
+void setMenuKey(const std::string& name) { g_toggleKey = keyFromName(name); }
+void setKeyCapture(bool on) { g_keyCapture = on; }
+
 bool menuOpen() { return g_open.load(); }
 
 bool install() {
     g_toggleKey = keyFromName(config::get().menuKey);
+    gamepad::setBinding(gamepad::parse(config::get().menuPad));
     // A throwaway device + swap chain on a hidden window, only to find DXGI's swap-chain vtable.
     WNDCLASSEXW wc{};
     wc.cbSize = sizeof(wc);

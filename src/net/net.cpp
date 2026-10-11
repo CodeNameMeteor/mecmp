@@ -411,23 +411,11 @@ void publishCode(const std::string& code, const std::string& lan) {
         g_joinCode = code;
         g_lanCode = lan;
     }
-    // join_code.txt next to the mod, and the clipboard, so it is easy to send to friends.
+    // join_code.txt next to the mod. The clipboard is only written by the menu's Copy button (S-13).
     const std::wstring path = config::dir() + L"join_code.txt";
     if (FILE* f = _wfopen(path.c_str(), L"wb")) {
         fprintf(f, "MECMP join code: %s\r\nSame network (LAN): %s\r\n", code.c_str(), lan.c_str());
         fclose(f);
-    }
-    if (!code.empty() && OpenClipboard(nullptr)) {
-        EmptyClipboard();
-        if (HGLOBAL h = GlobalAlloc(GMEM_MOVEABLE, code.size() + 1)) {
-            if (void* p = GlobalLock(h)) {
-                memcpy(p, code.c_str(), code.size() + 1);
-                GlobalUnlock(h);
-                if (SetClipboardData(CF_TEXT, h)) h = nullptr; // the system owns the memory now
-            }
-            if (h) GlobalFree(h);
-        }
-        CloseClipboard();
     }
 }
 
@@ -481,7 +469,7 @@ void hostSetup(uint32_t generation) {
     if (generation != g_generation) return; // the session was changed meanwhile
     publishCode(code, lan);
     if (!code.empty())
-        MLOG("net: HOSTING. Join code: %s  (copied to the clipboard and saved in join_code.txt)", code.c_str());
+        MLOG("net: HOSTING. Join code: %s  (saved in join_code.txt; the menu's Copy button copies it)", code.c_str());
     if (!lan.empty()) MLOG("net: join code for players on your own network: %s", lan.c_str());
 }
 

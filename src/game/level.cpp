@@ -179,15 +179,17 @@ bool characterExists(void* character, uintptr_t expectedData) {
 void* playerCharacter() {
     void* spawner = playerSpawner();
     if (!spawnerAlive(spawner)) return nullptr;
-    auto* sp = static_cast<uint8_t*>(spawner);
-    void** begin = *reinterpret_cast<void***>(sp + Spawner_Spawned);
-    void** end = *reinterpret_cast<void***>(sp + Spawner_Spawned + 8);
-    if (!begin || end <= begin || end - begin > 64) return nullptr;
+    const uintptr_t sp = reinterpret_cast<uintptr_t>(spawner);
+    uintptr_t list[2] = {};
+    if (!mem::read(sp + Spawner_Spawned, list, sizeof(list))) return nullptr;
+    const uintptr_t begin = list[0], end = list[1];
+    if (!begin || end <= begin || (end - begin) / 8 > 64) return nullptr;
     void* fallback = nullptr;
-    for (void** it = end; it != begin;) { // newest first, prefer the one owned by a player
-        void* c = *--it;
+    for (uintptr_t it = end; it != begin;) { // newest first, prefer the one owned by a player
+        it -= 8;
+        void* c = reinterpret_cast<void*>(mem::readOr<uintptr_t>(it));
         if (!c || !isKindOf(c, TI_ServerCharacterEntity)) continue;
-        if (*reinterpret_cast<void**>(static_cast<uint8_t*>(c) + Character_Player)) return c;
+        if (mem::readOr<uintptr_t>(reinterpret_cast<uintptr_t>(c) + Character_Player)) return c;
         if (!fallback) fallback = c;
     }
     return fallback;

@@ -1,6 +1,7 @@
 #include "game/models.h"
 
 #include <cctype>
+#include <cstddef>
 #include <cstdlib>
 #include <map>
 #include <mutex>
@@ -14,6 +15,11 @@ namespace {
 struct Model { std::string name; uintptr_t ccd = 0; };
 std::mutex g_m;
 std::vector<Model> g_models;
+// Customizations we built, by piece list. Pieces are level data, so this is emptied when the level
+// changes (a new level can put other assets at the same addresses). The blocks are never freed.
+std::map<std::vector<uintptr_t>, uintptr_t> g_cache;
+// CustomizeCharacterData vtable (in the game image, so valid in every level), from any template seen.
+uintptr_t g_ccdVtable = 0;
 uintptr_t g_shaderData = 0;   // ghost character data whose ghost-shader flag we switched off
 DWORD g_shaderRestoreAt = 0;  // when to switch it back on (game thread)
 
@@ -57,7 +63,8 @@ void visualsOf(uintptr_t ccd, std::vector<uintptr_t>& out) {
 
 // Our own CustomizeCharacterData: one group per piece (so the game's random pick is that piece),
 // no unlocks, ClearVisualState = 1. Never freed (the game may keep pointers to it).
-uintptr_t makeCustomization(const std::vector<uintptr_t>& visuals, uintptr_t vtableFrom) {
+uintptr_t makeCustomization(const std::vector<uintptr_t>& visuals, uintptr_t vtable) {
+    if (!vtable) return 0; // never hand the game a data object without a vtable
     auto block = [](size_t n) { return static_cast<uint8_t*>(calloc(1, n)); };
     uint8_t* ccd = block(0x40);
     uint8_t* groups = block(8 + visuals.size() * 8);
@@ -71,7 +78,7 @@ uintptr_t makeCustomization(const std::vector<uintptr_t>& visuals, uintptr_t vta
         *reinterpret_cast<uintptr_t*>(g + 8) = visuals[i];
         *reinterpret_cast<uintptr_t*>(groups + 8 + i * 8) = reinterpret_cast<uintptr_t>(g + 8);
     }
-    if (vtableFrom) *reinterpret_cast<uintptr_t*>(ccd) = mem::readOr<uintptr_t>(vtableFrom);
+    *reinterpret_cast<uintptr_t*>(ccd) = vtable;
     static const char kName[] = "MECMP/GhostModel";
     *reinterpret_cast<const char**>(ccd + Asset_Name) = kName;
     *reinterpret_cast<uintptr_t*>(ccd + 0x18) = reinterpret_cast<uintptr_t>(groups + 8);
@@ -103,6 +110,10 @@ void noteTemplate(uintptr_t spawnerData, const std::string& spawnerName) {
         if (ln.find("faith") == std::string::npos && ln.find("projection") == std::string::npos) return;
     }
     std::lock_guard<std::mutex> lock(g_m);
+    if (!g_ccdVtable) {
+        const uintptr_t vt = mem::readOr<uintptr_t>(ccd);
+        if (inImage(vt)) g_ccdVtable = vt;
+    }
     for (auto& m : g_models)
         if (m.ccd == ccd) return;
     if (g_models.size() >= 64) return;
@@ -113,6 +124,7 @@ void noteTemplate(uintptr_t spawnerData, const std::string& spawnerName) {
 void reset() {
     std::lock_guard<std::mutex> lock(g_m);
     g_models.clear();
+    g_cache.clear();
     g_shaderData = 0;
     g_shaderRestoreAt = 0;
 }
@@ -160,14 +172,21 @@ bool apply(void* ghost, const std::string& wanted, std::string* usedName) {
     for (uintptr_t v : visuals)
         if (!isFirstPersonPiece(v)) kept.push_back(v);
     if (!kept.empty()) visuals.swap(kept);
-    if (!vtableFrom) {
+    uintptr_t ccd = 0;
+    {
         std::lock_guard<std::mutex> lock(g_m);
-        if (!g_models.empty()) vtableFrom = g_models.front().ccd;
+        uintptr_t vtable = vtableFrom ? mem::readOr<uintptr_t>(vtableFrom) : 0;
+        if (!inImage(vtable)) vtable = g_ccdVtable;
+        auto it = g_cache.find(visuals);
+        if (it != g_cache.end()) {
+            ccd = it->second;
+        } else if ((ccd = makeCustomization(visuals, vtable)) != 0) {
+            g_cache[visuals] = ccd;
+        } else {
+            MLOG("model: cannot build '%s' yet (no customization template seen in this game session)", used.c_str());
+            return false;
+        }
     }
-    static std::map<std::vector<uintptr_t>, uintptr_t> cache;
-    uintptr_t& ccd = cache[visuals];
-    if (!ccd) ccd = makeCustomization(visuals, vtableFrom);
-    if (!ccd) return false;
 
     const uintptr_t ch = reinterpret_cast<uintptr_t>(ghost);
     uintptr_t vt = 0, fn = 0;
@@ -187,7 +206,13 @@ bool apply(void* ghost, const std::string& wanted, std::string* usedName) {
             }
         }
     }
-    struct Args { void* ch; void* player; void* customize; uint8_t flag; uint8_t pad[7]; } args{};
+    // Arguments of vtbl[0x340] (0x14336cf00): +0x00 character; +0x08 player (null: apply the data
+    // as is via 0x14336c860, non-null: the player's own unlock path); +0x10 CustomizeCharacterData
+    // (reads +0x18 groups, +0x20 unlocks, +0x28 a fade time, +0x30/+0x31 flags); +0x18 non-zero =
+    // do nothing. Checked in Ghidra (B-12).
+    struct Args { void* ch; void* player; void* customize; uint8_t skip; uint8_t pad[7]; } args{};
+    static_assert(offsetof(Args, player) == 0x08 && offsetof(Args, customize) == 0x10 && offsetof(Args, skip) == 0x18,
+                  "customize args");
     args.ch = ghost;
     args.customize = reinterpret_cast<void*>(ccd);
     reinterpret_cast<void (*)(void*, Args*)>(fn)(ghost, &args);

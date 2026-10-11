@@ -60,6 +60,8 @@ constexpr size_t Vtbl_ClientSetVisible = 0x3d8; // PamClientCharacterEntity: set
 // --- Layouts --------------------------------------------------------------------------------------
 constexpr size_t Asset_Name = 0x10;
 constexpr size_t ReferenceObjectData_Blueprint = 0x18;
+constexpr size_t ObjectBlueprint_Object = 0x40;   // EntityData* (type dump; validated before use)
+constexpr size_t Component_Collection = 0x08;     // fb::Component: owner's component collection; [0] = owner entity
 constexpr size_t CI_Bus = 0x10;           // EntityCreationInfo
 constexpr size_t CI_Data = 0xd0;          // EntityCreationInfo: the entity's data
 constexpr size_t Spawner_Data = 0x30;     // CharacterSpawnReferenceObjectData
@@ -113,28 +115,44 @@ inline bool inImage(uintptr_t a) {
     return a >= base && a < base + 0x727b000;
 }
 
-inline bool isKindOf(void* obj, uintptr_t classInfoVa) {
-    using GetTypeFn = const uint8_t* (*)(void*);
-    const uint8_t* ti = (*reinterpret_cast<GetTypeFn**>(obj))[0](obj);
-    const auto* ci = reinterpret_cast<const uint8_t*>(rva(classInfoVa));
-    const uint32_t id = *reinterpret_cast<const uint16_t*>(ti + 0x28);
-    const uint32_t first = *reinterpret_cast<const uint16_t*>(ci + 0x28);
-    const uint32_t last = *reinterpret_cast<const uint16_t*>(ci + 0x2a);
-    return (id - first) <= (last - first);
+// The function in vtable slot `slotOffset` of `obj`, if the object is readable and both its vtable
+// and that function lie in the game image (0 otherwise). Guards every virtual call on an object
+// the mod did not create itself (B-11).
+inline uintptr_t gameVirtual(const void* obj, size_t slotOffset) {
+    uintptr_t vt = 0, fn = 0;
+    if (!obj || !mem::read(reinterpret_cast<uintptr_t>(obj), vt) || !inImage(vt)) return 0;
+    if (!mem::read(vt + slotOffset, fn) || !inImage(fn)) return 0;
+    return fn;
 }
+
+// `classInfo` is a runtime address (see isKindOf below for an image VA).
+inline bool isKindOfRuntime(void* obj, uintptr_t classInfo) {
+    using GetTypeFn = const uint8_t* (*)(void*);
+    const auto getType = reinterpret_cast<GetTypeFn>(gameVirtual(obj, 0));
+    if (!getType) return false;
+    const uint8_t* ti = getType(obj);
+    uint16_t id = 0, first = 0, last = 0;
+    if (!ti || !mem::read(reinterpret_cast<uintptr_t>(ti) + 0x28, id) || !mem::read(classInfo + 0x28, first) ||
+        !mem::read(classInfo + 0x2a, last))
+        return false;
+    return static_cast<uint32_t>(id - first) <= static_cast<uint32_t>(last - first);
+}
+
+inline bool isKindOf(void* obj, uintptr_t classInfoVa) { return isKindOfRuntime(obj, rva(classInfoVa)); }
 
 inline void* getComponent(void* character, uintptr_t tiVa) {
     using Fn = void* (*)(void*, const void*);
-    auto fn = (*reinterpret_cast<Fn**>(character))[Vtbl_GetComponent / 8];
-    return fn(character, reinterpret_cast<const void*>(rva(tiVa)));
+    const auto fn = reinterpret_cast<Fn>(gameVirtual(character, Vtbl_GetComponent));
+    return fn ? fn(character, reinterpret_cast<const void*>(rva(tiVa))) : nullptr;
 }
 
-// Live world transform of a spatial entity. Game thread only.
-inline const LinearTransform* entityTransform(const void* entity) {
-    auto* ts = *reinterpret_cast<const uint8_t* const*>(reinterpret_cast<const uint8_t*>(entity) + Entity_TransformSpace);
-    if (!ts) return nullptr;
-    const size_t idx = static_cast<size_t>(ts[9]) + 2u * ts[10];
-    return reinterpret_cast<const LinearTransform*>(ts + 0x10 + idx * 0x20);
+// Live world transform of a spatial entity (read fault-tolerantly). Game thread only.
+inline bool readEntityTransform(const void* entity, LinearTransform& out) {
+    const uintptr_t ts = mem::readOr<uintptr_t>(reinterpret_cast<uintptr_t>(entity) + Entity_TransformSpace);
+    uint8_t sel[2] = {};
+    if (!ts || !mem::read(ts + 9, sel, 2)) return false;
+    const size_t idx = static_cast<size_t>(sel[0]) + 2u * sel[1];
+    return mem::read(ts + 0x10 + idx * 0x20, &out, sizeof(out));
 }
 
 inline void setTransform(void* entity, const LinearTransform& t) {

@@ -13,11 +13,17 @@ worlds in one process; the mod uses both.
 ## Startup (`app/mod.cpp`)
 
 1. Wait for the engine's TypeInfo list, then compare three TypeInfo addresses with the ones this
-   build was made from. Any mismatch: stay inactive.
+   build was made from, and run the build check (`game/fingerprint.cpp`): six vtable slots must
+   hold the expected functions and five directly called functions must start with the expected
+   bytes. Any mismatch: stay inactive (`[debug] ignore_build_check=1` overrides).
 2. Read `mecmp.ini` (`core/config.cpp`).
-3. Install hooks (`game/hooks.cpp`), start the network thread (`net/net.cpp`).
+3. Install hooks (`game/hooks.cpp`): the tick hook is checked first and is required; spawner hooks
+   are optional (the memory scan covers them); without the two client hooks ghosts are not spawned.
+   Then start the network thread (`net/net.cpp`). The DLL pins itself so it is never unloaded.
 4. The mod thread then watches for level changes and hotkeys, and scans game memory for spawners
-   when they were missed (`game/level.cpp`, see `scanForMissing`).
+   when they were missed (`game/level.cpp`, see `scanForMissing`): 15 s into a level and, while
+   something is still missing, after about 1, 3 and 7 more minutes (at most 4 scans per level).
+5. When the game window is destroyed, multiplayer stops and the router port is closed (2 s at most).
 
 ## Hooks (`game/hooks.cpp`)
 
@@ -51,6 +57,21 @@ Per remote player:
 4. **Visibility**: ghost client characters start hidden (time-trial markers normally show them).
    Call `clientCharacter->vtbl[0x3d8](true)` after creation and every few seconds; `false` when
    the player stops sending.
+5. **Lifecycle**: the mod never destroys a ghost (no known safe despawn call). A player silent for
+   5 s has their ghost hidden and no longer driven; the ghost is then free and goes to the next
+   player who needs one, preferring a player with the same name (a reconnect gets a new session
+   id). At most 15 ghosts per level. F9 shows the ghost tick's cost (average and maximum).
+
+Claiming client objects: inside the 1.5 s window after a spawn, a client character must have the
+ghost blueprint's character data, and a client replay component must belong to such a character
+(Component +0x08 is the owner's component collection, whose first entry is the owner). The ghost
+blueprint's character data is taken from `ObjectBlueprint::Object` and accepted only if it is a
+`PamCharacterEntityData`; after the spawn the character's own data confirms it.
+
+Known limit (C-2): client objects are used from the server thread. Each use first checks the
+object's class, data and owner, so memory the game freed and reused for something else is not
+called into, but the client thread can still destroy an object between that check and the call.
+Closing that window needs the client work moved to the client thread.
 
 ## Models (`game/models.cpp`)
 
@@ -60,16 +81,21 @@ applies it with `character->vtbl[0x340]`; the look replicates to the client.
 
 - `faith`: the local player's current outfit (first-person `_1p` pieces dropped).
 - Others: any CustomizeCharacterData from a spawner template in the level (RunVis, enemies, ...).
-- `PamUseRunnersGhostShader` (character data +0xe8) is turned off for normal models; with the ghost
-  shader on, normal meshes are invisible. It is turned back on for projection models.
+- `PamUseRunnersGhostShader` (character data +0xe8) is turned off while a normal model is built
+  (with the ghost shader on, normal meshes are invisible) and back on 3 s later, because the
+  game's own time-trial ghosts share that data.
+- Built customizations are cached per piece list and the cache is emptied on level change (pieces
+  are level data). A customization is never built without a vtable (taken from any template seen).
+- `vtbl[0x340]` arguments (0x14336cf00): `{character, player = null, customize, skip = 0}`.
 
 ## Network (`net/`)
 
 UDP, one socket. Sessions have one host and any number of joiners (up to 16).
 
 - **Host** (`join=` empty): `upnp.cpp` finds the router (SSDP), asks it to forward the UDP port
-  (SOAP AddPortMapping, 1 h lease, renewed; if the router refuses a lease it gets a permanent mapping,
-  which is not removed when the session ends) and reads its public IP. Without UPnP a STUN request
+  (SOAP AddPortMapping, 1 h lease, renewed every 30 min; never a permanent mapping) and reads its
+  public IP. The SSDP answer's LOCATION and the control URL must point at the router that answered.
+  The mapping is removed when the session switches to joining and when the game closes. Without UPnP a STUN request
   (stun.l.google.com) through the game socket finds the public address. `joincode.cpp` turns
   ip:port into a 10-character Crockford base32 code. The host forwards every joiner's packets
   unchanged to all other joiners, so only the host has to be reachable.
@@ -77,6 +103,13 @@ UDP, one socket. Sessions have one host and any number of joiners (up to 16).
 - Packets: STATE ~30 Hz and HELLO (name) ~1 Hz. Remote players are keyed by the random session id
   in each packet. Pose compression: rotations smallest-three 32-bit, translations i16 at 1/1024 m,
   only for bones that changed since the last full packet (one per second); about 150 bytes.
-- Receivers buffer 16 snapshots per player and show them 120 ms in the past, blended. Positions and angles outside a sane range are dropped.
+- Receivers buffer 16 snapshots per player and show them 120 ms in the past, blended. The sender's
+  32-bit millisecond clock is unwrapped (`protocol::ClockUnwrap`), so a 49-day uptime wrap is harmless. Positions and angles outside a sane range are dropped.
 - At most 64 player entries are kept; an entry silent for 2 minutes is forgotten. Packets of unknown
   type are dropped before anything is stored or forwarded.
+
+## Logging
+
+`mecmp.log` stops at 16 MB. Messages caused by other players (joins, leaves, new session ids,
+names) share a budget of 20, then one every 3 s; each player's name is logged at most 3 times.
+The exception logger uses no heap and never waits for the log lock.

@@ -20,9 +20,14 @@ constexpr uint32_t kHideAfterMs = 5000; // hide a ghost whose player stopped sen
 constexpr DWORD kSpawnGapMs = 2000;     // at most one spawn per this interval (client-side matching)
 constexpr DWORD kClaimWindowMs = 1500;  // client objects created this soon after our spawn are ours
 constexpr uint64_t kSettleTicks = 90;   // ~3 s after a level starts before spawning
+// Ghost entities are never destroyed by the mod (no known safe despawn call): a ghost whose player
+// left is hidden and handed to the next player that needs one. So the level holds at most as many
+// ghosts as players were ever there at the same time, and never more than this.
+constexpr size_t kMaxGhosts = 15;
 
 struct Ghost {
-    uint32_t peer = 0;
+    uint32_t peer = 0;          // player driving it (a free ghost keeps its last player's id)
+    std::string name;           // that player's name: a reconnecting player gets their old ghost back
     void* character = nullptr;  // server PamServerCharacterEntity
     void* spawner = nullptr;
     void* clientChar = nullptr; // client PamClientCharacterEntity
@@ -39,8 +44,16 @@ std::vector<Ghost> g_ghosts;
 std::atomic<uint32_t> g_pendingPeer{0};
 std::atomic<DWORD> g_pendingAt{0};
 std::atomic<uintptr_t> g_ghostCharData{0}; // the ghost blueprint's PamCharacterEntityData
+std::atomic<uintptr_t> g_tiCharData{0};    // runtime TypeInfo of PamCharacterEntityData (set at startup)
+// Tick cost (P-2/P-4), shown by F9: sum and max over the current 10 s window, in microseconds.
+double g_costSum = 0, g_costMax = 0;    // game thread
+uint32_t g_costCount = 0;
+std::atomic<double> g_costShownAvg{0}, g_costShownMax{0}; // read by status() on the mod thread
+std::atomic<uint32_t> g_costShownGhosts{0};
+DWORD g_costWindowAt = 0;
 DWORD g_lastSpawnAt = 0;
 std::atomic<bool> g_paused{false};
+std::atomic<bool> g_enabled{true};
 std::atomic<bool> g_reqSpawn{false}, g_reqHide{false}, g_reqNextModel{false};
 std::mutex g_reqModelMutex;
 std::string g_reqModel; // set by the menu, applied on the game thread
@@ -50,16 +63,61 @@ bool claimWindowOpen() {
     return at && GetTickCount() - at < kClaimWindowMs;
 }
 
-void setClientVisible(void* ent, bool visible) {
+// A client character that is (still) a ghost: right class and the ghost blueprint's data. Checked
+// before every call, so a client object the game destroyed and whose memory went to something else
+// is not called into. (It does not close the window in which the client thread destroys the object
+// while the server thread uses it; see C-2 in docs/ARCHITECTURE.md.)
+bool clientCharIsGhost(void* ent) {
     const uintptr_t e = reinterpret_cast<uintptr_t>(ent);
-    uintptr_t vt = 0, fn = 0;
-    if (!mem::read(e, vt) || vt != rva(Vtbl_PamClientCharacterEntity) || !mem::read(vt + Vtbl_ClientSetVisible, fn)) return;
-    reinterpret_cast<void (*)(void*, uint64_t)>(fn)(ent, visible ? 1 : 0);
+    uintptr_t vt = 0, data = 0;
+    const uintptr_t want = g_ghostCharData.load();
+    return e && mem::read(e, vt) && vt == rva(Vtbl_PamClientCharacterEntity) && mem::read(e + Character_Data, data) &&
+           (!want || data == want);
 }
 
-bool clientCompAlive(void* comp) {
+// The entity a component belongs to: Component +0x08 = the owner's component collection, whose
+// first entry is the owning entity (fb::Component ctor 0x14315f9e0).
+uintptr_t componentOwner(uintptr_t comp) {
+    const uintptr_t coll = mem::readOr<uintptr_t>(comp + Component_Collection);
+    return coll ? mem::readOr<uintptr_t>(coll) : 0;
+}
+
+bool setClientVisible(void* ent, bool visible) {
+    if (!clientCharIsGhost(ent)) return false;
+    uintptr_t vt = 0, fn = 0;
+    if (!mem::read(reinterpret_cast<uintptr_t>(ent), vt) || !mem::read(vt + Vtbl_ClientSetVisible, fn) || !inImage(fn)) return false;
+    reinterpret_cast<void (*)(void*, uint64_t)>(fn)(ent, visible ? 1 : 0);
+    return true;
+}
+
+bool clientCompAlive(void* comp, void* owner) {
+    const uintptr_t c = reinterpret_cast<uintptr_t>(comp);
     uintptr_t vt = 0;
-    return comp && mem::read(reinterpret_cast<uintptr_t>(comp), vt) && vt == rva(Vtbl_PamClientReplayPlayerComponent);
+    if (!c || !mem::read(c, vt) || vt != rva(Vtbl_PamClientReplayPlayerComponent)) return false;
+    // Same owner as when we claimed it (when the owner is known): the memory was not reused.
+    return !owner || componentOwner(c) == reinterpret_cast<uintptr_t>(owner);
+}
+
+// Is `data` a PamCharacterEntityData? Calls the object's getType (vtable slot 0) only after checking
+// that the vtable and the function are in the game image.
+bool isCharacterData(uintptr_t data) {
+    const uintptr_t ti = g_tiCharData.load();
+    uintptr_t vt = 0, getType = 0;
+    if (!ti || !data || !mem::read(data, vt) || !inImage(vt) || !mem::read(vt, getType) || !inImage(getType)) return false;
+    return isKindOfRuntime(reinterpret_cast<void*>(data), ti);
+}
+
+// The ghost blueprint's character data, needed before the first spawn to recognise the client
+// character (it may be created while spawn() runs). Candidates: ObjectBlueprint::Object (the field
+// is at +0x40 in the type dump; PC data containers can sit 8 bytes further), and the object stored
+// right after the blueprint in its partition (+0x60, what earlier versions assumed). Only a
+// candidate that really is a PamCharacterEntityData is used.
+uintptr_t blueprintCharacterData(uintptr_t bp) {
+    const uintptr_t candidates[] = {mem::readOr<uintptr_t>(bp + ObjectBlueprint_Object),
+                                    mem::readOr<uintptr_t>(bp + ObjectBlueprint_Object + 8), bp + 0x60};
+    for (uintptr_t c : candidates)
+        if (isCharacterData(c)) return c;
+    return 0;
 }
 
 // Gives the ghost's server replay component a pose buffer with the bone setup real ghosts use.
@@ -131,7 +189,7 @@ void drive(Ghost& g, const net::PlayerState& st) {
 // transform. Stop its playback, let it place the body from the trajectory bone, and pin that
 // bone to the player's position (the client playback rewrites the received pose every frame).
 void fixClient(Ghost& g, const net::PlayerState& st) {
-    if (!clientCompAlive(g.clientComp)) return;
+    if (!clientCompAlive(g.clientComp, g.clientChar)) return;
     const uintptr_t c = reinterpret_cast<uintptr_t>(g.clientComp);
     if (mem::readOr<uint32_t>(c + CRP_PlaybackState) != 0) poke<uint32_t>(c + CRP_PlaybackState, 0);
     if (mem::readOr<uint8_t>(c + CRP_PlaybackForced) != 0) poke<uint8_t>(c + CRP_PlaybackForced, 0);
@@ -148,12 +206,17 @@ void fixClient(Ghost& g, const net::PlayerState& st) {
     }
 }
 
-void* spawnGhost(uint32_t peer, const net::PlayerState& st) {
+void* spawnGhost(uint32_t peer, const std::string& name, const net::PlayerState& st) {
     void* spawner = level::ghostSpawner();
     if (!level::spawnerAlive(spawner)) return nullptr;
     const uintptr_t sd = mem::readOr<uintptr_t>(reinterpret_cast<uintptr_t>(spawner) + Spawner_Data);
     const uintptr_t sbp = sd ? mem::readOr<uintptr_t>(sd + ReferenceObjectData_Blueprint) : 0;
-    if (sbp) g_ghostCharData = sbp + 0x60;
+    if (const uintptr_t d = sbp ? blueprintCharacterData(sbp) : 0) {
+        g_ghostCharData = d;
+    } else if (sbp && !g_ghostCharData) {
+        g_ghostCharData = sbp + 0x60; // unverified (what earlier versions used); corrected after the spawn
+        MLOG("ghost: could not verify the ghost blueprint's character data; using the old guess");
+    }
     SpawnInfo info;
     info.transform = transformFromYaw(st.pos, st.yaw);
     info.useTransform = 1;
@@ -164,6 +227,7 @@ void* spawnGhost(uint32_t peer, const net::PlayerState& st) {
         std::lock_guard<std::mutex> lock(g_m);
         Ghost g;
         g.peer = peer;
+        g.name = name;
         g.spawner = spawner;
         g.spawnedAt = GetTickCount();
         g_ghosts.push_back(g);
@@ -186,7 +250,12 @@ void* spawnGhost(uint32_t peer, const net::PlayerState& st) {
         MLOG("ghost: the spawner returned no character");
         return nullptr;
     }
-    if (const uintptr_t d = mem::readOr<uintptr_t>(reinterpret_cast<uintptr_t>(ch) + Character_Data)) g_ghostCharData = d;
+    if (const uintptr_t d = mem::readOr<uintptr_t>(reinterpret_cast<uintptr_t>(ch) + Character_Data)) {
+        if (g_ghostCharData && g_ghostCharData != d)
+            MLOG("ghost: ghost character data is %p, not %p as expected from the blueprint", reinterpret_cast<void*>(d),
+                 reinterpret_cast<void*>(g_ghostCharData.load()));
+        g_ghostCharData = d;
+    }
     setTransform(ch, info.transform);
     std::string used;
     if (!models::apply(ch, config::get().model, &used) && !models::apply(ch, "RunVis", &used))
@@ -261,11 +330,17 @@ void handleRequests() {
 
 bool onClientReplayComp(void* comp) {
     if (!comp || !claimWindowOpen()) return false;
+    // Only a component whose owner is a ghost character (B-3). The owner is normally known when the
+    // factory returns; if it is not, fall back to the claim window alone, as before.
+    const uintptr_t owner = componentOwner(reinterpret_cast<uintptr_t>(comp));
+    if (owner && !clientCharIsGhost(reinterpret_cast<void*>(owner))) return false;
     const uint32_t peer = g_pendingPeer.load();
     std::lock_guard<std::mutex> lock(g_m);
     for (auto& g : g_ghosts)
         if (g.peer == peer && !g.clientComp) {
+            if (owner && g.clientChar && reinterpret_cast<uintptr_t>(g.clientChar) != owner) continue;
             g.clientComp = comp;
+            if (!owner) VLOG("ghost: claimed replay component %p without a known owner", comp);
             return true;
         }
     return false;
@@ -288,11 +363,70 @@ void onClientCharacter(void* ent) {
     setClientVisible(ent, true);
 }
 
+void setCharacterDataType(uintptr_t runtimeTypeInfo) { g_tiCharData = runtimeTypeInfo; }
+void setEnabled(bool enabled) { g_enabled = enabled; }
+
+namespace {
+// A remote player that is present now (packets newer than kHideAfterMs).
+struct Present { uint32_t id; std::string name; uint32_t ageMs; };
+
+bool isPresent(const std::vector<Present>& present, uint32_t id) {
+    for (const auto& p : present)
+        if (p.id == id) return true;
+    return false;
+}
+
+// Hands a free ghost (its player is gone) to `p`. Prefers the ghost this player had before, by name,
+// so a reconnecting player (new session id) gets their old ghost back. Caller holds g_m.
+bool reuseFreeGhost(const Present& p, const std::vector<Present>& present) {
+    Ghost* pick = nullptr;
+    for (auto& g : g_ghosts) {
+        if (!g.character || isPresent(present, g.peer)) continue;
+        if (!pick || (!p.name.empty() && g.name == p.name && pick->name != p.name)) pick = &g;
+    }
+    if (!pick) return false;
+    MLOG("ghost: player %08x takes over the ghost of %08x%s", p.id, pick->peer,
+         !p.name.empty() && pick->name == p.name ? " (same name: reconnected)" : "");
+    pick->peer = p.id;
+    pick->name = p.name;
+    pick->posing = false;
+    pick->visibleCalls = 0;
+    pick->hidden = true;               // the tick shows it again on its next pass
+    pick->clientCharAt = GetTickCount();
+    return true;
+}
+
+void recordCost(double us, size_t ghosts) {
+    g_costSum += us;
+    g_costCount += 1;
+    if (us > g_costMax) g_costMax = us;
+    const DWORD now = GetTickCount();
+    if (now - g_costWindowAt >= 10000) {
+        g_costShownAvg = g_costCount ? g_costSum / g_costCount : 0;
+        g_costShownMax = g_costMax;
+        g_costShownGhosts = static_cast<uint32_t>(ghosts);
+        g_costSum = g_costMax = 0;
+        g_costCount = 0;
+        g_costWindowAt = now;
+    }
+}
+
+double nowUs() {
+    static const LARGE_INTEGER f = [] { LARGE_INTEGER x; QueryPerformanceFrequency(&x); return x; }();
+    LARGE_INTEGER c;
+    QueryPerformanceCounter(&c);
+    return static_cast<double>(c.QuadPart) * 1e6 / static_cast<double>(f.QuadPart);
+}
+} // namespace
+
 void tick(uint64_t tick, uint64_t ticksInLevel) {
     (void)tick;
+    const double t0 = nowUs();
     handleRequests();
     models::tick();
-    const auto remotes = net::remotes(kHideAfterMs + 60000);
+    std::vector<Present> players; // present now
+    for (const auto& r : net::remotes(kHideAfterMs))
+        if (r.ageMs < kHideAfterMs) players.push_back({r.id, r.name, r.ageMs});
 
     // Forget ghosts the game destroyed. The city-ghost spawner sometimes takes a ghost back (to put
     // its own city ghost there); the ghost entity lives on and keeps working, so keep driving it.
@@ -306,50 +440,62 @@ void tick(uint64_t tick, uint64_t ticksInLevel) {
         }
     }
 
-    // Spawn a ghost for a present player that has none (one per kSpawnGapMs).
-    const bool canSpawn = !g_paused && config::get().autoSpawn && ticksInLevel >= kSettleTicks &&
+    // Every present player needs a ghost: hand them a free one, else spawn (one per kSpawnGapMs).
+    const bool canSpawn = g_enabled && !g_paused && config::get().autoSpawn && ticksInLevel >= kSettleTicks &&
                           level::spawnerAlive(level::ghostSpawner()) && level::playerCharacter();
-    if (canSpawn && GetTickCount() - g_lastSpawnAt >= kSpawnGapMs) {
+    if (canSpawn) {
         level::BoneSetup ref;
-        for (const auto& r : remotes) {
-            if (r.ageMs > kFreshMs) continue;
-            bool has = false;
+        for (const auto& p : players) {
+            if (p.ageMs > kFreshMs) continue;
+            size_t count = 0;
             {
                 std::lock_guard<std::mutex> lock(g_m);
-                for (auto& g : g_ghosts) has = has || g.peer == r.id;
+                bool has = false;
+                for (auto& g : g_ghosts) has = has || g.peer == p.id;
+                if (has || reuseFreeGhost(p, players)) continue;
+                count = g_ghosts.size();
             }
-            if (has || !level::referenceSetup(ref)) continue;
+            if (count >= kMaxGhosts) {
+                static DWORD lastWarn = 0;
+                if (GetTickCount() - lastWarn > 30000) {
+                    lastWarn = GetTickCount();
+                    MLOG("ghost: %llu ghosts already; player %08x gets none", static_cast<unsigned long long>(count), p.id);
+                }
+                continue;
+            }
+            if (GetTickCount() - g_lastSpawnAt < kSpawnGapMs || !level::referenceSetup(ref)) continue;
             net::PlayerState st;
             uint32_t age = 0;
-            if (!net::remoteState(r.id, st, age)) continue;
+            if (!net::remoteState(p.id, st, age)) continue;
             g_lastSpawnAt = GetTickCount();
-            spawnGhost(r.id, st);
-            break;
+            spawnGhost(p.id, p.name, st);
         }
     }
 
-    // Drive every ghost.
+    // Drive the ghosts of present players; hide the others once (a hidden ghost costs nothing).
     std::vector<Ghost> ghosts;
     {
         std::lock_guard<std::mutex> lock(g_m);
         ghosts = g_ghosts;
     }
     static net::PlayerState st; // large; game thread only
-    for (Ghost& g : ghosts) {
+    for (size_t i = 0; i < ghosts.size(); ++i) {
+        Ghost& g = ghosts[i];
         if (!g.character) continue;
+        const bool present = !g_paused && isPresent(players, g.peer);
+        if (!present && g.hidden) continue;
         uint32_t age = 0;
-        const bool have = net::remoteState(g.peer, st, age);
-        const bool present = have && age < kHideAfterMs && !g_paused;
+        const bool have = present && net::remoteState(g.peer, st, age);
         // Visibility: the client character starts hidden (the time-trial marker normally shows it);
         // show it a few times after creation and every 3 s after that, hide it when the player left.
         bool visibilityChanged = false;
         if (g.clientChar) {
             const DWORD since = GetTickCount() - g.clientCharAt;
-            if (!present && !g.hidden) {
+            if (!present) {
                 setClientVisible(g.clientChar, false);
                 g.hidden = true;
                 visibilityChanged = true;
-            } else if (present) {
+            } else {
                 static const DWORD kAt[] = {300, 1000, 2500, 5000};
                 const DWORD due = g.visibleCalls < 4 ? kAt[g.visibleCalls] : 5000u + 3000u * static_cast<DWORD>(g.visibleCalls - 3);
                 if (g.hidden || since >= due) {
@@ -359,18 +505,26 @@ void tick(uint64_t tick, uint64_t ticksInLevel) {
                     visibilityChanged = true;
                 }
             }
+        } else if (!present) {
+            g.hidden = true; // nothing to hide on the client yet; stop driving it
+            visibilityChanged = true;
         }
         if (have) {
             drive(g, st);
             fixClient(g, st);
         }
-        std::lock_guard<std::mutex> lock(g_m); // write back what this tick changed
-        for (auto& live : g_ghosts)
-            if (live.character == g.character) {
-                live.posing = g.posing;
-                if (visibilityChanged) { live.hidden = g.hidden; live.visibleCalls = g.visibleCalls; }
-            }
+        // Write back what this tick changed. The list only changes on this thread (spawn/erase/reuse)
+        // or by the client hooks filling in client pointers, so the entry is normally still at i.
+        std::lock_guard<std::mutex> lock(g_m);
+        Ghost* live = i < g_ghosts.size() && g_ghosts[i].character == g.character ? &g_ghosts[i] : nullptr;
+        for (size_t k = 0; !live && k < g_ghosts.size(); ++k)
+            if (g_ghosts[k].character == g.character) live = &g_ghosts[k];
+        if (live && live->peer == g.peer) {
+            live->posing = g.posing;
+            if (visibilityChanged) { live->hidden = g.hidden; live->visibleCalls = g.visibleCalls; }
+        }
     }
+    recordCost(nowUs() - t0, ghosts.size());
 }
 
 void levelChanged() {
@@ -378,6 +532,7 @@ void levelChanged() {
     g_ghosts.clear();
     g_pendingAt = 0;
     g_lastSpawnAt = 0;
+    g_ghostCharData = 0; // level data: the next level's ghost blueprint may use another object
 }
 
 void requestSpawnOrRefresh() { g_reqSpawn = true; }
@@ -397,6 +552,10 @@ std::string status() {
         s += b;
     }
     if (g_paused) s += ", paused";
+    char cost[96];
+    snprintf(cost, sizeof(cost), ", ghost tick %.0f us avg / %.0f us max (%u ghosts)", g_costShownAvg.load(),
+             g_costShownMax.load(), g_costShownGhosts.load());
+    s += cost;
     return s;
 }
 

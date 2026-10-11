@@ -28,6 +28,7 @@ add_library(mecmp SHARED
   src/core/config.cpp
   src/core/log.cpp
   src/core/typeinfo.cpp
+  src/game/fingerprint.cpp
   src/game/hooks.cpp
   src/game/level.cpp
   src/game/ghosts.cpp

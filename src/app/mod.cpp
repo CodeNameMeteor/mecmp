@@ -8,6 +8,7 @@
 #include "core/log.h"
 #include "core/typeinfo.h"
 #include "game/engine.h"
+#include "game/fingerprint.h"
 #include "game/ghosts.h"
 #include "game/hooks.h"
 #include "game/level.h"
@@ -66,13 +67,16 @@ bool gameMatches() {
             return false;
         }
     }
+    if (const TypeEntry* t = types.find("PamCharacterEntityData")) game::ghosts::setCharacterDataType(t->ti);
+    else MLOG("startup: PamCharacterEntityData not in the type list");
     MLOG("startup: game build recognised (%llu types)", static_cast<unsigned long long>(types.size()));
     return true;
 }
 
 void monitorLoop() {
     uintptr_t lastWorld = 0;
-    DWORD levelSince = GetTickCount(), lastScan = 0;
+    DWORD levelSince = GetTickCount(), nextScanAt = 15000;
+    int scans = 0;
     struct Key { int vk; bool down; void (*action)(); };
     Key keys[] = {
         {VK_F7, false, [] { game::ghosts::requestSpawnOrRefresh(); }},
@@ -87,13 +91,19 @@ void monitorLoop() {
             if (lastWorld) game::level::reset(); // spawners of the old level are stale
             lastWorld = world;
             levelSince = GetTickCount();
-            lastScan = 0;
+            nextScanAt = 15000;
+            scans = 0;
         }
         // Loaded after the level was created (or the game re-used spawners we never saw being
-        // made)? Look for them in memory, at most every 20 s.
-        if (world && GetTickCount() - levelSince > 15000 && GetTickCount() - lastScan > 20000 && !game::level::complete()) {
-            lastScan = GetTickCount();
+        // made)? Look for them in memory: 15 s into the level, and if something is still missing
+        // again after 1, 3 and 7 minutes. A full scan reads the whole private heap, so no more.
+        constexpr int kMaxScansPerLevel = 4;
+        if (world && scans < kMaxScansPerLevel && GetTickCount() - levelSince > nextScanAt && !game::level::complete()) {
+            ++scans;
             game::level::scanForMissing();
+            nextScanAt = 15000 + 60000u * ((1u << scans) - 1); // 75 s, 195 s, 435 s after the level started
+            if (scans == kMaxScansPerLevel && !game::level::complete())
+                MLOG("level: still missing spawners after %d scans; not scanning this level again", scans);
         }
         for (Key& k : keys) {
             const bool d = (GetAsyncKeyState(k.vk) & 0x8000) != 0;
@@ -119,11 +129,26 @@ void run(HMODULE self) {
         MLOG("startup: staying inactive");
         return;
     }
+    if (!game::fingerprint::check()) {
+        if (!config::get().ignoreBuildCheck) {
+            MLOG("startup: this game build differs from the one MECMP was made for; staying inactive "
+                 "([debug] ignore_build_check=1 in mecmp.ini overrides this, at your own risk)");
+            return;
+        }
+        MLOG("startup: build check failed but ignore_build_check=1: continuing");
+    }
     Beep(1000, 100); // audible "mod active"
-    if (!game::hooks::install(&onTick)) {
+    game::hooks::Installed hooks;
+    if (!game::hooks::install(&onTick, &hooks)) {
         MLOG("startup: could not hook the game tick; staying inactive");
         return;
     }
+    game::ghosts::setEnabled(hooks.ghostClients);
+    // The game is exiting: stop sending and close the router port while the network still works.
+    ui::setOnWindowDestroyed([] {
+        MLOG("game window closed: stopping multiplayer");
+        net::shutdown(2000);
+    });
     ui::install();
     const auto& cfg = config::get();
     if (!cfg.netEnabled) MLOG("net: disabled in mecmp.ini");
@@ -134,6 +159,8 @@ void run(HMODULE self) {
     monitorLoop();
 }
 
+// Process exit (DllMain, loader lock held): no joins or network here. Multiplayer was already
+// stopped when the game window closed; the DLL is pinned, so this is never a mid-game unload.
 void shutdown() {
     g_running = false;
     log::close();

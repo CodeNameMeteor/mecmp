@@ -41,13 +41,12 @@ constexpr const char* kDefaultIni =
     "[player]\r\n"
     "; your name, shown to the other players\r\n"
     "name=Runner\r\n"
+    "; how the other players see you: faith, or a ghost style and colour (pick it in the in-game menu)\r\n"
+    "look=faith\r\n"
     "\r\n"
     "[ghost]\r\n"
     "; spawn other players' ghosts automatically when their packets arrive\r\n"
     "auto_spawn=1\r\n"
-    "; how other players look: faith (your current outfit) or part of a model name,\r\n"
-    "; e.g. RunVis (the red time-trial ghost). The in-game menu lists the loaded models.\r\n"
-    "model=faith\r\n"
     "\r\n"
     "[ui]\r\n"
     "; key that opens the in-game menu: INSERT, HOME, END, DELETE, PAGEUP, PAGEDOWN, PAUSE or F1..F12\r\n"
@@ -102,7 +101,7 @@ void load(const std::wstring& dir) {
     if (s.name.empty()) s.name = "Runner";
     s.name.resize(net::protocol::utf8PrefixLength(s.name, net::protocol::kMaxNameBytes)); // what goes on the wire
     s.autoSpawn = readInt(ini, L"ghost", L"auto_spawn", 1) != 0;
-    s.model = readString(ini, L"ghost", L"model", "faith");
+    s.look = readString(ini, L"player", L"look", "faith");
     s.menuKey = readString(ini, L"ui", L"menu_key", "INSERT");
     s.menuPad = readString(ini, L"ui", L"menu_pad", "LS+RS");
     s.showNames = readInt(ini, L"ui", L"show_names", 1) != 0;
@@ -114,9 +113,21 @@ void load(const std::wstring& dir) {
         std::lock_guard<std::mutex> lock(g_m);
         g_settings = built;
     }
-    MLOG("config: name '%s', port %u, %s '%s', model '%s'%s", s.name.c_str(), s.port, s.join.empty() ? "hosting" : "joining",
-         s.join.c_str(), s.model.c_str(),
+    MLOG("config: name '%s', port %u, %s '%s', look '%s'%s", s.name.c_str(), s.port,
+         s.join.empty() ? "hosting" : "joining", s.join.c_str(), s.look.c_str(),
          s.verbose ? ", verbose log" : "");
+}
+
+uint32_t lookHash(const std::string& look) {
+    if (look.rfind("echo:", 0) != 0) return 0;
+    return static_cast<uint32_t>(strtoul(look.c_str() + 5, nullptr, 16));
+}
+
+std::string lookName(uint32_t hash) {
+    if (!hash) return "faith";
+    char b[16];
+    snprintf(b, sizeof(b), "echo:%08x", hash);
+    return b;
 }
 
 std::shared_ptr<const Settings> get() {
@@ -155,7 +166,7 @@ void applyPending() {
     };
     put(L"player", L"name", snapshot->name);
     put(L"net", L"join", snapshot->join);
-    put(L"ghost", L"model", snapshot->model);
+    put(L"player", L"look", snapshot->look);
     put(L"ui", L"menu_key", snapshot->menuKey);
     put(L"ui", L"menu_pad", snapshot->menuPad);
     put(L"ui", L"show_names", snapshot->showNames ? "1" : "0");

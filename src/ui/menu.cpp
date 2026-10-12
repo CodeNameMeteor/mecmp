@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <vector>
 
 #include "app/mod.h"
 #include "core/config.h"
@@ -57,15 +58,6 @@ std::string fromClipboard() {
     }
     CloseClipboard();
     while (!s.empty() && (s.back() == '\n' || s.back() == '\r' || s.back() == ' ')) s.pop_back();
-    return s;
-}
-
-std::string shortModel(const std::string& m) {
-    const size_t slash = m.find_last_of('/');
-    std::string s = slash == std::string::npos ? m : m.substr(slash + 1);
-    if (s.rfind("Customization_", 0) == 0) s = s.substr(14);
-    if (s.rfind("C_", 0) == 0) s = s.substr(2);
-    if (s == "faith") s = "Faith (your outfit)";
     return s;
 }
 
@@ -166,20 +158,87 @@ void playersSection() {
     }
 }
 
-void lookSection() {
-    ImGui::SeparatorText("How other players look");
-    const auto names = game::models::names();
-    const std::string cur = config::get()->model;
-    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 14);
-    if (ImGui::BeginCombo("Model", shortModel(cur).c_str())) {
-        for (const auto& n : names) {
-            if (ImGui::Selectable(shortModel(n).c_str(), n == cur)) {
-                game::ghosts::requestModel(n);
-                config::change([n](config::Settings& c) { c.model = n; });
+// Colour swatches for the echo colour names (the game's own colours are shader parameters).
+ImVec4 swatch(const std::string& colour) {
+    struct C { const char* name; ImVec4 v; };
+    static const C kC[] = {{"Red", {0.85f, 0.15f, 0.15f, 1}},  {"Blue", {0.2f, 0.45f, 0.95f, 1}},
+                           {"Green", {0.25f, 0.8f, 0.3f, 1}},  {"Orange", {0.95f, 0.55f, 0.1f, 1}},
+                           {"Teal", {0.1f, 0.75f, 0.75f, 1}},  {"Yellow", {0.95f, 0.85f, 0.15f, 1}},
+                           {"Black", {0.08f, 0.08f, 0.1f, 1}}, {"White", {0.95f, 0.95f, 0.95f, 1}},
+                           {"Purple", {0.6f, 0.3f, 0.85f, 1}}, {"Pink", {0.95f, 0.45f, 0.7f, 1}}};
+    for (const C& c : kC)
+        if (colour == c.name) return c.v;
+    return ImVec4(0.6f, 0.6f, 0.65f, 1);
+}
+
+void setMyLook(uint32_t hash) {
+    net::setLook(hash);
+    const std::string look = config::lookName(hash);
+    config::change([look](config::Settings& c) { c.look = look; });
+}
+
+void myLookSection() {
+    ImGui::SeparatorText("Your look");
+    const auto cfg = config::get();
+    const uint32_t mine = config::lookHash(cfg->look);
+    const auto echoes = game::models::echoes();
+    if (ImGui::RadioButton("Faith", mine == 0)) setMyLook(0);
+    ImGui::SameLine();
+    if (ImGui::RadioButton("Ghost", mine != 0)) {
+        if (!mine && !echoes.empty()) setMyLook(game::models::defaultEcho());
+        else if (!mine) setMyLook(0xffffffffu); // chosen before the list is known: pick once it is
+    }
+    if (!mine) return;
+    if (echoes.empty()) {
+        ImGui::TextDisabled("The ghost styles load in free roam.");
+        return;
+    }
+    const game::models::Echo* cur = nullptr;
+    for (const auto& e : echoes)
+        if (e.hash == mine) cur = &e;
+    if (!cur) { // unknown hash (e.g. picked before the list loaded): take the default
+        const uint32_t d = game::models::defaultEcho();
+        setMyLook(d);
+        for (const auto& e : echoes)
+            if (e.hash == d) cur = &e;
+        if (!cur) return;
+    }
+    // Style, then the colours that style comes in.
+    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 9);
+    if (ImGui::BeginCombo("Style", cur->style.c_str())) {
+        std::string last;
+        for (const auto& e : echoes) {
+            if (e.style == last) continue;
+            last = e.style;
+            if (ImGui::Selectable(e.style.c_str(), e.style == cur->style)) {
+                // keep the colour if the new style has it
+                uint32_t pick = e.hash;
+                for (const auto& f : echoes)
+                    if (f.style == e.style && f.colour == cur->colour) pick = f.hash;
+                setMyLook(pick);
             }
         }
         ImGui::EndCombo();
     }
+    ImGui::SameLine();
+    for (const auto& e : echoes) {
+        if (e.style != cur->style) continue;
+        ImGui::PushID(static_cast<int>(e.hash));
+        const ImVec4 c = swatch(e.colour);
+        if (e.hash == cur->hash) ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 2.f);
+        if (ImGui::ColorButton(e.colour.c_str(), c, ImGuiColorEditFlags_NoTooltip | ImGuiColorEditFlags_NoAlpha,
+                               ImVec2(ImGui::GetFrameHeight(), ImGui::GetFrameHeight())))
+            setMyLook(e.hash);
+        if (e.hash == cur->hash) ImGui::PopStyleVar();
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", e.colour.c_str());
+        ImGui::PopID();
+        ImGui::SameLine();
+    }
+    ImGui::NewLine();
+}
+
+void lookSection() {
+    ImGui::SeparatorText("Other players");
     bool showNames = config::get()->showNames;
     if (ImGui::Checkbox("Names above players", &showNames))
         config::change([showNames](config::Settings& c) { c.showNames = showNames; });
@@ -190,6 +249,7 @@ void lookSection() {
     ImGui::SameLine();
     if (ImGui::Button("Hide ghosts")) game::ghosts::requestHideAll();
 }
+
 void controlsSection() {
     ImGui::SeparatorText("Controls");
     const auto cfg = config::get();
@@ -307,6 +367,7 @@ void draw(bool open) {
     ImGui::Begin(title, nullptr, ImGuiWindowFlags_NoCollapse);
     sessionSection();
     playersSection();
+    myLookSection();
     lookSection();
     controlsSection();
     ImGui::Spacing();

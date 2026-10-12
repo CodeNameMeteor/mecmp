@@ -142,13 +142,6 @@ void tick() {
     }
 }
 
-std::vector<std::string> names() {
-    std::vector<std::string> v{"faith"};
-    std::lock_guard<std::mutex> lock(g_m);
-    for (auto& m : g_models) v.push_back(m.name);
-    return v;
-}
-
 namespace {
 // Builds (or reuses) our customization from these pieces and unlocks and applies it to the ghost.
 bool applyPieces(void* ghost, std::vector<uintptr_t> visuals, uintptr_t unlockArray, uintptr_t vtableFrom,
@@ -257,17 +250,45 @@ std::vector<Echo> echoes() {
     return g_echoes;
 }
 
+// An echo look's colour and pattern are unlocks on the projection body. Some echo customizations
+// carry no body piece of their own; built on their own (ClearVisualState = 1) the ghost then had no
+// mesh at all and went invisible. Those get the projection body pieces (RunVis) under their unlocks.
 bool applyEcho(void* ghost, uint32_t hash) {
     Echo e;
+    std::vector<uintptr_t> visuals, base;
     {
         std::lock_guard<std::mutex> lock(g_m);
         auto it = std::find_if(g_echoes.begin(), g_echoes.end(), [hash](const Echo& x) { return x.hash == hash; });
         if (it == g_echoes.end()) return false;
         e = *it;
+        for (auto& m : g_models)
+            if (lower(m.name).find("projection/runvis") != std::string::npos) { visualsOf(m.ccd, base); break; }
     }
-    std::vector<uintptr_t> visuals;
     visualsOf(e.ccd, visuals);
-    return applyPieces(ghost, visuals, mem::readOr<uintptr_t>(e.ccd + 0x20), e.ccd, e.name, true);
+    const size_t own = visuals.size();
+    if (visuals.empty()) visuals = base;
+    if (visuals.empty()) { // no RunVis template seen: keep the projection pieces the ghost has now
+        std::vector<uintptr_t> cur;
+        if (readVisualSet(ghost, cur))
+            for (uintptr_t v : cur)
+                if (lower(assetName(v)).find("projection") != std::string::npos) visuals.push_back(v);
+    }
+    const uintptr_t unlocks = mem::readOr<uintptr_t>(e.ccd + 0x20);
+    MLOG("model: echo %s/%s: %llu own pieces, %llu used, %u unlocks", e.style.c_str(), e.colour.c_str(),
+         static_cast<unsigned long long>(own), static_cast<unsigned long long>(visuals.size()),
+         unlocks ? mem::readOr<uint32_t>(unlocks - 4) : 0u);
+    if (visuals.empty()) return false; // nothing to build a body from: leave the ghost as it is
+    return applyPieces(ghost, visuals, unlocks, e.ccd, e.name, true);
+}
+
+uint32_t defaultEcho() {
+    std::lock_guard<std::mutex> lock(g_m);
+    uint32_t any = 0;
+    for (const auto& e : g_echoes) {
+        if (_stricmp(e.style.c_str(), "RunVis") == 0 && _stricmp(e.colour.c_str(), "Red") == 0) return e.hash;
+        if (!any && _stricmp(e.colour.c_str(), "Black") != 0) any = e.hash;
+    }
+    return any ? any : (g_echoes.empty() ? 0 : g_echoes.front().hash);
 }
 
 // PamServerCustomizeProjectionCharacterEntity (time-trial markers; vtable 0x141c7ea80): +0x28 its data,

@@ -87,20 +87,33 @@ object's class, data and owner, so memory the game freed and reused for somethin
 called into, but the client thread can still destroy an object between that check and the call.
 Closing that window needs the client work moved to the client thread.
 
-## Models (`game/models.cpp`)
+## Looks (`game/models.cpp`)
 
-A look is the set of VisualUnlockAssets in a character's `ServerCharacterCustomizationComponent`.
-The mod builds its own `CustomizeCharacterData` (one group per piece, ClearVisualState = 1) and
-applies it with `character->vtbl[0x340]`; the look replicates to the client.
+A look is the set of VisualUnlockAssets in a character's `ServerCharacterCustomizationComponent`
+plus a CustomizeCharacterData's unlocks. The mod builds its own `CustomizeCharacterData` (one group
+per piece, the source's unlocks, ClearVisualState = 1) and applies it with `character->vtbl[0x340]`
+(`0x14336cf00`, args `{character, player = null, customize, skip = 0}`); the look replicates.
 
-- `faith`: the local player's current outfit (first-person `_1p` pieces dropped).
-- Others: any CustomizeCharacterData from a spawner template in the level (RunVis, enemies, ...).
-- `PamUseRunnersGhostShader` (character data +0xe8) is turned off while a normal model is built
-  (with the ghost shader on, normal meshes are invisible) and back on 3 s later, because the
-  game's own time-trial ghosts share that data.
-- Built customizations are cached per piece list and the cache is emptied on level change (pieces
-  are level data). A customization is never built without a vtable (taken from any template seen).
-- `vtbl[0x340]` arguments (0x14336cf00): `{character, player = null, customize, skip = 0}`.
+- **Faith**: the local player's current outfit (first-person `_1p` pieces dropped).
+- **Echo looks** (the game's runner-ghost styles x colours): the catalogue comes from a time-trial
+  marker's `PamServerCustomizeProjectionCharacterEntity` (vtable `0x141c7ea80`), found by a short memory
+  scan 20 s into a level: entity `+0x28` data, data `+0x20` `PamEchoCustomizationDefinitionsMeta`,
+  meta `+0x18` array of `{NameSid, DescriptionSid, TextureId, CustomizationData*, u32 CustomizationHash}`.
+  An echo look's colour is an unlock (an ObjectVariation on the projection shader), so the unlocks are
+  carried over. The hash is the game's own id for the look.
+- **Models**: any CustomizeCharacterData from a spawner template in the level (Faith variants, RunVis).
+- `PamUseRunnersGhostShader` (character data +0xe8) is turned off while a normal look is built
+  (with the ghost shader on, normal meshes are invisible) and back on 3 s later, because the game's own
+  time-trial ghosts share that data. Echo looks keep it on.
+- Built customizations are cached per (pieces, unlocks) and the cache and the echo list are emptied on
+  level change (level data).
+
+Each player picks their own look (menu *Your look*: Faith, or a ghost style and colour; `[player]
+look=` in mecmp.ini: `faith` or `echo:<hash>`) and sends it with their name. Every ghost shows its
+player's look; there is no override on the receiving side. A look the catalogue does not know yet shows
+as the default red ghost and is applied once the list is found. Some echo customizations carry no body
+piece of their own (only colour unlocks): with ClearVisualState those left the ghost without a mesh, so
+they are built on the RunVis body pieces. New picks default to red RunVis (easy to see). At most one look is applied per tick.
 
 ## Network (`net/`)
 
@@ -114,7 +127,7 @@ UDP, one socket. Sessions have one host and any number of joiners (up to 16).
   ip:port into a 10-character Crockford base32 code. The host forwards every joiner's packets
   unchanged to all other joiners, so only the host has to be reachable.
 - **Join**: send to the host only; everyone else's packets arrive through the host.
-- Packets: STATE ~30 Hz and HELLO (name) ~1 Hz. Remote players are keyed by the random session id
+- Packets: STATE ~30 Hz and HELLO (name and look: u32, 0 = Faith, else the echo hash) ~1 Hz. Remote players are keyed by the random session id
   in each packet. Pose compression: rotations smallest-three 32-bit, translations i16 at 1/1024 m,
   only for bones that changed since the last full packet (one per second); about 150 bytes.
 - Receivers buffer 16 snapshots per player and show them 120 ms in the past, blended. The sender's
@@ -139,7 +152,7 @@ until 40 m, fading out by 150 m, smaller with distance. Names are drawn through 
 ## Settings (`core/config.cpp`)
 
 `config::get()` returns a shared, immutable snapshot (a pointer copy, no string copies), so it is
-cheap to call every tick. Changes (menu, F8) are queued with
+cheap to call every tick. Changes (menu) are queued with
 `config::change()` and applied in order by the mod thread every 50 ms, which also writes
 `mecmp.ini`. No thread reads a setting while another writes it, and no file is written on the
 render or game thread.
@@ -157,7 +170,7 @@ render or game thread.
   controller-detection pointer (`0x142607db8`) is left alone. ImGui navigates the menu through its
   own XInput access.
 - The join code only reaches the clipboard through the menu's *Copy* button.
-- Developer hotkeys F7/F8/F9/F12 exist only with the CMake option `MECMP_DEBUG_KEYS`.
+- Developer hotkeys F7/F9/F12 exist only with the CMake option `MECMP_DEBUG_KEYS`.
 
 ## Logging
 

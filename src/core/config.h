@@ -21,9 +21,9 @@ struct Settings {
     float loopbackOffset = 3.0f;          // solo test: metres along world X the mirrored ghost stands
     // [player]
     std::string name = "Runner";
+    std::string look = "faith";           // how you look to others: faith, or echo:<hash> (a ghost style + colour)
     // [ghost]
     bool autoSpawn = true;
-    std::string model = "faith";          // "faith" or part of a model name (F8 cycles in game)
     // [ui]
     std::string menuKey = "INSERT";       // INSERT, HOME, END, DELETE, PAGEUP, PAGEDOWN, PAUSE or F1..F12
     std::string menuPad = "LS+RS";        // gamepad buttons held together, e.g. LS+RS or BACK+Y; empty = none
@@ -43,5 +43,9 @@ const std::wstring& dir(); // folder of mecmp.dll / mecmp.ini (with trailing bac
 void change(std::function<void(Settings&)> edit, bool persist = true);
 // Mod thread: applies queued changes in order and saves once if any asked for it.
 void applyPending();
+
+// "faith" -> 0, "echo:1a2b3c4d" -> 0x1a2b3c4d: the look sent to other players.
+uint32_t lookHash(const std::string& look);
+std::string lookName(uint32_t hash);
 
 } // namespace mecmp::config

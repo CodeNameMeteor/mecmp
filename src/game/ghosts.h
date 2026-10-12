@@ -39,8 +39,8 @@ void levelChanged(); // forget ghosts of the old level
 // Requests (executed on the next tick).
 void requestSpawnOrRefresh(); // F7: spawn missing ghosts now / re-apply the look; resumes auto spawning
 void requestHideAll();        // F12: hide all ghosts and pause auto spawning
-void requestNextModel();      // F8
-void requestModel(const std::string& name); // menu: use this model for everyone's ghost
+// Looks: each ghost shows its player's own look (sent with their name). Changes are picked up by the
+// tick; nothing to request.
 
 std::string status();
 // Players whose ghost is in the level and shown now (for name tags). Any thread.

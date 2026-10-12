@@ -54,6 +54,8 @@ struct Ghost {
     bool posing = false;
     DWORD posingSince = 0;        // when the current player started driving it
     float lastPos[3] = {0, 0, 0}; // where it was last driven
+    std::string lookKey;          // look applied now ("faith", "echo:<hash>" or a model name); empty = redo
+    DWORD lookTriedAt = 0;
     DWORD parkUntil = 0;          // while hidden: keep it parked below lastPos until then
 };
 
@@ -96,9 +98,7 @@ std::atomic<bool> g_paused{false};
 std::atomic<bool> g_enabled{true};
 std::mutex g_motionM;                  // guards g_motion (written by the game thread, read by status())
 std::map<uint32_t, MotionStats> g_motion; // per player: what the ghost was driven with, tick to tick
-std::atomic<bool> g_reqSpawn{false}, g_reqHide{false}, g_reqNextModel{false};
-std::mutex g_reqModelMutex;
-std::string g_reqModel; // set by the menu, applied on the game thread
+std::atomic<bool> g_reqSpawn{false}, g_reqHide{false};
 
 bool claimWindowOpen() {
     const DWORD at = g_pendingAt.load();
@@ -267,7 +267,26 @@ void fixClient(Ghost& g, const net::PlayerState& st) {
     }
 }
 
-void* spawnGhost(uint32_t peer, const std::string& name, const net::PlayerState& st) {
+// The look a player's ghost should have: the one they chose (sent in HELLO).
+std::string desiredLook(uint32_t playerLook) { return config::lookName(playerLook); }
+
+// Applies a look key to a ghost. An echo look the catalogue does not know (yet) shows as the default
+// red ghost meanwhile; returns false then, so it is tried again later.
+bool applyLook(void* ch, const std::string& key, std::string* used = nullptr) {
+    if (key.rfind("echo:", 0) == 0) {
+        if (models::applyEcho(ch, config::lookHash(key))) {
+            if (used) *used = key;
+            return true;
+        }
+        models::apply(ch, "RunVis", used);
+        return false;
+    }
+    if (models::apply(ch, key, used)) return true;
+    models::apply(ch, "RunVis", used);
+    return false;
+}
+
+void* spawnGhost(uint32_t peer, const std::string& name, uint32_t look, const net::PlayerState& st) {
     void* spawner = level::ghostSpawner();
     if (!level::spawnerAlive(spawner)) return nullptr;
     const uintptr_t sd = mem::readOr<uintptr_t>(reinterpret_cast<uintptr_t>(spawner) + Spawner_Data);
@@ -319,19 +338,22 @@ void* spawnGhost(uint32_t peer, const std::string& name, const net::PlayerState&
     }
     setTransform(ch, info.transform);
     std::string used;
-    if (!models::apply(ch, config::get()->model, &used) && !models::apply(ch, "RunVis", &used))
-        MLOG("ghost: no model could be applied (the ghost may be invisible)");
+    const std::string key = desiredLook(look);
+    const bool done = applyLook(ch, key, &used);
+    {
+        std::lock_guard<std::mutex> lock(g_m);
+        for (auto& g : g_ghosts)
+            if (g.character == ch) { g.lookKey = done ? key : std::string(); g.lookTriedAt = GetTickCount(); }
+    }
+    if (used.empty()) MLOG("ghost: no look could be applied (the ghost may be invisible)");
     MLOG("ghost: spawned for player %08x as '%s'", peer, used.c_str());
     return ch;
 }
 
-void applyModelToAll(const std::string& model) {
-    std::vector<void*> chars;
-    {
-        std::lock_guard<std::mutex> lock(g_m);
-        for (auto& g : g_ghosts) chars.push_back(g.character);
-    }
-    for (void* ch : chars) models::apply(ch, model);
+// Forget every ghost's applied look: the tick applies the right one again.
+void redoLooks() {
+    std::lock_guard<std::mutex> lock(g_m);
+    for (auto& g : g_ghosts) { g.lookKey.clear(); g.lookTriedAt = 0; }
 }
 
 void handleRequests() {
@@ -341,38 +363,6 @@ void handleRequests() {
         for (auto& g : g_ghosts) startHiding(g);
         MLOG("ghosts: hidden, automatic spawning paused (F7 resumes)");
     }
-    if (g_reqNextModel.exchange(false)) {
-        const auto names = models::names();
-        const std::string cur = config::get()->model;
-        size_t at = 0;
-        for (size_t i = 0; i < names.size(); ++i)
-            if (names[i] == cur) at = i;
-        void* probe = nullptr;
-        {
-            std::lock_guard<std::mutex> lock(g_m);
-            if (!g_ghosts.empty()) probe = g_ghosts.front().character;
-        }
-        for (size_t step = 1; step <= names.size(); ++step) { // next model that actually applies
-            const std::string& next = names[(at + step) % names.size()];
-            if (!probe || models::apply(probe, next)) {
-                config::change([next](config::Settings& c) { c.model = next; }, false);
-                applyModelToAll(next);
-                MLOG("ghosts: model '%s'", next.c_str());
-                break;
-            }
-        }
-    }
-    {
-        std::string want;
-        {
-            std::lock_guard<std::mutex> lock(g_reqModelMutex);
-            want.swap(g_reqModel);
-        }
-        if (!want.empty()) { // the menu also queued the config change
-            applyModelToAll(want);
-            MLOG("ghosts: model '%s'", want.c_str());
-        }
-    }
     if (g_reqSpawn.exchange(false)) {
         if (g_paused.exchange(false)) MLOG("ghosts: automatic spawning resumed");
         {
@@ -380,7 +370,7 @@ void handleRequests() {
             for (auto& g : g_ghosts) g.hidden = false, g.visibleCalls = 0; // show again (tick re-asserts)
             g_lastSpawnAt = 0;
         }
-        applyModelToAll(config::get()->model); // and refresh their look
+        redoLooks(); // and refresh their look
     }
 }
 } // namespace
@@ -461,7 +451,7 @@ void setEnabled(bool enabled) { g_enabled = enabled; }
 
 namespace {
 // A remote player that is present now (packets newer than kHideAfterMs).
-struct Present { uint32_t id; std::string name; uint32_t ageMs; };
+struct Present { uint32_t id; std::string name; uint32_t ageMs; uint32_t look; };
 
 bool isPresent(const std::vector<Present>& present, uint32_t id) {
     for (const auto& p : present)
@@ -484,6 +474,8 @@ bool reuseFreeGhost(const Present& p, const std::vector<Present>& present) {
     pick->name = p.name;
     pick->posing = false;
     pick->posingSince = 0;
+    pick->lookKey.clear(); // the new player's own look
+    pick->lookTriedAt = 0;
     pick->visibleCalls = 0;
     pick->hidden = true;               // the tick shows it again on its next pass
     pick->clientCharAt = GetTickCount();
@@ -520,7 +512,7 @@ void tick(uint64_t tick, uint64_t ticksInLevel) {
     models::tick();
     std::vector<Present> players; // present now
     for (const auto& r : net::remotes(kHideAfterMs))
-        if (r.ageMs < kHideAfterMs) players.push_back({r.id, r.name, r.ageMs});
+        if (r.ageMs < kHideAfterMs) players.push_back({r.id, r.name, r.ageMs, r.look});
 
     // Forget ghosts the game destroyed. The city-ghost spawner sometimes takes a ghost back (to put
     // its own city ghost there); the ghost entity lives on and keeps working, so keep driving it.
@@ -562,7 +554,7 @@ void tick(uint64_t tick, uint64_t ticksInLevel) {
             uint32_t age = 0;
             if (!net::remoteState(p.id, st, age)) continue;
             g_lastSpawnAt = GetTickCount();
-            spawnGhost(p.id, p.name, st);
+            spawnGhost(p.id, p.name, p.look, st);
         }
     }
 
@@ -605,6 +597,27 @@ void tick(uint64_t tick, uint64_t ticksInLevel) {
                 }
             }
         }
+        // The look: the player's own choice or our override; applied again when it changes. At most one
+        // apply per tick (it rebuilds meshes), and a failed one is retried after 2 s.
+        bool lookChanged = false;
+        static DWORD lastLookApply = 0;
+        if (present) {
+            uint32_t look = 0;
+            for (const auto& p : players)
+                if (p.id == g.peer) look = p.look;
+            const std::string want = desiredLook(look);
+            const DWORD nowTick = GetTickCount();
+            if (want != g.lookKey && nowTick - g.lookTriedAt > 2000 && nowTick != lastLookApply) {
+                lastLookApply = nowTick;
+                g.lookTriedAt = nowTick;
+                std::string used;
+                if (applyLook(g.character, want, &used)) {
+                    g.lookKey = want;
+                    MLOG("ghost: player %08x now looks like '%s'", g.peer, used.c_str());
+                }
+                lookChanged = true;
+            }
+        }
         if (have) {
             {
                 std::lock_guard<std::mutex> lock(g_motionM);
@@ -624,6 +637,7 @@ void tick(uint64_t tick, uint64_t ticksInLevel) {
         if (live && live->peer == g.peer) {
             live->posing = g.posing;
             live->posingSince = g.posingSince;
+            if (lookChanged) { live->lookKey = g.lookKey; live->lookTriedAt = g.lookTriedAt; }
             memcpy(live->lastPos, g.lastPos, sizeof(live->lastPos));
             if (visibilityChanged) { live->hidden = g.hidden; live->visibleCalls = g.visibleCalls; live->parkUntil = g.parkUntil; }
             else if (have) live->parkUntil = 0;
@@ -642,11 +656,7 @@ void levelChanged() {
 
 void requestSpawnOrRefresh() { g_reqSpawn = true; }
 void requestHideAll() { g_reqHide = true; }
-void requestNextModel() { g_reqNextModel = true; }
-void requestModel(const std::string& name) {
-    std::lock_guard<std::mutex> lock(g_reqModelMutex);
-    g_reqModel = name;
-}
+
 
 std::vector<uint32_t> shownPeers() {
     std::vector<uint32_t> v;

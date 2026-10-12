@@ -245,6 +245,10 @@ void lookSection() {
     bool showNotices = config::get()->showNotices;
     if (ImGui::Checkbox("Join/leave notices", &showNotices))
         config::change([showNotices](config::Settings& c) { c.showNotices = showNotices; });
+    bool showChat = config::get()->showChat;
+    if (ImGui::Checkbox("Chat", &showChat)) config::change([showChat](config::Settings& c) { c.showChat = showChat; });
+    ImGui::SameLine();
+    ImGui::TextDisabled("(%s to type)", config::get()->chatKey.c_str());
     if (ImGui::Button("Show ghosts")) game::ghosts::requestSpawnOrRefresh();
     ImGui::SameLine();
     if (ImGui::Button("Hide ghosts")) game::ghosts::requestHideAll();

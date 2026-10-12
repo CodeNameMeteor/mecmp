@@ -29,6 +29,8 @@ struct Settings {
     std::string menuPad = "LS+RS";        // gamepad buttons held together, e.g. LS+RS or BACK+Y; empty = none
     bool showNames = true;                // names above other players' ghosts
     bool showNotices = true;              // "<name> joined / left" at the top of the screen
+    bool showChat = true;                 // chat messages bottom-left
+    std::string chatKey = "T";            // opens the chat line: a letter, ENTER, or a menu key name
     // [debug]
     bool verbose = false;
     bool ignoreBuildCheck = false;        // run even if the game build check fails (for testing a new build)

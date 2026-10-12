@@ -281,14 +281,22 @@ bool applyEcho(void* ghost, uint32_t hash) {
     return applyPieces(ghost, visuals, unlocks, e.ccd, e.name, true);
 }
 
+// Only the RunVis look renders in free roam: every other style is a separate projection body mesh
+// with a material variation (MeshAndVariationPair -> ObjectVariation on FX_SS_Projection_<Style>),
+// which is not loaded there; applied, the ghost shows nothing. Tested with every style, with and
+// without the ghost shader flag.
+bool echoRenders(uint32_t hash) {
+    std::lock_guard<std::mutex> lock(g_m);
+    for (const auto& e : g_echoes)
+        if (e.hash == hash) return _stricmp(e.style.c_str(), "RunVis") == 0;
+    return false;
+}
+
 uint32_t defaultEcho() {
     std::lock_guard<std::mutex> lock(g_m);
-    uint32_t any = 0;
-    for (const auto& e : g_echoes) {
-        if (_stricmp(e.style.c_str(), "RunVis") == 0 && _stricmp(e.colour.c_str(), "Red") == 0) return e.hash;
-        if (!any && _stricmp(e.colour.c_str(), "Black") != 0) any = e.hash;
-    }
-    return any ? any : (g_echoes.empty() ? 0 : g_echoes.front().hash);
+    for (const auto& e : g_echoes)
+        if (_stricmp(e.style.c_str(), "RunVis") == 0) return e.hash;
+    return g_echoes.empty() ? 0 : g_echoes.front().hash;
 }
 
 // PamServerCustomizeProjectionCharacterEntity (time-trial markers; vtable 0x141c7ea80): +0x28 its data,

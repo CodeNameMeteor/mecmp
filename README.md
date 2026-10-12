@@ -17,7 +17,7 @@ Status: experimental. Ghosts are visual only (no collision).
 
 **In game, press INSERT, or click both sticks (LS+RS) on a gamepad,** for the MECMP menu: host a
 session, paste a join code and join, set your name, see who is connected, pick your own look (Faith,
-or any of the game's ghost styles in any colour; everyone else sees you that way). Other players' names float above their ghosts (*Names above players* in the menu turns
+or the game's runner ghost; everyone else sees you that way). Other players' names float above their ghosts (*Names above players* in the menu turns
 them off), and a short notice shows when someone joins or leaves (*Join/leave notices*). The player
 list shows each player's connection: *good*, or the share of their updates that did not arrive. Press **T** to
 chat: type a line and press Enter (Escape cancels); messages show bottom-left for a while. The menu works with mouse, keyboard or gamepad; while it is open the game does not see the

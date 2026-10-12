@@ -57,6 +57,8 @@ constexpr const char* kDefaultIni =
     "menu_pad=LS+RS\r\n"
     "; 1 = show player names above their ghosts\r\n"
     "show_names=1\r\n"
+    "; 1 = show a short notice when a player joins or leaves\r\n"
+    "show_notices=1\r\n"
     "\r\n"
     "[debug]\r\n"
     "; 1 = detailed diagnostic log (for bug reports)\r\n"
@@ -104,6 +106,7 @@ void load(const std::wstring& dir) {
     s.menuKey = readString(ini, L"ui", L"menu_key", "INSERT");
     s.menuPad = readString(ini, L"ui", L"menu_pad", "LS+RS");
     s.showNames = readInt(ini, L"ui", L"show_names", 1) != 0;
+    s.showNotices = readInt(ini, L"ui", L"show_notices", 1) != 0;
     s.verbose = readInt(ini, L"debug", L"verbose", 0) != 0;
     log::verbose = s.verbose;
     s.ignoreBuildCheck = readInt(ini, L"debug", L"ignore_build_check", 0) != 0;
@@ -156,6 +159,7 @@ void applyPending() {
     put(L"ui", L"menu_key", snapshot->menuKey);
     put(L"ui", L"menu_pad", snapshot->menuPad);
     put(L"ui", L"show_names", snapshot->showNames ? "1" : "0");
+    put(L"ui", L"show_notices", snapshot->showNotices ? "1" : "0");
     MLOG("config: saved");
 }
 

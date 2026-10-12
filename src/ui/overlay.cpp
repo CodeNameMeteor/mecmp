@@ -20,6 +20,7 @@
 #include "ui/gamepad.h"
 #include "ui/menu.h"
 #include "ui/nametags.h"
+#include "ui/notices.h"
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND, UINT, WPARAM, LPARAM);
 
@@ -215,6 +216,7 @@ HRESULT STDMETHODCALLTYPE presentHook(IDXGISwapChain* sc, UINT sync, UINT flags)
         if (g_justOpened.exchange(false)) ImGui::SetWindowFocus("###mecmp");
         ImGui::GetIO().MouseDrawCursor = g_open.load();
         nametags::draw();
+        notices::draw();
         menu::draw(g_open.load());
         ImGui::Render();
         g_context->OMSetRenderTargets(1, &g_rtv, nullptr);

@@ -44,6 +44,7 @@ add_library(mecmp SHARED
   src/ui/menu.cpp
   src/ui/gamepad.cpp
   src/ui/nametags.cpp
+  src/ui/notices.cpp
   third_party/imgui/imgui.cpp
   third_party/imgui/imgui_draw.cpp
   third_party/imgui/imgui_tables.cpp

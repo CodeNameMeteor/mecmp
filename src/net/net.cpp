@@ -61,6 +61,7 @@ struct Remote {
     uint32_t lastTime = 0;
     int nameLogs = 0;         // name changes logged for this player (at most kMaxNameLogs)
     proto::ClockUnwrap clock; // sender's timestamps without the 49-day wrap
+    proto::LossWindow loss;
     Snap snaps[kSnapCount];
     int head = 0, fill = 0;
 };
@@ -307,6 +308,8 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
     }
     // Sequence numbers restart when a player restarts the game: accept a large backwards jump.
     if (r.haveSeq && h.seq <= r.lastSeq && r.lastSeq - h.seq < 1000) return;
+    const uint32_t gap = r.haveSeq && h.seq > r.lastSeq ? h.seq - r.lastSeq - 1 : 0;
+    r.loss.add(nowMs(), gap < 1000 ? gap : 0); // a bigger jump is a restart, not loss
     r.lastSeq = h.seq;
     r.haveSeq = true;
     ++g_recv;
@@ -645,7 +648,7 @@ std::vector<RemoteInfo> remotes(uint32_t maxAgeMs) {
     for (const auto& kv : g_remotes) {
         const Remote& r = kv.second;
         if (!r.fill || now - r.lastTick > maxAgeMs) continue;
-        v.push_back({r.id, r.name, r.loopback, now - r.lastTick});
+        v.push_back({r.id, r.name, r.loopback, now - r.lastTick, r.loss.percent(nowMs())});
     }
     return v;
 }

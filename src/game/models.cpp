@@ -24,7 +24,17 @@ std::vector<Echo> g_echoes; // the game's echo (runner ghost) look catalogue, gu
 // CustomizeCharacterData vtable (in the game image, so valid in every level), from any template seen.
 uintptr_t g_ccdVtable = 0;
 uintptr_t g_shaderData = 0;   // ghost character data whose ghost-shader flag we switched off
+uintptr_t g_shaderDataType = 0; // its first word when we did (checked before writing it back)
 DWORD g_shaderRestoreAt = 0;  // when to switch it back on (game thread)
+
+// Switches the shared ghost-shader flag back on. Every projection character uses that data (the
+// game's own time-trial ghosts, the main menu's "Your Echo" preview), so it must never stay off.
+void restoreShaderFlag() {
+    if (g_shaderData && mem::readOr<uintptr_t>(g_shaderData) == g_shaderDataType)
+        poke<uint8_t>(g_shaderData + CharData_GhostShader, 1);
+    g_shaderData = 0;
+    g_shaderRestoreAt = 0;
+}
 
 std::string lower(std::string s) {
     for (auto& c : s) c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
@@ -130,16 +140,14 @@ void reset() {
     g_models.clear();
     g_cache.clear();
     g_echoes.clear(); // level data may go with the level: found again by findEchoes()
-    g_shaderData = 0;
-    g_shaderRestoreAt = 0;
+    // A level change within the 3 s after a Faith look used to leave the flag off for good, and the
+    // main menu's "Your Echo" preview (also a projection character) then drew wrongly.
+    restoreShaderFlag();
 }
 
 void tick() {
-    if (g_shaderData && g_shaderRestoreAt && static_cast<int32_t>(GetTickCount() - g_shaderRestoreAt) >= 0) {
-        poke<uint8_t>(g_shaderData + CharData_GhostShader, 1);
-        g_shaderData = 0;
-        g_shaderRestoreAt = 0;
-    }
+    if (g_shaderData && g_shaderRestoreAt && static_cast<int32_t>(GetTickCount() - g_shaderRestoreAt) >= 0)
+        restoreShaderFlag();
 }
 
 namespace {
@@ -181,6 +189,7 @@ bool applyPieces(void* ghost, std::vector<uintptr_t> visuals, uintptr_t unlockAr
             if (cur != want) poke(data + CharData_GhostShader, want);
             if (!ghostShader) {
                 g_shaderData = data;
+                g_shaderDataType = mem::readOr<uintptr_t>(data);
                 g_shaderRestoreAt = GetTickCount() + 3000;
             }
         }

@@ -29,7 +29,6 @@ struct PlayerState {
 struct RemoteInfo {
     uint32_t id = 0;        // the remote player's session id
     std::string name;
-    std::string address;
     bool loopback = false;  // our own packets (solo test)
     uint32_t ageMs = 0;     // since the last state arrived
 };

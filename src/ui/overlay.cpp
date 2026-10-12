@@ -133,7 +133,10 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
     if (msg == WM_DESTROY && hwnd == g_window) {
         if (auto fn = g_onDestroyed.exchange(nullptr)) fn();
     }
-    if (msg == WM_KEYDOWN && static_cast<int>(w) == g_toggleKey.load() && !(l & (1 << 30)) && !g_keyCapture.load()) {
+    // Only the menu key toggles the menu, never Escape: Escape reaches ImGui below (it cancels a key
+    // capture and closes combo boxes) and nothing else. The menu has no close button by design.
+    if (msg == WM_KEYDOWN && static_cast<int>(w) != VK_ESCAPE && static_cast<int>(w) == g_toggleKey.load() &&
+        !(l & (1 << 30)) && !g_keyCapture.load()) {
         toggleMenu();
         return 0;
     }
@@ -190,7 +193,7 @@ bool init(IDXGISwapChain* sc) {
     ImGui_ImplDX11_Init(g_device, g_context);
     g_origWndProc = reinterpret_cast<WNDPROC>(SetWindowLongPtrW(g_window, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(&wndProc)));
     MLOG("ui: overlay ready (%ldx%ld). Press %s in game for the MECMP menu.", rc.right - rc.left, rc.bottom - rc.top,
-         config::get().menuKey.c_str());
+         config::get()->menuKey.c_str());
     return true;
 }
 
@@ -255,8 +258,8 @@ void setKeyCapture(bool on) { g_keyCapture = on; }
 bool menuOpen() { return g_open.load(); }
 
 bool install() {
-    g_toggleKey = keyFromName(config::get().menuKey);
-    gamepad::setBinding(gamepad::parse(config::get().menuPad));
+    g_toggleKey = keyFromName(config::get()->menuKey);
+    gamepad::setBinding(gamepad::parse(config::get()->menuPad));
     // A throwaway device + swap chain on a hidden window, only to find DXGI's swap-chain vtable.
     WNDCLASSEXW wc{};
     wc.cbSize = sizeof(wc);

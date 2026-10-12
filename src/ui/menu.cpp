@@ -72,9 +72,9 @@ std::string shortModel(const std::string& m) {
 std::string enteredName() { return g_name[0] ? std::string(g_name) : std::string("Runner"); }
 
 void startSession(const std::string& join) {
-    const config::Settings cfg = config::get();
+    const auto cfg = config::get();
     const std::string name = enteredName();
-    net::start(cfg.port, join, cfg.loopbackOffset, name);
+    net::start(cfg->port, join, cfg->loopbackOffset, name);
     config::change([name, join](config::Settings& c) { c.name = name; c.join = join; });
 }
 
@@ -101,7 +101,7 @@ void sessionSection() {
             if (ImGui::SmallButton("Copy##lan")) copyToClipboard(lan);
         }
     } else {
-        ImGui::Text("Joined %s", config::get().join.c_str());
+        ImGui::Text("Joined %s", config::get()->join.c_str());
         ImGui::SameLine();
         if (net::connectedToHost()) ImGui::TextColored(ImVec4(0.4f, 1.f, 0.4f, 1.f), "connected");
         else ImGui::TextColored(ImVec4(1.f, 0.5f, 0.3f, 1.f), "waiting for the host...");
@@ -132,7 +132,7 @@ void sessionSection() {
     if (ImGui::Button("Join")) startSession(g_code);
     ImGui::EndDisabled();
     if (noCode && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Enter the host's join code first.");
-    if (ImGui::Button("Solo test (mirror me)")) startSession("127.0.0.1:" + std::to_string(config::get().port));
+    if (ImGui::Button("Solo test (mirror me)")) startSession("127.0.0.1:" + std::to_string(config::get()->port));
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Test on your own PC: a ghost copies your moves 3 m away (it does not turn with you; look around for it).");
 }
 
@@ -159,7 +159,7 @@ void playersSection() {
 void lookSection() {
     ImGui::SeparatorText("How other players look");
     const auto names = game::models::names();
-    const std::string cur = config::get().model;
+    const std::string cur = config::get()->model;
     ImGui::SetNextItemWidth(ImGui::GetFontSize() * 14);
     if (ImGui::BeginCombo("Model", shortModel(cur).c_str())) {
         for (const auto& n : names) {
@@ -170,7 +170,7 @@ void lookSection() {
         }
         ImGui::EndCombo();
     }
-    bool showNames = config::get().showNames;
+    bool showNames = config::get()->showNames;
     if (ImGui::Checkbox("Names above players", &showNames))
         config::change([showNames](config::Settings& c) { c.showNames = showNames; });
     if (ImGui::Button("Show ghosts")) game::ghosts::requestSpawnOrRefresh();
@@ -179,7 +179,7 @@ void lookSection() {
 }
 void controlsSection() {
     ImGui::SeparatorText("Controls");
-    const config::Settings cfg = config::get();
+    const auto cfg = config::get();
     // Keyboard key that opens the menu.
     ImGui::AlignTextToFramePadding();
     ImGui::Text("Menu key:");
@@ -202,7 +202,7 @@ void controlsSection() {
         }
         if (!g_keyCapture) ui::setKeyCapture(false);
     } else {
-        ImGui::Text("%s", cfg.menuKey.c_str());
+        ImGui::Text("%s", cfg->menuKey.c_str());
         ImGui::SameLine();
         if (ImGui::SmallButton("Change##key")) {
             g_keyCapture = true;
@@ -225,7 +225,7 @@ void controlsSection() {
             if (ImGui::SmallButton("Cancel##pad")) gamepad::cancelCapture();
         }
     } else {
-        const uint16_t bits = gamepad::parse(cfg.menuPad);
+        const uint16_t bits = gamepad::parse(cfg->menuPad);
         ImGui::Text("%s", bits ? gamepad::format(bits).c_str() : "none");
         ImGui::SameLine();
         if (ImGui::SmallButton("Change##pad")) gamepad::beginCapture();
@@ -269,8 +269,8 @@ void applyStyle() {
 void draw(bool open) {
     if (!g_inited) {
         g_inited = true;
-        snprintf(g_name, sizeof(g_name), "%s", config::get().name.c_str());
-        snprintf(g_code, sizeof(g_code), "%s", config::get().join.c_str());
+        snprintf(g_name, sizeof(g_name), "%s", config::get()->name.c_str());
+        snprintf(g_code, sizeof(g_code), "%s", config::get()->join.c_str());
         g_hintUntil = GetTickCount() + 10000;
     }
     if (!open) {
@@ -280,7 +280,7 @@ void draw(bool open) {
             ImGui::SetNextWindowBgAlpha(0.6f);
             ImGui::Begin("##hint", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
                                                 ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav);
-            ImGui::Text("MECMP %s: press %s for the multiplayer menu", app::kVersion, openKeys(config::get()).c_str());
+            ImGui::Text("MECMP %s: press %s for the multiplayer menu", app::kVersion, openKeys(*config::get()).c_str());
             ImGui::End();
         }
         return;
@@ -297,7 +297,7 @@ void draw(bool open) {
     lookSection();
     controlsSection();
     ImGui::Spacing();
-    ImGui::TextDisabled("%s closes this menu", openKeys(config::get()).c_str());
+    ImGui::TextDisabled("%s closes this menu", openKeys(*config::get()).c_str());
     ImGui::End();
 }
 

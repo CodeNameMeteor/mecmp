@@ -8,6 +8,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <string>
 
 namespace mecmp::config {
@@ -34,7 +35,8 @@ struct Settings {
 
 // Reads (and creates if missing) mecmp.ini in `dir`. Call once at startup.
 void load(const std::wstring& dir);
-Settings get();            // a snapshot (copy); cheap enough to call per tick
+// The current settings. The snapshot never changes: copying the pointer is cheap enough for every tick.
+std::shared_ptr<const Settings> get();
 const std::wstring& dir(); // folder of mecmp.dll / mecmp.ini (with trailing backslash)
 // Queues a change (any thread). `persist`: also write the user-editable settings to mecmp.ini.
 void change(std::function<void(Settings&)> edit, bool persist = true);

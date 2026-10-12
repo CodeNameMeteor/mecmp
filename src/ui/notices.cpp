@@ -3,6 +3,7 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <cfloat>
 #include <deque>
 #include <string>
 #include <unordered_map>

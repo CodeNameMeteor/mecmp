@@ -1,6 +1,7 @@
 #include "ui/nametags.h"
 
 #include <algorithm>
+#include <cfloat>
 
 #include "core/config.h"
 #include "game/camera.h"

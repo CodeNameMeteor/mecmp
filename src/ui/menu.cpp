@@ -191,7 +191,8 @@ void myLookSection() {
     ImGui::SeparatorText("Your look");
     const auto cfg = config::get();
     const uint32_t mine = config::lookHash(cfg->look);
-    const auto echoes = game::models::echoes();
+    const auto echoesList = game::models::echoes();
+    const auto& echoes = *echoesList;
     if (ImGui::RadioButton("Faith", mine == 0)) setMyLook(0);
     ImGui::SameLine();
     if (ImGui::RadioButton("Ghost", mine != 0)) {

@@ -105,6 +105,10 @@ void load(const std::wstring& dir) {
     s.name.resize(net::protocol::utf8PrefixLength(s.name, net::protocol::kMaxNameBytes)); // what goes on the wire
     s.autoSpawn = readInt(ini, L"ghost", L"auto_spawn", 1) != 0;
     s.look = readString(ini, L"player", L"look", "faith");
+    // The [ghost] model setting is gone: each player picks their own look ([player] look=) in the menu.
+    const std::string legacyModel = readString(ini, L"ghost", L"model", "");
+    if (!legacyModel.empty() && legacyModel != "faith")
+        MLOG("config: [ghost] model=%s is no longer used; pick your look in the menu", legacyModel.c_str());
     s.menuKey = readString(ini, L"ui", L"menu_key", "INSERT");
     s.menuPad = readString(ini, L"ui", L"menu_pad", "LS+RS");
     s.showNames = readInt(ini, L"ui", L"show_names", 1) != 0;

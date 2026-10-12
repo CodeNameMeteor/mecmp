@@ -47,7 +47,6 @@ constexpr uintptr_t Fn_ClientReplayPlayerFactory = 0x143949050;
 // The updater objects that run every client replay component's update (created with the first
 // component; two of them, one per update pass): pointers at these globals, their vtable, and its
 // slot 2, PamClientReplayPlayerComponent_updateAll (calls ..._update, 0x1439501a0, per component).
-constexpr uintptr_t Data_ClientReplayUpdaters = 0x142578588; // 2 pointers
 constexpr uintptr_t Vtbl_ClientReplayUpdater = 0x141c49190;
 constexpr size_t Vtbl_ClientReplayUpdateAll = 0x10;
 constexpr uintptr_t Fn_ClientReplayUpdateAll = 0x14394da40;

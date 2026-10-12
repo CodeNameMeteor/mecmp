@@ -133,7 +133,7 @@ void monitorLoop() {
         }
         // The ghost look list (styles x colours) comes from the level's time-trial markers: look for it
         // 20 s into a level, and again after 1 and 3 minutes if there was none yet.
-        if (world && echoTries < 3 && GetTickCount() - levelSince > nextEchoAt && game::models::echoes().empty()) {
+        if (world && echoTries < 3 && GetTickCount() - levelSince > nextEchoAt && game::models::echoes()->empty()) {
             ++echoTries;
             if (game::models::findEchoes()) fixMyLook();
             nextEchoAt = 20000 + 60000u * ((1u << echoTries) - 1);

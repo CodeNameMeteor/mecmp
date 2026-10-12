@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <map>
+#include <memory>
 #include <mutex>
 
 #include "core/log.h"
@@ -20,7 +21,9 @@ std::vector<Model> g_models;
 // Customizations we built, by piece list. Pieces are level data, so this is emptied when the level
 // changes (a new level can put other assets at the same addresses). The blocks are never freed.
 std::map<std::pair<std::vector<uintptr_t>, uintptr_t>, uintptr_t> g_cache; // (pieces, unlocks) -> ours
-std::vector<Echo> g_echoes; // the game's echo (runner ghost) look catalogue, guarded by g_m
+// The game's echo (runner ghost) look catalogue. Published as a whole and never edited in place, so the
+// menu can keep a pointer to it while it is replaced.
+std::shared_ptr<const std::vector<Echo>> g_echoes = std::make_shared<const std::vector<Echo>>();
 // CustomizeCharacterData vtable (in the game image, so valid in every level), from any template seen.
 uintptr_t g_ccdVtable = 0;
 uintptr_t g_shaderData = 0;   // ghost character data whose ghost-shader flag we switched off
@@ -139,7 +142,7 @@ void reset() {
     std::lock_guard<std::mutex> lock(g_m);
     g_models.clear();
     g_cache.clear();
-    g_echoes.clear(); // level data may go with the level: found again by findEchoes()
+    g_echoes = std::make_shared<const std::vector<Echo>>(); // level data may go with the level: found again by findEchoes()
     // A level change within the 3 s after a Faith look used to leave the flag off for good, and the
     // main menu's "Your Echo" preview (also a projection character) then drew wrongly.
     restoreShaderFlag();
@@ -254,7 +257,7 @@ bool apply(void* ghost, const std::string& wanted, std::string* usedName) {
     return true;
 }
 
-std::vector<Echo> echoes() {
+std::shared_ptr<const std::vector<Echo>> echoes() {
     std::lock_guard<std::mutex> lock(g_m);
     return g_echoes;
 }
@@ -267,8 +270,9 @@ bool applyEcho(void* ghost, uint32_t hash) {
     std::vector<uintptr_t> visuals, base;
     {
         std::lock_guard<std::mutex> lock(g_m);
-        auto it = std::find_if(g_echoes.begin(), g_echoes.end(), [hash](const Echo& x) { return x.hash == hash; });
-        if (it == g_echoes.end()) return false;
+        const auto& list = *g_echoes;
+        auto it = std::find_if(list.begin(), list.end(), [hash](const Echo& x) { return x.hash == hash; });
+        if (it == list.end()) return false;
         e = *it;
         for (auto& m : g_models)
             if (lower(m.name).find("projection/runvis") != std::string::npos) { visualsOf(m.ccd, base); break; }
@@ -296,16 +300,22 @@ bool applyEcho(void* ghost, uint32_t hash) {
 // without the ghost shader flag.
 bool echoRenders(uint32_t hash) {
     std::lock_guard<std::mutex> lock(g_m);
-    for (const auto& e : g_echoes)
+    for (const auto& e : *g_echoes)
         if (e.hash == hash) return _stricmp(e.style.c_str(), "RunVis") == 0;
     return false;
 }
 
 uint32_t defaultEcho() {
     std::lock_guard<std::mutex> lock(g_m);
-    for (const auto& e : g_echoes)
-        if (_stricmp(e.style.c_str(), "RunVis") == 0) return e.hash;
-    return g_echoes.empty() ? 0 : g_echoes.front().hash;
+    uint32_t firstRunVis = 0;
+    const auto& list = *g_echoes;
+    for (const auto& e : list)
+        if (_stricmp(e.style.c_str(), "RunVis") == 0) {
+            if (_stricmp(e.colour.c_str(), "Red") == 0) return e.hash;
+            if (!firstRunVis) firstRunVis = e.hash;
+        }
+    if (firstRunVis) return firstRunVis;
+    return list.empty() ? 0 : list.front().hash;
 }
 
 // PamServerCustomizeProjectionCharacterEntity (time-trial markers; vtable 0x141c7ea80): +0x28 its data,
@@ -314,7 +324,7 @@ uint32_t defaultEcho() {
 bool findEchoes() {
     {
         std::lock_guard<std::mutex> lock(g_m);
-        if (!g_echoes.empty()) return true;
+        if (!g_echoes->empty()) return true;
     }
     const uintptr_t vt = rva(Vtbl_PamServerCustomizeProjectionCharacterEntity);
     std::vector<uint8_t> buf(4 << 20);
@@ -359,7 +369,7 @@ bool findEchoes() {
     MLOG("model: %llu ghost looks found (%.1f s), e.g. %s = %08x", static_cast<unsigned long long>(found.size()),
          (GetTickCount() - start) / 1000.0, found.front().name.c_str(), found.front().hash);
     std::lock_guard<std::mutex> lock(g_m);
-    g_echoes.swap(found);
+    g_echoes = std::make_shared<const std::vector<Echo>>(std::move(found));
     return true;
 }
 

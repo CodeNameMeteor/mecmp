@@ -43,6 +43,11 @@ Developer builds (CMake option `MECMP_DEBUG_KEYS`, on by default, off for releas
 | F7 | Spawn missing ghosts now / show them again / refresh their look |
 | F12 | Hide all ghosts and pause automatic spawning (F7 resumes) |
 | F9 | Write a status line to `mecmp.log` (with the ghost update's cost) |
+| F10 | Developer: log the camera matrices (used to find the name tags' camera; needs a level) |
+
+Versions: a player on this version and one on an older version can still play together. An older
+version does not know player looks and shows every player with its own `model=` setting, so the looks
+you picked may not show there.
 
 Solo test: *Solo test* in the menu, or `join=127.0.0.1:47800`. Your own packets come back and a
 ghost copies your moves 3 m away along the world X axis (`loopback_offset`); it stays put while you

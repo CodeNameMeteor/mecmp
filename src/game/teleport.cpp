@@ -16,7 +16,11 @@ namespace {
 constexpr DWORD kFadeMs = 350;      // fade to black, and back
 constexpr DWORD kHoldMs = 1200;     // black while the target area streams in
 constexpr float kFallMargin = 2.f;  // below the target by this much during the hold: placed again
-constexpr int kMaxRetries = 6;
+constexpr int kMaxRetries = 3;
+constexpr float kNearTarget = 30.f; // further than this (horizontally): respawned elsewhere, leave it
+// The screen must never stay black: a phase running this much longer than planned (the server tick
+// stopped, e.g. while the game handles a death) ends the whole thing, drawn or not.
+constexpr DWORD kStuckMs = 4000;
 constexpr uint32_t kMaxAgeMs = 2000; // the target player must have been heard from this recently
 
 enum Phase : int { Idle, FadeOut, Hold, FadeIn };
@@ -25,6 +29,7 @@ std::atomic<DWORD> g_phaseAt{0};
 std::atomic<uint32_t> g_peer{0};
 std::atomic<int> g_available{-1}; // -1 unchecked, 0 no, 1 yes
 LinearTransform g_target{};       // game thread only
+void* g_character = nullptr;      // the character that was moved (game thread)
 int g_retries = 0;
 
 void setPhase(Phase p) {
@@ -78,7 +83,15 @@ bool available() { return g_available.load() != 0; }
 float fadeAlpha() {
     const int p = g_phase.load();
     if (p == Idle) return 0.f;
-    const float t = static_cast<float>(GetTickCount() - g_phaseAt.load());
+    const DWORD since = GetTickCount() - g_phaseAt.load();
+    const DWORD planned = p == Hold ? kHoldMs : kFadeMs;
+    if (since > planned + kStuckMs) { // nothing moved it on: give the screen back
+        int expected = p;
+        if (g_phase.compare_exchange_strong(expected, Idle))
+            MLOG("teleport: stopped waiting (the game did not run for %lu ms); screen restored", static_cast<unsigned long>(since));
+        return 0.f;
+    }
+    const float t = static_cast<float>(since);
     if (p == FadeOut) return t >= kFadeMs ? 1.f : t / kFadeMs;
     if (p == Hold) return 1.f;
     return t >= kFadeMs ? 0.f : 1.f - t / kFadeMs; // FadeIn
@@ -108,15 +121,25 @@ void tick() {
         // could be off a ledge or inside a wall.
         g_target = transformFromYaw(st.pos, st.yaw);
         g_retries = 0;
+        g_character = player;
         teleportTo(player, g_target);
         MLOG("teleport: to player %08x at %.1f %.1f %.1f", g_peer.load(), st.pos[0], st.pos[1], st.pos[2]);
         setPhase(Hold);
         return;
     }
     if (p == Hold) {
+        // Killed or respawned meanwhile (e.g. the other player stood somewhere deadly): the game is in
+        // charge now. Never fight it; just give the screen back.
+        if (player != g_character) {
+            MLOG("teleport: the player character changed (death or respawn); not placing again");
+            setPhase(FadeIn);
+            return;
+        }
         LinearTransform now{};
+        const bool have = player && readEntityTransform(player, now);
+        const float dx = now.trans[0] - g_target.trans[0], dz = now.trans[2] - g_target.trans[2];
         // Falling through ground that has not streamed in yet: put back while the screen is black.
-        if (player && readEntityTransform(player, now) && now.trans[1] < g_target.trans[1] - kFallMargin &&
+        if (have && dx * dx + dz * dz < kNearTarget * kNearTarget && now.trans[1] < g_target.trans[1] - kFallMargin &&
             g_retries < kMaxRetries) {
             ++g_retries;
             teleportTo(player, g_target);

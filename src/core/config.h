@@ -20,7 +20,7 @@ struct Settings {
     std::string join;                     // join code or ip:port of the host; empty = host a session
     float loopbackOffset = 3.0f;          // solo test: metres along world X the mirrored ghost stands
     // [player]
-    std::string name = "Runner";
+    std::string name = "Player";
     std::string look = "faith";           // how you look to others: faith, or echo:<hash> (a ghost style + colour)
     // [ghost]
     bool autoSpawn = true;

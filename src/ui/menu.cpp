@@ -61,7 +61,7 @@ std::string fromClipboard() {
     return s;
 }
 
-std::string enteredName() { return g_name[0] ? std::string(g_name) : std::string("Runner"); }
+std::string enteredName() { return g_name[0] ? std::string(g_name) : std::string("Player"); }
 
 void startSession(const std::string& join) {
     const auto cfg = config::get();

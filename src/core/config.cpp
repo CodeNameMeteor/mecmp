@@ -40,7 +40,7 @@ constexpr const char* kDefaultIni =
     "\r\n"
     "[player]\r\n"
     "; your name, shown to the other players\r\n"
-    "name=Runner\r\n"
+    "name=Player\r\n"
     "; how the other players see you: faith, or a ghost style and colour (pick it in the in-game menu)\r\n"
     "look=faith\r\n"
     "\r\n"
@@ -97,8 +97,8 @@ void load(const std::wstring& dir) {
     if (s.join == "\x01") s.join = readString(ini, L"net", L"peer", ""); // older mecmp.ini files (no join= line)
     const float offset = static_cast<float>(atof(readString(ini, L"net", L"loopback_offset", "3.0").c_str()));
     s.loopbackOffset = std::isfinite(offset) ? offset : 3.0f; // "nan" or "inf" would poison the mirrored position
-    s.name = readString(ini, L"player", L"name", "Runner");
-    if (s.name.empty()) s.name = "Runner";
+    s.name = readString(ini, L"player", L"name", "Player");
+    if (s.name.empty()) s.name = "Player";
     s.name.resize(net::protocol::utf8PrefixLength(s.name, net::protocol::kMaxNameBytes)); // what goes on the wire
     s.autoSpawn = readInt(ini, L"ghost", L"auto_spawn", 1) != 0;
     s.look = readString(ini, L"player", L"look", "faith");

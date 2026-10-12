@@ -35,7 +35,7 @@ void draw() {
         if (depth > kGoneAt) continue;
         const float alpha = depth <= kFullUntil ? 1.f : 1.f - (depth - kFullUntil) / (kGoneAt - kFullUntil);
         const float size = ImGui::GetFontSize() * std::clamp(1.2f - depth / 60.f, 0.75f, 1.2f);
-        const std::string name = r.name.empty() ? std::string("Runner") : r.name;
+        const std::string name = r.name.empty() ? std::string("Player") : r.name;
         const ImVec2 ts = font->CalcTextSizeA(size, FLT_MAX, 0.f, name.c_str());
         const ImVec2 at(sx - ts.x * 0.5f, sy - ts.y);
         if (at.x > io.DisplaySize.x || at.y > io.DisplaySize.y || at.x + ts.x < 0 || at.y + ts.y < 0) continue;

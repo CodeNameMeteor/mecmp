@@ -19,6 +19,11 @@ jobs:
           g++ -std=c++17 -Wall -Wextra -Isrc -fsanitize=address,undefined -fno-sanitize-recover=undefined -g \
             tests/camera_test.cpp -o camera_test
           ./camera_test
+      - name: Ghost placement test (Linux, sanitizers)
+        run: |
+          g++ -std=c++17 -Wall -Wextra -Isrc -fsanitize=address,undefined -fno-sanitize-recover=undefined -g \
+            tests/pose_test.cpp -o pose_test
+          ./pose_test
 
   windows-build:
     runs-on: ubuntu-24.04

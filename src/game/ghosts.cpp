@@ -11,6 +11,7 @@
 #include "game/level.h"
 #include "game/models.h"
 #include "game/motion_stats.h"
+#include "game/pose_math.h"
 #include <map>
 #include "net/net.h"
 
@@ -199,6 +200,18 @@ int trajectorySlot(uint8_t* c, uint32_t n) {
     return -1;
 }
 
+// Puts the trajectory bone (the body's anchor) of a pose buffer (8 floats per bone) at `pos`. The
+// game places the body from bones 0 and 1 together, and something else reads bone 1 alone
+// (pose_math.h): bone 0 is folded into bone 1, so both give `pos`.
+void placeAnchor(float* pose, int traj, const float pos[3]) {
+    float* t = pose + traj * 8;
+    if (traj == 1) {
+        foldBone0(pose, t, pos);
+    } else { // not the layout the placement code expects: plain position
+        t[0] = pos[0]; t[1] = pos[1]; t[2] = pos[2]; t[3] = 1.f;
+    }
+}
+
 // Server side: the streamed pose into the ghost's replay component, replicated to clients.
 void drive(Ghost& g, const net::PlayerState& st) {
     auto* c = static_cast<uint8_t*>(getComponent(g.character, TI_PamServerReplayPlayerComponent));
@@ -218,10 +231,10 @@ void drive(Ghost& g, const net::PlayerState& st) {
     }
     if (traj >= 0) {
         float* t = pose + traj * 8;
-        t[0] = st.pos[0]; t[1] = st.pos[1]; t[2] = st.pos[2]; t[3] = 1.f;
         if (st.boneCount != N) { // no pose: at least face the right way
             t[4] = 0.f; t[5] = std::sin(st.yaw * 0.5f); t[6] = 0.f; t[7] = std::cos(st.yaw * 0.5f);
         }
+        placeAnchor(pose, traj, st.pos);
     }
     const bool clientDriven = g.posing && g.clientComp && GetTickCount() - g.posingSince > kReplicateMs;
     if (!clientDriven) setNetDirty(c + SRP_NetState, 2 | 4); // frames + pose
@@ -245,7 +258,10 @@ void fixClient(Ghost& g, const net::PlayerState& st) {
     if (!pose || !n || n > kMaxBones || !idxPtr || !mem::read(idxPtr, idx, n * 4)) return;
     for (uint32_t i = 0; i < n; ++i) {
         if ((idx[i] & 0xff) != 1) continue;
-        poke(pose + i * 0x20, st.pos, sizeof(st.pos));
+        float bones[2][8];
+        if (i != 1 || !mem::read(pose, bones, sizeof(bones))) { poke(pose + i * 0x20, st.pos, sizeof(st.pos)); break; }
+        foldBone0(bones[0], bones[1], st.pos);
+        poke(pose, bones, sizeof(bones));
         break;
     }
 }
@@ -431,9 +447,7 @@ void renderFrame() {
         float buf[kMaxBones][8];
         memcpy(buf, st.bones, bones * 0x20);
         for (uint32_t b = 0; b < bones; ++b)
-            if ((idx[b] & 0xff) == 1) { // the trajectory bone: the body's anchor, at the player's position
-                buf[b][0] = st.pos[0]; buf[b][1] = st.pos[1]; buf[b][2] = st.pos[2]; buf[b][3] = 1.f;
-            }
+            if ((idx[b] & 0xff) == 1) placeAnchor(&buf[0][0], static_cast<int>(b), st.pos); // the body's anchor
         poke(pose, buf, bones * 0x20);
     }
 }

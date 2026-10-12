@@ -1,8 +1,10 @@
 #include "game/models.h"
 
+#include <algorithm>
 #include <cctype>
 #include <cstddef>
 #include <cstdlib>
+#include <cstring>
 #include <map>
 #include <mutex>
 
@@ -17,7 +19,8 @@ std::mutex g_m;
 std::vector<Model> g_models;
 // Customizations we built, by piece list. Pieces are level data, so this is emptied when the level
 // changes (a new level can put other assets at the same addresses). The blocks are never freed.
-std::map<std::vector<uintptr_t>, uintptr_t> g_cache;
+std::map<std::pair<std::vector<uintptr_t>, uintptr_t>, uintptr_t> g_cache; // (pieces, unlocks) -> ours
+std::vector<Echo> g_echoes; // the game's echo (runner ghost) look catalogue, guarded by g_m
 // CustomizeCharacterData vtable (in the game image, so valid in every level), from any template seen.
 uintptr_t g_ccdVtable = 0;
 uintptr_t g_shaderData = 0;   // ghost character data whose ghost-shader flag we switched off
@@ -61,9 +64,10 @@ void visualsOf(uintptr_t ccd, std::vector<uintptr_t>& out) {
     }
 }
 
-// Our own CustomizeCharacterData: one group per piece (so the game's random pick is that piece),
-// no unlocks, ClearVisualState = 1. Never freed (the game may keep pointers to it).
-uintptr_t makeCustomization(const std::vector<uintptr_t>& visuals, uintptr_t vtable) {
+// Our own CustomizeCharacterData: one group per piece (so the game's random pick is that piece), the
+// source's unlocks (an echo look's colour is an unlock: an ObjectVariation on the projection shader),
+// ClearVisualState = 1. Never freed (the game may keep pointers to it).
+uintptr_t makeCustomization(const std::vector<uintptr_t>& visuals, uintptr_t vtable, uintptr_t unlockArray) {
     if (!vtable) return 0; // never hand the game a data object without a vtable
     auto block = [](size_t n) { return static_cast<uint8_t*>(calloc(1, n)); };
     uint8_t* ccd = block(0x40);
@@ -82,7 +86,7 @@ uintptr_t makeCustomization(const std::vector<uintptr_t>& visuals, uintptr_t vta
     static const char kName[] = "MECMP/GhostModel";
     *reinterpret_cast<const char**>(ccd + Asset_Name) = kName;
     *reinterpret_cast<uintptr_t*>(ccd + 0x18) = reinterpret_cast<uintptr_t>(groups + 8);
-    *reinterpret_cast<uintptr_t*>(ccd + 0x20) = reinterpret_cast<uintptr_t>(unlocks + 8);
+    *reinterpret_cast<uintptr_t*>(ccd + 0x20) = unlockArray ? unlockArray : reinterpret_cast<uintptr_t>(unlocks + 8);
     ccd[0x31] = 1; // ClearVisualState
     return reinterpret_cast<uintptr_t>(ccd);
 }
@@ -125,6 +129,7 @@ void reset() {
     std::lock_guard<std::mutex> lock(g_m);
     g_models.clear();
     g_cache.clear();
+    g_echoes.clear(); // level data may go with the level: found again by findEchoes()
     g_shaderData = 0;
     g_shaderRestoreAt = 0;
 }
@@ -137,37 +142,10 @@ void tick() {
     }
 }
 
-std::vector<std::string> names() {
-    std::vector<std::string> v{"faith"};
-    std::lock_guard<std::mutex> lock(g_m);
-    for (auto& m : g_models) v.push_back(m.name);
-    return v;
-}
-
-bool apply(void* ghost, const std::string& wanted, std::string* usedName) {
-    const std::string w = lower(wanted.empty() ? std::string("faith") : wanted);
-    std::vector<uintptr_t> visuals;
-    uintptr_t vtableFrom = 0;
-    std::string used;
-    if (w == "faith") {
-        void* player = level::playerCharacter();
-        if (!player || !readVisualSet(player, visuals)) {
-            VLOG("model: could not read Faith's outfit from the player character");
-            return false;
-        }
-        used = "faith";
-    } else {
-        std::lock_guard<std::mutex> lock(g_m);
-        for (auto& m : g_models) {
-            if (lower(m.name).find(w) == std::string::npos) continue;
-            visualsOf(m.ccd, visuals);
-            if (visuals.empty()) continue;
-            vtableFrom = m.ccd;
-            used = m.name;
-            break;
-        }
-        if (visuals.empty()) return false;
-    }
+namespace {
+// Builds (or reuses) our customization from these pieces and unlocks and applies it to the ghost.
+bool applyPieces(void* ghost, std::vector<uintptr_t> visuals, uintptr_t unlockArray, uintptr_t vtableFrom,
+                 const std::string& used, bool ghostShader) {
     std::vector<uintptr_t> kept;
     for (uintptr_t v : visuals)
         if (!isFirstPersonPiece(v)) kept.push_back(v);
@@ -177,11 +155,12 @@ bool apply(void* ghost, const std::string& wanted, std::string* usedName) {
         std::lock_guard<std::mutex> lock(g_m);
         uintptr_t vtable = vtableFrom ? mem::readOr<uintptr_t>(vtableFrom) : 0;
         if (!inImage(vtable)) vtable = g_ccdVtable;
-        auto it = g_cache.find(visuals);
+        const auto key = std::make_pair(visuals, unlockArray);
+        auto it = g_cache.find(key);
         if (it != g_cache.end()) {
             ccd = it->second;
-        } else if ((ccd = makeCustomization(visuals, vtable)) != 0) {
-            g_cache[visuals] = ccd;
+        } else if ((ccd = makeCustomization(visuals, vtable, unlockArray)) != 0) {
+            g_cache[key] = ccd;
         } else {
             MLOG("model: cannot build '%s' yet (no customization template seen in this game session)", used.c_str());
             return false;
@@ -195,11 +174,11 @@ bool apply(void* ghost, const std::string& wanted, std::string* usedName) {
     // are invisible. The flag lives in the ProjectionCharacter data that the game's own time-trial
     // ghosts share, so it is switched back on shortly after (tick()); a TT ghost needs it.
     {
-        const uint8_t ghostShader = lower(used).find("projection") != std::string::npos ? 1 : 0;
         const uintptr_t data = mem::readOr<uintptr_t>(ch + Character_Data);
         uint8_t cur = 0;
         if (data && mem::read(data + CharData_GhostShader, cur)) {
-            if (cur != ghostShader) poke(data + CharData_GhostShader, ghostShader);
+            const uint8_t want = ghostShader ? 1 : 0;
+            if (cur != want) poke(data + CharData_GhostShader, want);
             if (!ghostShader) {
                 g_shaderData = data;
                 g_shaderRestoreAt = GetTickCount() + 3000;
@@ -217,7 +196,153 @@ bool apply(void* ghost, const std::string& wanted, std::string* usedName) {
     args.customize = reinterpret_cast<void*>(ccd);
     reinterpret_cast<void (*)(void*, Args*)>(fn)(ghost, &args);
     VLOG("model: ghost %p now uses '%s' (%llu pieces)", ghost, used.c_str(), static_cast<unsigned long long>(visuals.size()));
+    return true;
+}
+
+// "Characters/Customizations/Projection/RunVis/Customization_Projection_RunVis_Red" -> RunVis, Red.
+const char* const kColours[] = {"Black", "Blue", "Green", "Orange", "Red", "Teal", "Yellow", "White", "Purple", "Pink", "Grey", "Gray"};
+void splitEchoName(const std::string& full, std::string& style, std::string& colour) {
+    std::string leaf = full.substr(full.find_last_of('/') == std::string::npos ? 0 : full.find_last_of('/') + 1);
+    for (const char* prefix : {"Customization_Projection_", "Customization_Echo_", "Customization_"})
+        if (leaf.rfind(prefix, 0) == 0) { leaf = leaf.substr(strlen(prefix)); break; }
+    colour = "Default";
+    const size_t us = leaf.find_last_of('_');
+    if (us != std::string::npos)
+        for (const char* c : kColours)
+            if (_stricmp(leaf.c_str() + us + 1, c) == 0) { colour = c; leaf.resize(us); break; }
+    style = leaf.empty() ? std::string("Ghost") : leaf;
+}
+} // namespace
+
+bool apply(void* ghost, const std::string& wanted, std::string* usedName) {
+    const std::string w = lower(wanted.empty() ? std::string("faith") : wanted);
+    std::vector<uintptr_t> visuals;
+    uintptr_t vtableFrom = 0, unlocks = 0;
+    std::string used;
+    if (w == "faith") {
+        void* player = level::playerCharacter();
+        if (!player || !readVisualSet(player, visuals)) {
+            VLOG("model: could not read Faith's outfit from the player character");
+            return false;
+        }
+        used = "faith";
+    } else {
+        std::lock_guard<std::mutex> lock(g_m);
+        for (auto& m : g_models) {
+            if (lower(m.name).find(w) == std::string::npos) continue;
+            visualsOf(m.ccd, visuals);
+            if (visuals.empty()) continue;
+            vtableFrom = m.ccd;
+            unlocks = mem::readOr<uintptr_t>(m.ccd + 0x20);
+            used = m.name;
+            break;
+        }
+        if (visuals.empty()) return false;
+    }
+    if (!applyPieces(ghost, visuals, unlocks, vtableFrom, used, lower(used).find("projection") != std::string::npos))
+        return false;
     if (usedName) *usedName = used;
+    return true;
+}
+
+std::vector<Echo> echoes() {
+    std::lock_guard<std::mutex> lock(g_m);
+    return g_echoes;
+}
+
+// An echo look's colour and pattern are unlocks on the projection body. Some echo customizations
+// carry no body piece of their own; built on their own (ClearVisualState = 1) the ghost then had no
+// mesh at all and went invisible. Those get the projection body pieces (RunVis) under their unlocks.
+bool applyEcho(void* ghost, uint32_t hash) {
+    Echo e;
+    std::vector<uintptr_t> visuals, base;
+    {
+        std::lock_guard<std::mutex> lock(g_m);
+        auto it = std::find_if(g_echoes.begin(), g_echoes.end(), [hash](const Echo& x) { return x.hash == hash; });
+        if (it == g_echoes.end()) return false;
+        e = *it;
+        for (auto& m : g_models)
+            if (lower(m.name).find("projection/runvis") != std::string::npos) { visualsOf(m.ccd, base); break; }
+    }
+    visualsOf(e.ccd, visuals);
+    const size_t own = visuals.size();
+    if (visuals.empty()) visuals = base;
+    if (visuals.empty()) { // no RunVis template seen: keep the projection pieces the ghost has now
+        std::vector<uintptr_t> cur;
+        if (readVisualSet(ghost, cur))
+            for (uintptr_t v : cur)
+                if (lower(assetName(v)).find("projection") != std::string::npos) visuals.push_back(v);
+    }
+    const uintptr_t unlocks = mem::readOr<uintptr_t>(e.ccd + 0x20);
+    MLOG("model: echo %s/%s: %llu own pieces, %llu used, %u unlocks", e.style.c_str(), e.colour.c_str(),
+         static_cast<unsigned long long>(own), static_cast<unsigned long long>(visuals.size()),
+         unlocks ? mem::readOr<uint32_t>(unlocks - 4) : 0u);
+    if (visuals.empty()) return false; // nothing to build a body from: leave the ghost as it is
+    return applyPieces(ghost, visuals, unlocks, e.ccd, e.name, true);
+}
+
+uint32_t defaultEcho() {
+    std::lock_guard<std::mutex> lock(g_m);
+    uint32_t any = 0;
+    for (const auto& e : g_echoes) {
+        if (_stricmp(e.style.c_str(), "RunVis") == 0 && _stricmp(e.colour.c_str(), "Red") == 0) return e.hash;
+        if (!any && _stricmp(e.colour.c_str(), "Black") != 0) any = e.hash;
+    }
+    return any ? any : (g_echoes.empty() ? 0 : g_echoes.front().hash);
+}
+
+// PamServerCustomizeProjectionCharacterEntity (time-trial markers; vtable 0x141c7ea80): +0x28 its data,
+// data +0x20 PamEchoCustomizationDefinitionsMeta, meta +0x18 Array<PamEchoCustomizationData> (0x28
+// each: +0x18 CustomizeCharacterData*, +0x20 u32 CustomizationHash). (See Ghidra: ..._vf4 0x143a83e70.)
+bool findEchoes() {
+    {
+        std::lock_guard<std::mutex> lock(g_m);
+        if (!g_echoes.empty()) return true;
+    }
+    const uintptr_t vt = rva(Vtbl_PamServerCustomizeProjectionCharacterEntity);
+    std::vector<uint8_t> buf(4 << 20);
+    std::vector<Echo> found;
+    MEMORY_BASIC_INFORMATION mbi{};
+    const DWORD start = GetTickCount();
+    for (uintptr_t addr = 0x10000; found.empty() && VirtualQuery(reinterpret_cast<void*>(addr), &mbi, sizeof(mbi)) == sizeof(mbi);
+         addr = reinterpret_cast<uintptr_t>(mbi.BaseAddress) + mbi.RegionSize) {
+        if (mbi.State != MEM_COMMIT || mbi.Type != MEM_PRIVATE || mbi.Protect != PAGE_READWRITE) continue;
+        const uintptr_t base = reinterpret_cast<uintptr_t>(mbi.BaseAddress);
+        for (size_t off = 0; found.empty() && off < mbi.RegionSize; off += buf.size()) {
+            const size_t n = std::min(buf.size(), static_cast<size_t>(mbi.RegionSize - off));
+            if (!mem::read(base + off, buf.data(), n)) continue;
+            const auto* q = reinterpret_cast<const uintptr_t*>(buf.data());
+            for (size_t i = 0; found.empty() && i < n / 8; ++i) {
+                if (q[i] != vt) continue;
+                const uintptr_t ent = base + off + i * 8;
+                const uintptr_t data = mem::readOr<uintptr_t>(ent + 0x28);
+                const uintptr_t meta = data ? mem::readOr<uintptr_t>(data + 0x20) : 0;
+                const uintptr_t arr = meta ? mem::readOr<uintptr_t>(meta + 0x18) : 0;
+                const uint32_t count = arr ? mem::readOr<uint32_t>(arr - 4) : 0;
+                if (!count || count > 512) continue;
+                for (uint32_t k = 0; k < count; ++k) {
+                    const uintptr_t e = arr + k * 0x28;
+                    Echo x;
+                    x.ccd = mem::readOr<uintptr_t>(e + 0x18);
+                    x.hash = mem::readOr<uint32_t>(e + 0x20);
+                    if (!x.ccd || !x.hash || !mem::readCString(mem::readOr<uintptr_t>(x.ccd + Asset_Name), x.name)) continue;
+                    splitEchoName(x.name, x.style, x.colour);
+                    found.push_back(x);
+                }
+            }
+        }
+    }
+    if (found.empty()) {
+        MLOG("model: no ghost look list found yet (%.1f s)", (GetTickCount() - start) / 1000.0);
+        return false;
+    }
+    std::sort(found.begin(), found.end(), [](const Echo& a, const Echo& b) {
+        return a.style != b.style ? a.style < b.style : a.colour < b.colour;
+    });
+    MLOG("model: %llu ghost looks found (%.1f s), e.g. %s = %08x", static_cast<unsigned long long>(found.size()),
+         (GetTickCount() - start) / 1000.0, found.front().name.c_str(), found.front().hash);
+    std::lock_guard<std::mutex> lock(g_m);
+    g_echoes.swap(found);
     return true;
 }
 

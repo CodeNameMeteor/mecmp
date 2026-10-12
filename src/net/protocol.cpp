@@ -112,7 +112,7 @@ size_t utf8PrefixLength(const std::string& s, size_t maxBytes) {
     return n;
 }
 
-size_t writeHello(char* buf, const Header& h, const char* name) {
+size_t writeHello(char* buf, const Header& h, const char* name, uint32_t look) {
     char* p = buf;
     put(p, h);
     const std::string full = name ? name : "";
@@ -120,7 +120,19 @@ size_t writeHello(char* buf, const Header& h, const char* name) {
     memcpy(n, full.data(), utf8PrefixLength(full, kMaxNameBytes));
     memcpy(p, n, kNameLen);
     p += kNameLen;
+    put(p, look);
     return static_cast<size_t>(p - buf);
+}
+
+bool readHello(const char* payload, size_t n, std::string& name, uint32_t& look) {
+    if (n == 0) return false;
+    const size_t nameBytes = n < kNameLen ? n : kNameLen;
+    size_t len = 0;
+    while (len < nameBytes && payload[len]) ++len;
+    name.assign(payload, len);
+    look = 0;
+    if (n >= kNameLen + sizeof(uint32_t)) memcpy(&look, payload + kNameLen, sizeof(look));
+    return true;
 }
 
 bool readState(const char* payload, size_t n, const Decoder& dec, PlayerState& out, bool& full) {

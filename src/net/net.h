@@ -32,6 +32,7 @@ struct RemoteInfo {
     bool loopback = false;  // our own packets (solo test)
     uint32_t ageMs = 0;     // since the last state arrived
     float lossPct = 0;      // their packets lost over the last 5 s
+    uint32_t look = 0;      // the look they chose: 0 = Faith, else the game's echo CustomizationHash
 };
 
 // join: empty = host; otherwise a join code or ip:port of the host. Calling it again switches
@@ -53,6 +54,7 @@ bool hosting();
 bool connectedToHost();   // joiner: the host has answered
 std::string lanCode();    // host: code for players on the same network
 void setName(const std::string& name);
+void setLook(uint32_t look); // our look, sent to everyone (see RemoteInfo::look)
 std::string joinCode(); // the host's code (empty until set up, or when not reachable)
 std::string describe();
 

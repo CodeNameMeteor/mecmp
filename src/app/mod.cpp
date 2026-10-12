@@ -15,6 +15,7 @@
 #include "game/hooks.h"
 #include "game/level.h"
 #include "game/local_player.h"
+#include "game/models.h"
 #include "game/motion_stats.h"
 #include "net/net.h"
 #include "ui/gamepad.h"
@@ -83,16 +84,27 @@ bool gameMatches() {
     return true;
 }
 
+// "Ghost" picked before the look list was known (hash ffffffff): take the first look now.
+void fixMyLook() {
+    if (config::lookHash(config::get()->look) != 0xffffffffu) return;
+    const uint32_t h = game::models::defaultEcho();
+    if (!h) return;
+    net::setLook(h);
+    const std::string look = config::lookName(h);
+    config::change([look](config::Settings& c) { c.look = look; });
+}
+
 void monitorLoop() {
     uintptr_t lastWorld = 0;
     DWORD levelSince = GetTickCount(), nextScanAt = 15000;
     int scans = 0;
+    int echoTries = 0;
+    DWORD nextEchoAt = 20000;
 #if MECMP_DEBUG_KEYS
     // Developer hotkeys (not in release builds; see CMakeLists.txt).
     struct Key { int vk; bool down; void (*action)(); };
     Key keys[] = {
         {VK_F7, false, [] { game::ghosts::requestSpawnOrRefresh(); }},
-        {VK_F8, false, [] { game::ghosts::requestNextModel(); }},
         {VK_F9, false, [] {
              std::string local;
              {
@@ -114,6 +126,15 @@ void monitorLoop() {
             levelSince = GetTickCount();
             nextScanAt = 15000;
             scans = 0;
+            echoTries = 0;
+            nextEchoAt = 20000;
+        }
+        // The ghost look list (styles x colours) comes from the level's time-trial markers: look for it
+        // 20 s into a level, and again after 1 and 3 minutes if there was none yet.
+        if (world && echoTries < 3 && GetTickCount() - levelSince > nextEchoAt && game::models::echoes().empty()) {
+            ++echoTries;
+            if (game::models::findEchoes()) fixMyLook();
+            nextEchoAt = 20000 + 60000u * ((1u << echoTries) - 1);
         }
         // Loaded after the level was created (or the game re-used spawners we never saw being
         // made)? Look for them in memory: 15 s into the level, and if something is still missing
@@ -176,6 +197,7 @@ void run(HMODULE self) {
     });
     ui::install();
     const auto cfg = config::get();
+    net::setLook(config::lookHash(cfg->look));
     if (!cfg->netEnabled) MLOG("net: disabled in mecmp.ini");
     else if (!net::start(cfg->port, cfg->join, cfg->loopbackOffset, cfg->name))
         MLOG("net: multiplayer is NOT running (see the net: lines above); the rest of the mod still works");
@@ -183,7 +205,7 @@ void run(HMODULE self) {
          cfg->join.empty() ? "Hosting: friends join with your join code (see below)." : "Joining: other players appear once the host answers.",
          cfg->menuKey.c_str(), cfg->menuPad.empty() ? "" : " or ", cfg->menuPad.c_str());
 #if MECMP_DEBUG_KEYS
-    MLOG("developer keys: F7 = spawn/show ghosts, F8 = next ghost model, F12 = hide ghosts, F9 = status, "
+    MLOG("developer keys: F7 = spawn/show ghosts, F12 = hide ghosts, F9 = status, "
          "F10 = find the camera matrix");
 #endif
     monitorLoop();

@@ -1,7 +1,7 @@
 # MECMP: Mirror's Edge Catalyst multiplayer
 
 See other players running through the city with you. Every remote player appears as Faith (or
-another model you pick), animated live from their own movement: running, jumping, climbing.
+one of the game's ghost looks, as they pick), animated live from their own movement: running, jumping, climbing.
 Free roam, peer to peer, no custom server needed.
 
 The mod does not touch the game's online services, Denuvo or the EA app. It talks to other
@@ -16,8 +16,8 @@ Status: experimental. Ghosts are visual only (no collision).
 2. Start the game, run `mecmp_inject.exe` (two beeps = the mod is active), load into free roam.
 
 **In game, press INSERT, or click both sticks (LS+RS) on a gamepad,** for the MECMP menu: host a
-session, paste a join code and join, set your name, see who is connected and pick how other players
-look. Other players' names float above their ghosts (*Names above players* in the menu turns
+session, paste a join code and join, set your name, see who is connected, pick your own look (Faith,
+or any of the game's ghost styles in any colour; everyone else sees you that way). Other players' names float above their ghosts (*Names above players* in the menu turns
 them off), and a short notice shows when someone joins or leaves (*Join/leave notices*). The player
 list shows each player's connection: *good*, or the share of their updates that did not arrive. The menu works with mouse, keyboard or gamepad; while it is open the game does not see the
 gamepad. Both menu buttons can be changed under *Controls*. Everything can also be set in
@@ -39,7 +39,6 @@ Developer builds (CMake option `MECMP_DEBUG_KEYS`, on by default, off for releas
 | Key | Action |
 |---|---|
 | F7 | Spawn missing ghosts now / show them again / refresh their look |
-| F8 | Next ghost model (Faith outfits, the time-trial projection ghosts) |
 | F12 | Hide all ghosts and pause automatic spawning (F7 resumes) |
 | F9 | Write a status line to `mecmp.log` (with the ghost update's cost) |
 

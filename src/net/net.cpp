@@ -47,6 +47,7 @@ struct Remote {
     uint32_t id = 0;
     sockaddr_in addr{};
     std::string name;
+    uint32_t look = 0;
     bool loopback = false;
     uint32_t lastSeq = 0;
     bool haveSeq = false;
@@ -85,6 +86,7 @@ std::atomic<uint32_t> g_generation{0}; // bumped on every start(); stale host se
 PlayerState g_local;
 bool g_haveLocal = false;
 std::string g_name;
+std::atomic<uint32_t> g_look{0};
 
 std::atomic<bool> g_run{false};
 std::thread g_thread;
@@ -224,7 +226,7 @@ void sendHello() {
         std::lock_guard<std::mutex> lock(g_m);
         name = g_name;
     }
-    sendAll(buf, proto::writeHello(buf, header(proto::kTypeHello), name.c_str()));
+    sendAll(buf, proto::writeHello(buf, header(proto::kTypeHello), name.c_str(), g_look.load()));
 }
 
 // Player names are shown in the menu and written to the log: keep bytes that can be shown, drop control
@@ -316,7 +318,14 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
     const char* payload = buf + sizeof(h);
     const size_t len = static_cast<size_t>(n) - sizeof(h);
     if (h.type == proto::kTypeHello) {
-        const std::string name = cleanName(payload, len < proto::kNameLen ? len : proto::kNameLen);
+        std::string raw;
+        uint32_t look = 0;
+        proto::readHello(payload, len, raw, look);
+        if (look != r.look) {
+            r.look = look;
+            if (peerLogAllowed()) MLOG("net: player %08x looks like %s", r.id, look ? "a ghost look" : "Faith");
+        }
+        const std::string name = cleanName(raw.data(), raw.size());
         if (r.name != name) {
             r.name = name;
             if (r.nameLogs < kMaxNameLogs && peerLogAllowed()) {
@@ -648,7 +657,7 @@ std::vector<RemoteInfo> remotes(uint32_t maxAgeMs) {
     for (const auto& kv : g_remotes) {
         const Remote& r = kv.second;
         if (!r.fill || now - r.lastTick > maxAgeMs) continue;
-        v.push_back({r.id, r.name, r.loopback, now - r.lastTick, r.loss.percent(nowMs())});
+        v.push_back({r.id, r.name, r.loopback, now - r.lastTick, r.loss.percent(nowMs()), r.look});
     }
     return v;
 }
@@ -689,6 +698,8 @@ std::string lanCode() {
     std::lock_guard<std::mutex> lock(g_m);
     return g_lanCode;
 }
+void setLook(uint32_t look) { g_look = look; }
+
 void setName(const std::string& name) {
     std::lock_guard<std::mutex> lock(g_m);
     g_name = name;

@@ -41,7 +41,7 @@ void setPhase(Phase p) {
 bool checkFunction() {
     int a = g_available.load();
     if (a >= 0) return a == 1;
-    static const uint8_t kExpect[] = {0x48, 0x8B, 0xF9, 0x48, 0x8D, 0x99, 0x10, 0x04, 0x00, 0x00};
+    static const uint8_t kExpect[] = {0x48, 0x89, 0xCF, 0x48, 0x8D, 0x99, 0x10, 0x04, 0x00, 0x00};
     uint8_t got[sizeof(kExpect)] = {};
     const bool ok = mem::read(rva(Fn_ServerCharacterEntity_teleport) + 24, got, sizeof(got)) && memcmp(got, kExpect, sizeof(got)) == 0;
     if (!ok) {

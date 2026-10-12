@@ -15,6 +15,7 @@
 #include "core/log.h"
 #include "core/mem.h"
 #include "game/ghosts.h"
+#include "game/hooks.h"
 #include "imgui.h"
 #include "ui/gamepad.h"
 #include "ui/menu.h"
@@ -199,7 +200,9 @@ bool init(IDXGISwapChain* sc) {
 
 HRESULT STDMETHODCALLTYPE presentHook(IDXGISwapChain* sc, UINT sync, UINT flags) {
     if (!g_ready && !g_swapChain) g_ready = init(sc);
-    if (g_ready && sc == g_swapChain) game::ghosts::renderFrame(); // ghosts move every frame, not per server tick
+    // Ghosts move every frame, not per server tick. Normally written by the client replay updater
+    // (on the game's thread, just before it reads them); from here only until that hook is in.
+    if (g_ready && sc == g_swapChain && !game::hooks::clientUpdateHooked()) game::ghosts::renderFrame();
     if (g_ready && sc == g_swapChain && g_rtv) {
         ImGui_ImplDX11_NewFrame();
         ImGui_ImplWin32_NewFrame();

@@ -28,6 +28,9 @@ void setEnabled(bool enabled);
 // client side. The server tick runs at 30 Hz; without this the ghost would only move 30 times a
 // second, which judders on faster displays.
 void renderFrame();
+// The same, called by the client replay updater just before it reads the poses (hooks.cpp): the
+// game then never reads a pose we are halfway through writing.
+void beforeClientReplayUpdate();
 
 // Server tick: spawn ghosts for new players, drive all ghosts, keep their client side in shape.
 void tick(uint64_t tick, uint64_t ticksInLevel);

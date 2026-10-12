@@ -36,6 +36,7 @@ constexpr DWORD kParkMs = 1500;
 // pose and would make the ghost step back and forth. Until then (and without a client component)
 // replication is what shows the pose.
 constexpr DWORD kReplicateMs = 2000;
+std::atomic<uint32_t> g_updaterCalls{0}; // client replay updater calls (status: per second)
 
 bool setClientVisible(void* ent, bool visible);
 
@@ -421,6 +422,11 @@ void onClientCharacter(void* ent) {
 
 void setCharacterDataType(uintptr_t runtimeTypeInfo) { g_tiCharData = runtimeTypeInfo; }
 
+void beforeClientReplayUpdate() {
+    ++g_updaterCalls;
+    renderFrame();
+}
+
 void renderFrame() {
     struct Target { uint32_t peer; void* comp; void* ch; };
     Target targets[kMaxGhosts];
@@ -432,7 +438,7 @@ void renderFrame() {
                 GetTickCount() - g.posingSince > kReplicateMs)
                 targets[n++] = {g.peer, g.clientComp, g.clientChar};
     }
-    static net::PlayerState st; // large; render thread only
+    thread_local net::PlayerState st; // large; render thread or client update thread
     for (size_t i = 0; i < n; ++i) {
         uint32_t age = 0;
         if (!net::remoteState(targets[i].peer, st, age) || age >= kHideAfterMs) continue;
@@ -670,6 +676,19 @@ std::string status() {
             s += std::string(" | ghost of ") + id + " " + it->second.report();
             ++it;
         }
+    }
+    {
+        static DWORD lastAt = 0;
+        static uint32_t lastCalls = 0;
+        const DWORD now = GetTickCount();
+        const uint32_t calls = g_updaterCalls.load();
+        if (lastAt && now > lastAt) {
+            char u[96];
+            snprintf(u, sizeof(u), ", poses written by the client update %.0f/s", (calls - lastCalls) * 1000.0 / (now - lastAt));
+            s += u;
+        }
+        lastAt = now;
+        lastCalls = calls;
     }
     char cost[96];
     snprintf(cost, sizeof(cost), ", ghost tick %.0f us avg / %.0f us max (%u ghosts)", g_costShownAvg.load(),

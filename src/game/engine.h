@@ -44,6 +44,13 @@ constexpr uintptr_t Slot_PamServerCharacterSpawnFactory = 0x141c4b5c0;
 constexpr uintptr_t Fn_PamServerCharacterSpawnFactory = 0x143957610;
 constexpr uintptr_t Slot_ClientReplayPlayerFactory = 0x141c49158;
 constexpr uintptr_t Fn_ClientReplayPlayerFactory = 0x143949050;
+// The updater objects that run every client replay component's update (created with the first
+// component; two of them, one per update pass): pointers at these globals, their vtable, and its
+// slot 2, PamClientReplayPlayerComponent_updateAll (calls ..._update, 0x1439501a0, per component).
+constexpr uintptr_t Data_ClientReplayUpdaters = 0x142578588; // 2 pointers
+constexpr uintptr_t Vtbl_ClientReplayUpdater = 0x141c49190;
+constexpr size_t Vtbl_ClientReplayUpdateAll = 0x10;
+constexpr uintptr_t Fn_ClientReplayUpdateAll = 0x14394da40;
 constexpr uintptr_t Slot_ClientCharacterFactory = 0x141c3cd80;
 constexpr uintptr_t Fn_ClientCharacterFactory = 0x143910d20;
 constexpr uintptr_t Slot_ServerWorldPostUpdate = 0x141b42d28; // ServerGameWorld vtable +0x28

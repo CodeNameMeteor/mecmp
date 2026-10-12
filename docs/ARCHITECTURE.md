@@ -57,12 +57,17 @@ Per remote player:
    Stop its playback (+0x40, +0xb0), set skipRoot (+0x2e6) to 0 so the body is placed from the
    trajectory bone, and pin that bone in the received pose (+0x180) to the player's position.
    **Placement**: the client update (`PamClientReplayPlayerComponent_update`, 0x1439501a0) puts the
-   body at `bone0.t + bone0.t.w * rotate(bone0.q, bone1.t)`. Bone 0 has a small rotation from the
-   animation; with the world position written into bone 1 as is, the body was off by that angle
+   body at `bone0.t + bone0.t.w * rotate(bone0.q, bone1.t)`. Bone 0 is the identity, but decodes
+   from the wire as a ~0.14° tilt; with the world position written into bone 1 as is, the body was off by that angle
    times the distance from the level's origin (metres, growing with height; a pause, which stops
    this update, put it right). Something else takes bone 1 alone as the position (seen while paused),
    so bone 0 is folded into bone 1 (bone 0 = identity, bone 1 = {pos, bone0.q * bone1.q}): both then
    agree, where two different answers made the body jitter (`pose_math.h`, `tests/pose_test.cpp`).
+   **Per-frame poses** are written by the client replay updater itself: each of its two updater
+   objects (`*0x142578588`, `*0x142578590`, vtable 0x141c49190) gets a vtable copy whose slot 2
+   (`updateAll`, 0x14394da40) first calls `ghosts::beforeClientReplayUpdate()`. Written from Present
+   (render thread), the game could read a pose half old and half new.
+   Present still writes them until the updater objects exist.
 4. **Visibility**: ghost client characters start hidden (time-trial markers normally show them).
    Call `clientCharacter->vtbl[0x3d8](true)` after creation and every few seconds; `false` when
    the player stops sending.

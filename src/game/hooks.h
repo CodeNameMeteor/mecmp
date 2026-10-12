@@ -4,6 +4,7 @@
 //   - client replay player factory     -> ghosts / level reference setup
 //   - client character factory         -> ghosts (visibility)
 //   - ServerGameWorld::postUpdate      -> the per-tick callback (server game thread)
+//   - client replay updater (vtable of the 2 updater objects) -> ghost poses, before the game reads them
 
 #include <cstdint>
 
@@ -18,5 +19,8 @@ struct Installed {
 // Installs everything. Returns false if the tick hook could not be installed (nothing will work);
 // `out` says which hooks are in.
 bool install(TickFn onTick, Installed* out = nullptr);
+// True once the client replay updater runs our pose writer (ghosts::beforeClientReplayUpdate) itself;
+// until then poses are written from the render thread (ghosts::renderFrame).
+bool clientUpdateHooked();
 
 } // namespace mecmp::game::hooks

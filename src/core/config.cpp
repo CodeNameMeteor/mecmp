@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <memory>
 #include <mutex>
 #include <vector>
 
@@ -17,7 +18,8 @@
 namespace mecmp::config {
 namespace {
 std::mutex g_m;             // guards g_settings and g_queue
-Settings g_settings;
+// The current settings, never changed once published: readers keep the snapshot they got.
+std::shared_ptr<const Settings> g_settings = std::make_shared<const Settings>();
 struct Change { std::function<void(Settings&)> edit; bool persist; };
 std::vector<Change> g_queue;
 std::wstring g_dir;
@@ -85,8 +87,8 @@ void load(const std::wstring& dir) {
             MLOG("config: wrote default %ls", ini.c_str());
         }
     }
-    std::lock_guard<std::mutex> lock(g_m);
-    Settings& s = g_settings;
+    auto built = std::make_shared<Settings>();
+    Settings& s = *built;
     s.netEnabled = readInt(ini, L"net", L"enabled", 1) != 0;
     const int port = readInt(ini, L"net", L"port", 47800);
     s.port = port >= 1 && port <= 65535 ? static_cast<uint16_t>(port) : 47800; // 0 and out-of-range ports are not usable
@@ -105,12 +107,16 @@ void load(const std::wstring& dir) {
     s.verbose = readInt(ini, L"debug", L"verbose", 0) != 0;
     log::verbose = s.verbose;
     s.ignoreBuildCheck = readInt(ini, L"debug", L"ignore_build_check", 0) != 0;
+    {
+        std::lock_guard<std::mutex> lock(g_m);
+        g_settings = built;
+    }
     MLOG("config: name '%s', port %u, %s '%s', model '%s'%s", s.name.c_str(), s.port, s.join.empty() ? "hosting" : "joining",
          s.join.c_str(), s.model.c_str(),
          s.verbose ? ", verbose log" : "");
 }
 
-Settings get() {
+std::shared_ptr<const Settings> get() {
     std::lock_guard<std::mutex> lock(g_m);
     return g_settings;
 }
@@ -123,17 +129,19 @@ void change(std::function<void(Settings&)> edit, bool persist) {
 
 void applyPending() {
     std::vector<Change> todo;
-    Settings snapshot;
+    std::shared_ptr<const Settings> snapshot;
     bool persist = false;
     {
         std::lock_guard<std::mutex> lock(g_m);
         if (g_queue.empty()) return;
         todo.swap(g_queue);
+        auto next = std::make_shared<Settings>(*g_settings); // copy-on-write: published, never edited in place
         for (auto& c : todo) {
-            c.edit(g_settings);
+            c.edit(*next);
             persist = persist || c.persist;
         }
-        snapshot = g_settings;
+        g_settings = next;
+        snapshot = next;
     }
     if (!persist) return;
     const std::wstring ini = g_dir + L"mecmp.ini";
@@ -142,12 +150,12 @@ void applyPending() {
         MultiByteToWideChar(CP_UTF8, 0, v.c_str(), -1, w, 512);
         WritePrivateProfileStringW(sec, key, w, ini.c_str());
     };
-    put(L"player", L"name", snapshot.name);
-    put(L"net", L"join", snapshot.join);
-    put(L"ghost", L"model", snapshot.model);
-    put(L"ui", L"menu_key", snapshot.menuKey);
-    put(L"ui", L"menu_pad", snapshot.menuPad);
-    put(L"ui", L"show_names", snapshot.showNames ? "1" : "0");
+    put(L"player", L"name", snapshot->name);
+    put(L"net", L"join", snapshot->join);
+    put(L"ghost", L"model", snapshot->model);
+    put(L"ui", L"menu_key", snapshot->menuKey);
+    put(L"ui", L"menu_pad", snapshot->menuPad);
+    put(L"ui", L"show_names", snapshot->showNames ? "1" : "0");
     MLOG("config: saved");
 }
 

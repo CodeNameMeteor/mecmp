@@ -5,6 +5,8 @@
 #include "game/ghosts.h"
 #include "game/level.h"
 
+#include <vector>
+
 namespace mecmp::game::hooks {
 namespace {
 
@@ -35,9 +37,12 @@ void* clientCharacterFactory(void* creator, void* ci, void* a3, void* a4) {
     return ent;
 }
 
+// A pointer we replaced, with what was there before: an install that fails part-way undoes these.
+struct Patch { uintptr_t slot; uintptr_t original; };
+
 // Swaps a creator-table slot, chaining to whatever was there (the game's factory or another
-// mod's wrapper around it).
-bool installFactory(Factory f, uintptr_t slotVa, uintptr_t expectedVa, FactoryFn hook) {
+// mod's wrapper around it). A successful swap is recorded in `undo`.
+bool installFactory(Factory f, uintptr_t slotVa, uintptr_t expectedVa, FactoryFn hook, std::vector<Patch>& undo) {
     const uintptr_t slot = rva(slotVa);
     uintptr_t current = 0;
     if (!mem::read(slot, current) || !current) {
@@ -54,13 +59,19 @@ bool installFactory(Factory f, uintptr_t slotVa, uintptr_t expectedVa, FactoryFn
         }
         MLOG("hook %s: already redirected by another component; chaining in front of it", kNames[f]);
     }
-    g_orig[f] = reinterpret_cast<FactoryFn>(current);
     if (!mem::patchPointer(slot, reinterpret_cast<uintptr_t>(hook), nullptr)) {
         MLOG("hook %s: VirtualProtect failed (%lu)", kNames[f], GetLastError());
         return false;
     }
+    g_orig[f] = reinterpret_cast<FactoryFn>(current);
+    undo.push_back({slot, current});
     VLOG("hook %s: installed", kNames[f]);
     return true;
+}
+
+// Puts back every pointer an install changed, newest first.
+void undoPatches(const std::vector<Patch>& undo) {
+    for (auto it = undo.rbegin(); it != undo.rend(); ++it) mem::patchPointer(it->slot, it->original, nullptr);
 }
 
 using PostUpdateFn = void (*)(void* world, void* updateInfo);
@@ -78,35 +89,39 @@ void postUpdate(void* world, void* updateInfo) {
 
 bool install(TickFn onTick, Installed* out) {
     Installed got;
-    // The tick hook first: without it nothing runs, and then no other hook is left behind either.
+    if (out) *out = got;
+    // Checks first, with nothing written: the tick hook is required, so if its slot is not what
+    // this build expects, the game is left exactly as it was.
     const uintptr_t slot = rva(Slot_ServerWorldPostUpdate);
     uintptr_t current = 0;
     if (!mem::read(slot, current) || current != rva(Fn_ServerWorldPostUpdate)) {
         MLOG("hook tick: ServerGameWorld slot holds %p, expected %p; not hooking", reinterpret_cast<void*>(current),
              reinterpret_cast<void*>(rva(Fn_ServerWorldPostUpdate)));
-        if (out) *out = got;
         return false;
     }
-    // The factory hooks only report objects as they are created; each one that fails costs a feature,
-    // not stability (see Installed).
-    const bool sp1 = installFactory(kSpawner, Slot_ServerCharacterSpawnFactory, Fn_ServerCharacterSpawnFactory, &spawnerFactory);
-    const bool sp2 = installFactory(kPamSpawner, Slot_PamServerCharacterSpawnFactory, Fn_PamServerCharacterSpawnFactory, &pamSpawnerFactory);
-    got.spawners = sp1 && sp2;
-    const bool replay = installFactory(kClientReplay, Slot_ClientReplayPlayerFactory, Fn_ClientReplayPlayerFactory, &clientReplayFactory);
-    const bool chars = installFactory(kClientCharacter, Slot_ClientCharacterFactory, Fn_ClientCharacterFactory, &clientCharacterFactory);
-    got.ghostClients = replay && chars;
+    // Factory hooks only report objects as they are created; each group that fails costs a feature,
+    // not stability (see Installed). Recorded so that a later failure can undo them.
+    std::vector<Patch> undo;
     g_onTick = onTick;
     g_origPostUpdate = reinterpret_cast<PostUpdateFn>(current);
+    const bool sp1 = installFactory(kSpawner, Slot_ServerCharacterSpawnFactory, Fn_ServerCharacterSpawnFactory, &spawnerFactory, undo);
+    const bool sp2 = installFactory(kPamSpawner, Slot_PamServerCharacterSpawnFactory, Fn_PamServerCharacterSpawnFactory, &pamSpawnerFactory, undo);
+    got.spawners = sp1 && sp2;
+    const bool replay = installFactory(kClientReplay, Slot_ClientReplayPlayerFactory, Fn_ClientReplayPlayerFactory, &clientReplayFactory, undo);
+    const bool chars = installFactory(kClientCharacter, Slot_ClientCharacterFactory, Fn_ClientCharacterFactory, &clientCharacterFactory, undo);
+    got.ghostClients = replay && chars;
+    // The tick hook goes in last: nothing reaches the mod's code before every other hook is in, and
+    // if it fails, the factory hooks above are taken out again.
     if (!mem::patchPointer(slot, reinterpret_cast<uintptr_t>(&postUpdate), nullptr)) {
-        MLOG("hook tick: VirtualProtect failed (%lu)", GetLastError());
-        if (out) *out = got;
-        return false; // the factory hooks stay: they only record what the game creates
+        MLOG("hook tick: VirtualProtect failed (%lu); undoing the other hooks", GetLastError());
+        undoPatches(undo);
+        return false;
     }
     got.tick = true;
+    if (out) *out = got;
     if (got.spawners && got.ghostClients) MLOG("hooks: all installed");
     else MLOG("hooks: %s%s", got.spawners ? "" : "spawner hooks missing (spawners are found by a memory scan instead); ",
               got.ghostClients ? "" : "ghost client hooks missing: remote players cannot be shown");
-    if (out) *out = got;
     return true;
 }
 

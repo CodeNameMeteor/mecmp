@@ -19,6 +19,8 @@ worlds in one process; the mod uses both.
 2. Read `mecmp.ini` (`core/config.cpp`).
 3. Install hooks (`game/hooks.cpp`): the tick hook is checked first and is required; spawner hooks
    are optional (the memory scan covers them); without the two client hooks ghosts are not spawned.
+   Every slot is checked before anything is written. If the tick hook cannot be installed, the
+   factory hooks already in place are taken out again, so a failed start leaves the game as it was.
    Then start the network thread (`net/net.cpp`). The DLL pins itself so it is never unloaded.
 4. The mod thread then watches for level changes and hotkeys, and scans game memory for spawners
    when they were missed (`game/level.cpp`, see `scanForMissing`): 15 s into a level and, while
@@ -121,7 +123,8 @@ until 40 m, fading out by 150 m, smaller with distance. Names are drawn through 
 
 ## Settings (`core/config.cpp`)
 
-`config::get()` returns a copy taken under a short lock. Changes (menu, F8) are queued with
+`config::get()` returns a shared, immutable snapshot (a pointer copy, no string copies), so it is
+cheap to call every tick. Changes (menu, F8) are queued with
 `config::change()` and applied in order by the mod thread every 50 ms, which also writes
 `mecmp.ini`. No thread reads a setting while another writes it, and no file is written on the
 render or game thread.

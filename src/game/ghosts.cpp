@@ -302,7 +302,7 @@ void* spawnGhost(uint32_t peer, const std::string& name, const net::PlayerState&
     }
     setTransform(ch, info.transform);
     std::string used;
-    if (!models::apply(ch, config::get().model, &used) && !models::apply(ch, "RunVis", &used))
+    if (!models::apply(ch, config::get()->model, &used) && !models::apply(ch, "RunVis", &used))
         MLOG("ghost: no model could be applied (the ghost may be invisible)");
     MLOG("ghost: spawned for player %08x as '%s'", peer, used.c_str());
     return ch;
@@ -326,7 +326,7 @@ void handleRequests() {
     }
     if (g_reqNextModel.exchange(false)) {
         const auto names = models::names();
-        const std::string cur = config::get().model;
+        const std::string cur = config::get()->model;
         size_t at = 0;
         for (size_t i = 0; i < names.size(); ++i)
             if (names[i] == cur) at = i;
@@ -363,7 +363,7 @@ void handleRequests() {
             for (auto& g : g_ghosts) g.hidden = false, g.visibleCalls = 0; // show again (tick re-asserts)
             g_lastSpawnAt = 0;
         }
-        applyModelToAll(config::get().model); // and refresh their look
+        applyModelToAll(config::get()->model); // and refresh their look
     }
 }
 } // namespace
@@ -515,7 +515,7 @@ void tick(uint64_t tick, uint64_t ticksInLevel) {
     }
 
     // Every present player needs a ghost: hand them a free one, else spawn (one per kSpawnGapMs).
-    const bool canSpawn = g_enabled && !g_paused && config::get().autoSpawn && ticksInLevel >= kSettleTicks &&
+    const bool canSpawn = g_enabled && !g_paused && config::get()->autoSpawn && ticksInLevel >= kSettleTicks &&
                           level::spawnerAlive(level::ghostSpawner()) && level::playerCharacter();
     if (canSpawn) {
         level::BoneSetup ref;

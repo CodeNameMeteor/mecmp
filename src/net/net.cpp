@@ -645,7 +645,7 @@ std::vector<RemoteInfo> remotes(uint32_t maxAgeMs) {
     for (const auto& kv : g_remotes) {
         const Remote& r = kv.second;
         if (!r.fill || now - r.lastTick > maxAgeMs) continue;
-        v.push_back({r.id, r.name, addrToString(r.addr), r.loopback, now - r.lastTick});
+        v.push_back({r.id, r.name, r.loopback, now - r.lastTick});
     }
     return v;
 }

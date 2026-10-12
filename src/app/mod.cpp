@@ -155,7 +155,7 @@ void run(HMODULE self) {
         return;
     }
     if (!game::fingerprint::check()) {
-        if (!config::get().ignoreBuildCheck) {
+        if (!config::get()->ignoreBuildCheck) {
             MLOG("startup: this game build differs from the one MECMP was made for; staying inactive "
                  "([debug] ignore_build_check=1 in mecmp.ini overrides this, at your own risk)");
             return;
@@ -175,13 +175,13 @@ void run(HMODULE self) {
         net::shutdown(2000);
     });
     ui::install();
-    const config::Settings cfg = config::get();
-    if (!cfg.netEnabled) MLOG("net: disabled in mecmp.ini");
-    else if (!net::start(cfg.port, cfg.join, cfg.loopbackOffset, cfg.name))
+    const auto cfg = config::get();
+    if (!cfg->netEnabled) MLOG("net: disabled in mecmp.ini");
+    else if (!net::start(cfg->port, cfg->join, cfg->loopbackOffset, cfg->name))
         MLOG("net: multiplayer is NOT running (see the net: lines above); the rest of the mod still works");
     MLOG("ready. %s Menu: %s%s%s.",
-         cfg.join.empty() ? "Hosting: friends join with your join code (see below)." : "Joining: other players appear once the host answers.",
-         cfg.menuKey.c_str(), cfg.menuPad.empty() ? "" : " or ", cfg.menuPad.c_str());
+         cfg->join.empty() ? "Hosting: friends join with your join code (see below)." : "Joining: other players appear once the host answers.",
+         cfg->menuKey.c_str(), cfg->menuPad.empty() ? "" : " or ", cfg->menuPad.c_str());
 #if MECMP_DEBUG_KEYS
     MLOG("developer keys: F7 = spawn/show ghosts, F8 = next ghost model, F12 = hide ghosts, F9 = status, "
          "F10 = find the camera matrix");

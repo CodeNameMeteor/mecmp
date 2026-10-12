@@ -16,7 +16,7 @@ constexpr float kGoneAt = 150.f;     // ...then fading out until here
 } // namespace
 
 void draw() {
-    if (!config::get().showNames) return;
+    if (!config::get()->showNames) return;
     const auto shown = game::ghosts::shownPeers();
     if (shown.empty()) return;
     game::CameraView cam;

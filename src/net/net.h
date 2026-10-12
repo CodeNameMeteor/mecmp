@@ -46,6 +46,16 @@ void shutdown(uint32_t routerWaitMs = 2000);
 void publishLocal(const PlayerState& s);
 // Remote players heard from in the last `maxAgeMs`.
 std::vector<RemoteInfo> remotes(uint32_t maxAgeMs = 5000);
+
+// Text chat. sendChat shows the message here at once and sends it to everyone (any thread).
+struct ChatLine {
+    std::string name;
+    std::string text;
+    uint32_t atMs = 0; // GetTickCount when it arrived (or was sent)
+    bool self = false;
+};
+void sendChat(const std::string& text);
+std::vector<ChatLine> chatLines(size_t max = 50); // oldest first
 // Smoothed state of a remote player (shown ~100 ms in the past, blended between packets).
 bool remoteState(uint32_t id, PlayerState& out, uint32_t& ageMs);
 

@@ -13,6 +13,8 @@
 #include <cstring>
 #include <map>
 #include <mutex>
+#include <algorithm>
+#include <deque>
 #include <random>
 #include <thread>
 #include <cstdio>
@@ -63,6 +65,10 @@ struct Remote {
     int nameLogs = 0;         // name changes logged for this player (at most kMaxNameLogs)
     proto::ClockUnwrap clock; // sender's timestamps without the 49-day wrap
     proto::LossWindow loss;
+    uint32_t chatSeen[16] = {};  // message ids already shown (repeats are dropped)
+    int chatSeenHead = 0;
+    DWORD chatBurstAt = 0;       // flood limit
+    int chatBurst = 0;
     Snap snaps[kSnapCount];
     int head = 0, fill = 0;
 };
@@ -240,6 +246,56 @@ std::string cleanName(const char* raw, size_t len) {
     return s;
 }
 
+// --- Chat -----------------------------------------------------------------------------------------
+constexpr size_t kChatKeep = 50;       // lines kept for the overlay
+constexpr int kChatSends = 3;          // each message goes out this many times (one per send cycle)
+constexpr int kChatBurst = 5;          // at most this many messages from one player...
+constexpr DWORD kChatBurstMs = 5000;   // ...in this long; more are dropped
+std::deque<ChatLine> g_chat;           // guarded by g_m
+struct OutChat { uint32_t id; std::string text; int left; };
+std::vector<OutChat> g_outChat;        // guarded by g_m
+uint32_t g_chatId = 0;
+
+void addChatLine(ChatLine line) { // caller holds g_m
+    g_chat.push_back(std::move(line));
+    while (g_chat.size() > kChatKeep) g_chat.pop_front();
+}
+
+void receiveChat(Remote& r, bool own, const char* payload, size_t len) { // caller holds g_m
+    uint32_t id = 0;
+    std::string text;
+    if (!proto::readChat(payload, len, id, text)) { ++g_dropped; return; }
+    if (own) return; // solo test: our own message, already shown when we sent it
+    for (uint32_t seen : r.chatSeen)
+        if (seen == id) return; // a repeat of a message we already showed
+    r.chatSeen[r.chatSeenHead] = id;
+    r.chatSeenHead = (r.chatSeenHead + 1) % static_cast<int>(sizeof(r.chatSeen) / sizeof(r.chatSeen[0]));
+    const DWORD now = GetTickCount();
+    if (now - r.chatBurstAt > kChatBurstMs) { r.chatBurstAt = now; r.chatBurst = 0; }
+    if (++r.chatBurst > kChatBurst) {
+        if (r.chatBurst == kChatBurst + 1 && peerLogAllowed()) MLOG("net: player %08x sends chat too fast; dropping some", r.id);
+        return;
+    }
+    addChatLine({r.name.empty() ? std::string("Runner") : r.name, text, now, false});
+    VLOG("chat: %s: %s", r.name.c_str(), text.c_str());
+}
+
+void sendPendingChat() {
+    std::vector<std::pair<uint32_t, std::string>> out;
+    {
+        std::lock_guard<std::mutex> lock(g_m);
+        if (g_sendTo.empty()) { g_outChat.clear(); return; }
+        for (auto& m : g_outChat) {
+            out.emplace_back(m.id, m.text);
+            --m.left;
+        }
+        g_outChat.erase(std::remove_if(g_outChat.begin(), g_outChat.end(), [](const OutChat& m) { return m.left <= 0; }),
+                        g_outChat.end());
+    }
+    char buf[proto::kMaxPacket];
+    for (const auto& m : out) sendAll(buf, proto::writeChat(buf, header(proto::kTypeChat), m.first, m.second));
+}
+
 void handlePacket(const char* buf, int n, const sockaddr_in& from) {
     proto::Header h;
     if (n < static_cast<int>(sizeof(h))) { ++g_dropped; return; }
@@ -256,7 +312,7 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
         return;
     }
     // Only the packet types we know may create state or be forwarded to other players.
-    if (h.type != proto::kTypeState && h.type != proto::kTypeHello) { ++g_dropped; return; }
+    if (h.type != proto::kTypeState && h.type != proto::kTypeHello && h.type != proto::kTypeChat) { ++g_dropped; return; }
     const bool own = h.session == g_session;
     std::lock_guard<std::mutex> lock(g_m);
     if (!own && g_role == Role::Host) {
@@ -334,6 +390,10 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
                      r.nameLogs == kMaxNameLogs ? " (further name changes of this player are not logged)" : "");
             }
         }
+        return;
+    }
+    if (h.type == proto::kTypeChat) {
+        receiveChat(r, own, payload, len);
         return;
     }
     if (h.type != proto::kTypeState) return;
@@ -517,7 +577,7 @@ void threadMain() {
         timeval tv{0, 10000};
         if (select(0, &rd, nullptr, nullptr, &tv) > 0) receiveAll();
         const DWORD now = GetTickCount();
-        if (now - lastSend >= 33) { lastSend = now; sendState(); }
+        if (now - lastSend >= 33) { lastSend = now; sendState(); sendPendingChat(); }
         if (now - lastHello >= 1000) { lastHello = now; sendHello(); }
         if (now - lastStats >= 30000) { lastStats = now; MLOG("net: %s", describe().c_str()); }
         if (now - lastHousekeeping >= 1000) {
@@ -648,6 +708,20 @@ void publishLocal(const PlayerState& s) {
     std::lock_guard<std::mutex> lock(g_m);
     g_local = s;
     g_haveLocal = true;
+}
+
+void sendChat(const std::string& raw) {
+    const std::string text = proto::cleanChatText(raw);
+    if (text.empty()) return;
+    std::lock_guard<std::mutex> lock(g_m);
+    addChatLine({g_name.empty() ? std::string("Runner") : g_name, text, static_cast<uint32_t>(GetTickCount()), true});
+    if (g_run) g_outChat.push_back({(g_session << 16) ^ ++g_chatId, text, kChatSends});
+}
+
+std::vector<ChatLine> chatLines(size_t max) {
+    std::lock_guard<std::mutex> lock(g_m);
+    const size_t from = g_chat.size() > max ? g_chat.size() - max : 0;
+    return std::vector<ChatLine>(g_chat.begin() + static_cast<long>(from), g_chat.end());
 }
 
 std::vector<RemoteInfo> remotes(uint32_t maxAgeMs) {

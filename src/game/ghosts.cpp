@@ -270,21 +270,31 @@ void fixClient(Ghost& g, const net::PlayerState& st) {
 // The look a player's ghost should have: the one they chose (sent in HELLO).
 std::string desiredLook(uint32_t playerLook) { return config::lookName(playerLook); }
 
-// Applies a look key to a ghost. An echo look the catalogue does not know (yet) shows as the default
-// red ghost meanwhile; returns false then, so it is tried again later.
+// Applies a look key to a ghost. False when it could not be applied, and then the ghost keeps the look
+// it has: a look that is not known yet (an echo the catalogue has not loaded) is simply tried again
+// later. Only spawning falls back to the default red ghost (see spawnGhost).
 bool applyLook(void* ch, const std::string& key, std::string* used = nullptr) {
     if (key.rfind("echo:", 0) == 0) {
-        if (models::applyEcho(ch, config::lookHash(key))) {
-            if (used) *used = key;
+        const uint32_t hash = config::lookHash(key);
+        // A style that cannot render here (e.g. picked in an older version) would leave the ghost
+        // invisible: show the plain ghost instead, and count it as done (no retries).
+        if (!models::echoRenders(hash) && !models::echoes()->empty()) {
+            if (!models::apply(ch, "RunVis", used)) return false;
+            if (used) *used = "RunVis (their style is not available in free roam)";
             return true;
         }
-        models::apply(ch, "RunVis", used);
-        return false;
+        // The catalogue is not loaded yet, or the look is unknown to it: keep the ghost's look, and the
+        // caller retries later (it does not reapply RunVis each time: that rebuilds the mesh).
+        if (!models::applyEcho(ch, hash)) return false;
+        if (used) *used = key;
+        return true;
     }
-    if (models::apply(ch, key, used)) return true;
-    models::apply(ch, "RunVis", used);
-    return false;
+    return models::apply(ch, key, used);
 }
+
+// How long to wait before trying a look again: an echo the catalogue does not have is retried rarely
+// (each attempt rebuilds the ghost's mesh), other looks sooner.
+DWORD lookRetryMs(const std::string& key) { return key.rfind("echo:", 0) == 0 ? 15000 : 2000; }
 
 void* spawnGhost(uint32_t peer, const std::string& name, uint32_t look, const net::PlayerState& st) {
     void* spawner = level::ghostSpawner();
@@ -340,6 +350,7 @@ void* spawnGhost(uint32_t peer, const std::string& name, uint32_t look, const ne
     std::string used;
     const std::string key = desiredLook(look);
     const bool done = applyLook(ch, key, &used);
+    if (!done) models::apply(ch, "RunVis", &used); // visible at least; the wanted look is retried later
     {
         std::lock_guard<std::mutex> lock(g_m);
         for (auto& g : g_ghosts)
@@ -607,7 +618,7 @@ void tick(uint64_t tick, uint64_t ticksInLevel) {
                 if (p.id == g.peer) look = p.look;
             const std::string want = desiredLook(look);
             const DWORD nowTick = GetTickCount();
-            if (want != g.lookKey && nowTick - g.lookTriedAt > 2000 && nowTick != lastLookApply) {
+            if (want != g.lookKey && nowTick - g.lookTriedAt > lookRetryMs(want) && nowTick != lastLookApply) {
                 lastLookApply = nowTick;
                 g.lookTriedAt = nowTick;
                 std::string used;
@@ -688,8 +699,11 @@ std::string status() {
         }
     }
     {
+        // status() can be called from any thread (F9, the menu): the sample state is guarded.
+        static std::mutex rateM;
         static DWORD lastAt = 0;
         static uint32_t lastCalls = 0;
+        std::lock_guard<std::mutex> rate(rateM);
         const DWORD now = GetTickCount();
         const uint32_t calls = g_updaterCalls.load();
         if (lastAt && now > lastAt) {

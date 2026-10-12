@@ -47,7 +47,6 @@ constexpr uintptr_t Fn_ClientReplayPlayerFactory = 0x143949050;
 // The updater objects that run every client replay component's update (created with the first
 // component; two of them, one per update pass): pointers at these globals, their vtable, and its
 // slot 2, PamClientReplayPlayerComponent_updateAll (calls ..._update, 0x1439501a0, per component).
-constexpr uintptr_t Data_ClientReplayUpdaters = 0x142578588; // 2 pointers
 constexpr uintptr_t Vtbl_ClientReplayUpdater = 0x141c49190;
 constexpr size_t Vtbl_ClientReplayUpdateAll = 0x10;
 constexpr uintptr_t Fn_ClientReplayUpdateAll = 0x14394da40;
@@ -66,6 +65,9 @@ constexpr uintptr_t Vtbl_PamServerCustomizeProjectionCharacterEntity = 0x141c7ea
 
 // --- Functions ------------------------------------------------------------------------------------
 constexpr uintptr_t Fn_SpatialEntity_setTransform = 0x1432eb1f0; // (entity, const LinearTransform*, u8)
+// The game's character teleport, as its teleport entities use it (ServerTeleportEntity_teleportPlayer
+// 0x143391430): (ServerCharacterEntity*, const LinearTransform* 16-byte aligned).
+constexpr uintptr_t Fn_ServerCharacterEntity_teleport = 0x143378830;
 constexpr uintptr_t Fn_NetState_setDirty = 0x14347e420;          // (netState, bits)
 constexpr uintptr_t Fn_Arena_allocFromMember = 0x142a647d0;      // (&arenaMember, size, align)
 constexpr uintptr_t Fn_LocalClientCharacter = 0x1439655f0;       // () -> local PamClientCharacterEntity

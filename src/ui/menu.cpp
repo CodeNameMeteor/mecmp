@@ -13,6 +13,7 @@
 #include "app/mod.h"
 #include "core/config.h"
 #include "game/ghosts.h"
+#include "game/teleport.h"
 #include "game/models.h"
 #include "imgui.h"
 #include "net/net.h"
@@ -135,7 +136,7 @@ void playersSection() {
         ImGui::TextDisabled("Nobody else here yet.");
         return;
     }
-    if (ImGui::BeginTable("players", 3, ImGuiTableFlags_SizingStretchProp)) {
+    if (ImGui::BeginTable("players", 4, ImGuiTableFlags_SizingStretchProp)) {
         for (const auto& r : remotes) {
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
@@ -153,6 +154,15 @@ void playersSection() {
                 ImGui::TextColored(c, "%s, %.0f%% lost", r.lossPct < 10.f ? "fair" : "poor", r.lossPct);
             }
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Share of their updates that did not arrive in the last 5 s.");
+            ImGui::TableNextColumn();
+            ImGui::PushID(static_cast<int>(r.id));
+            const bool can = game::teleport::available() && !game::teleport::busy() && r.ageMs < 1000;
+            ImGui::BeginDisabled(!can);
+            if (ImGui::SmallButton("Go to")) game::teleport::requestGoTo(r.id);
+            ImGui::EndDisabled();
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                ImGui::SetTooltip(game::teleport::available() ? "Travel to this player" : "Not available in this game build");
+            ImGui::PopID();
         }
         ImGui::EndTable();
     }
@@ -181,7 +191,8 @@ void myLookSection() {
     ImGui::SeparatorText("Your look");
     const auto cfg = config::get();
     const uint32_t mine = config::lookHash(cfg->look);
-    const auto echoes = game::models::echoes();
+    const auto echoesList = game::models::echoes();
+    const auto& echoes = *echoesList;
     if (ImGui::RadioButton("Faith", mine == 0)) setMyLook(0);
     ImGui::SameLine();
     if (ImGui::RadioButton("Ghost", mine != 0)) {
@@ -191,6 +202,14 @@ void myLookSection() {
     if (!mine) return;
     if (echoes.empty()) {
         ImGui::TextDisabled("The ghost styles load in free roam.");
+        return;
+    }
+    // Only the RunVis ghost renders in free roam (models::echoRenders): no style or colour picker
+    // until the other styles' assets can be loaded.
+    constexpr bool kStylePicker = false;
+    if (!kStylePicker) {
+        if (!game::models::echoRenders(mine)) setMyLook(game::models::defaultEcho());
+        ImGui::TextDisabled("More ghost styles and colours are coming later.");
         return;
     }
     const game::models::Echo* cur = nullptr;
@@ -245,6 +264,10 @@ void lookSection() {
     bool showNotices = config::get()->showNotices;
     if (ImGui::Checkbox("Join/leave notices", &showNotices))
         config::change([showNotices](config::Settings& c) { c.showNotices = showNotices; });
+    bool showChat = config::get()->showChat;
+    if (ImGui::Checkbox("Chat", &showChat)) config::change([showChat](config::Settings& c) { c.showChat = showChat; });
+    ImGui::SameLine();
+    ImGui::TextDisabled("(%s to type)", config::get()->chatKey.c_str());
     bool mumble = config::get()->mumbleLink;
     if (ImGui::Checkbox("Positional voice (Mumble)", &mumble))
         config::change([mumble](config::Settings& c) { c.mumbleLink = mumble; });

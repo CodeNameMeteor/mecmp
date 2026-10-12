@@ -17,9 +17,11 @@ Status: experimental. Ghosts are visual only (no collision).
 
 **In game, press INSERT, or click both sticks (LS+RS) on a gamepad,** for the MECMP menu: host a
 session, paste a join code and join, set your name, see who is connected, pick your own look (Faith,
-or any of the game's ghost styles in any colour; everyone else sees you that way). Other players' names float above their ghosts (*Names above players* in the menu turns
+or the game's runner ghost; everyone else sees you that way). Other players' names float above their ghosts (*Names above players* in the menu turns
 them off), and a short notice shows when someone joins or leaves (*Join/leave notices*). The player
-list shows each player's connection: *good*, or the share of their updates that did not arrive. The menu works with mouse, keyboard or gamepad; while it is open the game does not see the
+list shows each player's connection: *good*, or the share of their updates that did not arrive. *Go to* next to a player
+takes you to them (a short fade, then you are where they are). Press **T** to
+chat: type a line and press Enter (Escape cancels); messages show bottom-left for a while. The menu works with mouse, keyboard or gamepad; while it is open the game does not see the
 gamepad. Both menu buttons can be changed under *Controls*. Everything can also be set in
 `mecmp.ini` (the menu saves to it).
 
@@ -41,6 +43,11 @@ Developer builds (CMake option `MECMP_DEBUG_KEYS`, on by default, off for releas
 | F7 | Spawn missing ghosts now / show them again / refresh their look |
 | F12 | Hide all ghosts and pause automatic spawning (F7 resumes) |
 | F9 | Write a status line to `mecmp.log` (with the ghost update's cost) |
+| F10 | Developer: log the camera matrices (used to find the name tags' camera; needs a level) |
+
+Versions: a player on this version and one on an older version can still play together. An older
+version does not know player looks and shows every player with its own `model=` setting, so the looks
+you picked may not show there.
 
 Solo test: *Solo test* in the menu, or `join=127.0.0.1:47800`. Your own packets come back and a
 ghost copies your moves 3 m away along the world X axis (`loopback_offset`); it stays put while you

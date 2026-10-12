@@ -36,6 +36,7 @@ add_library(mecmp SHARED
   src/game/ghosts.cpp
   src/game/models.cpp
   src/game/mumble_link.cpp
+  src/game/teleport.cpp
   src/game/local_player.cpp
   src/net/net.cpp
   src/net/protocol.cpp
@@ -46,6 +47,7 @@ add_library(mecmp SHARED
   src/ui/gamepad.cpp
   src/ui/nametags.cpp
   src/ui/notices.cpp
+  src/ui/chat.cpp
   third_party/imgui/imgui.cpp
   third_party/imgui/imgui_draw.cpp
   third_party/imgui/imgui_tables.cpp

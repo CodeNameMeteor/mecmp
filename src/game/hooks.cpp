@@ -27,13 +27,12 @@ void* pamSpawnerFactory(void* creator, void* ci, void* a3, void* a4) {
     level::onSpawnerCreated(ci, e);
     return e;
 }
-// Client replay updater: each of the (two) updater objects gets a copy of its vtable whose updateAll
-// first writes our ghosts' poses, on the thread and at the moment the game reads them. Written from
+// Client replay updater: the updateAll slot of its vtable (shared by the two updater objects) first
+// writes our ghosts' poses, on the thread and at the moment the game reads them. Written from
 // the render thread instead, the game sometimes read a pose half old and half new (jitter between
-// two positions). The objects only exist once a client replay component was created.
+// two positions). The updater objects are created with the first client replay component.
 using UpdateAllFn = void (*)(void* self, void* info);
 UpdateAllFn g_origUpdateAll = nullptr;
-uintptr_t g_updaterVtbl[16] = {};
 std::atomic<bool> g_updaterHooked{false};
 
 void updateAllHook(void* self, void* info) {
@@ -41,28 +40,26 @@ void updateAllHook(void* self, void* info) {
     g_origUpdateAll(self, info);
 }
 
+// Swaps the updateAll slot of the updater vtable. Both updater objects share that vtable, so one
+// patched slot covers both; the slot is replaced in place (the other hooks work the same way), so
+// the rest of the table is untouched and no copy of it has to be kept up to date.
 void hookUpdaters() {
-    const uintptr_t vt = rva(Vtbl_ClientReplayUpdater);
-    for (int i = 0; i < 2; ++i) {
-        const uintptr_t obj = mem::readOr<uintptr_t>(rva(Data_ClientReplayUpdaters) + i * 8);
-        if (!obj) continue;
-        const uintptr_t cur = mem::readOr<uintptr_t>(obj);
-        if (cur == reinterpret_cast<uintptr_t>(g_updaterVtbl)) continue; // done
-        if (cur != vt) continue; // not the object this build expects: leave it
-        if (!g_origUpdateAll) {
-            if (!mem::read(vt, g_updaterVtbl, sizeof(g_updaterVtbl)) ||
-                g_updaterVtbl[Vtbl_ClientReplayUpdateAll / 8] != rva(Fn_ClientReplayUpdateAll)) {
-                static bool warned = false;
-                if (!warned) MLOG("hook client replay updater: unexpected vtable; poses stay written per frame");
-                warned = true;
-                return;
-            }
-            g_origUpdateAll = reinterpret_cast<UpdateAllFn>(g_updaterVtbl[Vtbl_ClientReplayUpdateAll / 8]);
-            g_updaterVtbl[Vtbl_ClientReplayUpdateAll / 8] = reinterpret_cast<uintptr_t>(&updateAllHook);
-        }
-        if (mem::patchPointer(obj, reinterpret_cast<uintptr_t>(g_updaterVtbl), nullptr)) {
-            if (!g_updaterHooked.exchange(true)) MLOG("hook client replay updater: installed");
-        }
+    if (g_updaterHooked) return;
+    const uintptr_t slot = rva(Vtbl_ClientReplayUpdater) + Vtbl_ClientReplayUpdateAll;
+    uintptr_t current = 0;
+    if (!mem::read(slot, current)) return;
+    if (current != rva(Fn_ClientReplayUpdateAll)) {
+        static bool warned = false;
+        if (!warned) MLOG("hook client replay updater: slot holds %p, expected %p; poses stay written per frame",
+                          reinterpret_cast<void*>(current), reinterpret_cast<void*>(rva(Fn_ClientReplayUpdateAll)));
+        warned = true;
+        return;
+    }
+    g_origUpdateAll = reinterpret_cast<UpdateAllFn>(current);
+    uintptr_t old = 0;
+    if (mem::patchPointer(slot, reinterpret_cast<uintptr_t>(&updateAllHook), &old)) {
+        g_updaterHooked = true;
+        MLOG("hook client replay updater: installed");
     }
 }
 
@@ -161,7 +158,7 @@ bool install(TickFn onTick, Installed* out) {
         return false;
     }
     got.tick = true;
-    hookUpdaters(); // if a client replay component exists already
+    hookUpdaters(); // the vtable is in the game image, so this does not wait for a component
     if (out) *out = got;
     if (got.spawners && got.ghostClients) MLOG("hooks: all installed");
     else MLOG("hooks: %s%s", got.spawners ? "" : "spawner hooks missing (spawners are found by a memory scan instead); ",

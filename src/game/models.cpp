@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <map>
+#include <memory>
 #include <mutex>
 
 #include "core/log.h"
@@ -20,11 +21,23 @@ std::vector<Model> g_models;
 // Customizations we built, by piece list. Pieces are level data, so this is emptied when the level
 // changes (a new level can put other assets at the same addresses). The blocks are never freed.
 std::map<std::pair<std::vector<uintptr_t>, uintptr_t>, uintptr_t> g_cache; // (pieces, unlocks) -> ours
-std::vector<Echo> g_echoes; // the game's echo (runner ghost) look catalogue, guarded by g_m
+// The game's echo (runner ghost) look catalogue. Published as a whole and never edited in place, so the
+// menu can keep a pointer to it while it is replaced.
+std::shared_ptr<const std::vector<Echo>> g_echoes = std::make_shared<const std::vector<Echo>>();
 // CustomizeCharacterData vtable (in the game image, so valid in every level), from any template seen.
 uintptr_t g_ccdVtable = 0;
 uintptr_t g_shaderData = 0;   // ghost character data whose ghost-shader flag we switched off
+uintptr_t g_shaderDataType = 0; // its first word when we did (checked before writing it back)
 DWORD g_shaderRestoreAt = 0;  // when to switch it back on (game thread)
+
+// Switches the shared ghost-shader flag back on. Every projection character uses that data (the
+// game's own time-trial ghosts, the main menu's "Your Echo" preview), so it must never stay off.
+void restoreShaderFlag() {
+    if (g_shaderData && mem::readOr<uintptr_t>(g_shaderData) == g_shaderDataType)
+        poke<uint8_t>(g_shaderData + CharData_GhostShader, 1);
+    g_shaderData = 0;
+    g_shaderRestoreAt = 0;
+}
 
 std::string lower(std::string s) {
     for (auto& c : s) c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
@@ -129,17 +142,15 @@ void reset() {
     std::lock_guard<std::mutex> lock(g_m);
     g_models.clear();
     g_cache.clear();
-    g_echoes.clear(); // level data may go with the level: found again by findEchoes()
-    g_shaderData = 0;
-    g_shaderRestoreAt = 0;
+    g_echoes = std::make_shared<const std::vector<Echo>>(); // level data may go with the level: found again by findEchoes()
+    // A level change within the 3 s after a Faith look used to leave the flag off for good, and the
+    // main menu's "Your Echo" preview (also a projection character) then drew wrongly.
+    restoreShaderFlag();
 }
 
 void tick() {
-    if (g_shaderData && g_shaderRestoreAt && static_cast<int32_t>(GetTickCount() - g_shaderRestoreAt) >= 0) {
-        poke<uint8_t>(g_shaderData + CharData_GhostShader, 1);
-        g_shaderData = 0;
-        g_shaderRestoreAt = 0;
-    }
+    if (g_shaderData && g_shaderRestoreAt && static_cast<int32_t>(GetTickCount() - g_shaderRestoreAt) >= 0)
+        restoreShaderFlag();
 }
 
 namespace {
@@ -181,6 +192,7 @@ bool applyPieces(void* ghost, std::vector<uintptr_t> visuals, uintptr_t unlockAr
             if (cur != want) poke(data + CharData_GhostShader, want);
             if (!ghostShader) {
                 g_shaderData = data;
+                g_shaderDataType = mem::readOr<uintptr_t>(data);
                 g_shaderRestoreAt = GetTickCount() + 3000;
             }
         }
@@ -245,7 +257,7 @@ bool apply(void* ghost, const std::string& wanted, std::string* usedName) {
     return true;
 }
 
-std::vector<Echo> echoes() {
+std::shared_ptr<const std::vector<Echo>> echoes() {
     std::lock_guard<std::mutex> lock(g_m);
     return g_echoes;
 }
@@ -258,8 +270,9 @@ bool applyEcho(void* ghost, uint32_t hash) {
     std::vector<uintptr_t> visuals, base;
     {
         std::lock_guard<std::mutex> lock(g_m);
-        auto it = std::find_if(g_echoes.begin(), g_echoes.end(), [hash](const Echo& x) { return x.hash == hash; });
-        if (it == g_echoes.end()) return false;
+        const auto& list = *g_echoes;
+        auto it = std::find_if(list.begin(), list.end(), [hash](const Echo& x) { return x.hash == hash; });
+        if (it == list.end()) return false;
         e = *it;
         for (auto& m : g_models)
             if (lower(m.name).find("projection/runvis") != std::string::npos) { visualsOf(m.ccd, base); break; }
@@ -281,14 +294,28 @@ bool applyEcho(void* ghost, uint32_t hash) {
     return applyPieces(ghost, visuals, unlocks, e.ccd, e.name, true);
 }
 
+// Only the RunVis look renders in free roam: every other style is a separate projection body mesh
+// with a material variation (MeshAndVariationPair -> ObjectVariation on FX_SS_Projection_<Style>),
+// which is not loaded there; applied, the ghost shows nothing. Tested with every style, with and
+// without the ghost shader flag.
+bool echoRenders(uint32_t hash) {
+    std::lock_guard<std::mutex> lock(g_m);
+    for (const auto& e : *g_echoes)
+        if (e.hash == hash) return _stricmp(e.style.c_str(), "RunVis") == 0;
+    return false;
+}
+
 uint32_t defaultEcho() {
     std::lock_guard<std::mutex> lock(g_m);
-    uint32_t any = 0;
-    for (const auto& e : g_echoes) {
-        if (_stricmp(e.style.c_str(), "RunVis") == 0 && _stricmp(e.colour.c_str(), "Red") == 0) return e.hash;
-        if (!any && _stricmp(e.colour.c_str(), "Black") != 0) any = e.hash;
-    }
-    return any ? any : (g_echoes.empty() ? 0 : g_echoes.front().hash);
+    uint32_t firstRunVis = 0;
+    const auto& list = *g_echoes;
+    for (const auto& e : list)
+        if (_stricmp(e.style.c_str(), "RunVis") == 0) {
+            if (_stricmp(e.colour.c_str(), "Red") == 0) return e.hash;
+            if (!firstRunVis) firstRunVis = e.hash;
+        }
+    if (firstRunVis) return firstRunVis;
+    return list.empty() ? 0 : list.front().hash;
 }
 
 // PamServerCustomizeProjectionCharacterEntity (time-trial markers; vtable 0x141c7ea80): +0x28 its data,
@@ -297,7 +324,7 @@ uint32_t defaultEcho() {
 bool findEchoes() {
     {
         std::lock_guard<std::mutex> lock(g_m);
-        if (!g_echoes.empty()) return true;
+        if (!g_echoes->empty()) return true;
     }
     const uintptr_t vt = rva(Vtbl_PamServerCustomizeProjectionCharacterEntity);
     std::vector<uint8_t> buf(4 << 20);
@@ -342,7 +369,7 @@ bool findEchoes() {
     MLOG("model: %llu ghost looks found (%.1f s), e.g. %s = %08x", static_cast<unsigned long long>(found.size()),
          (GetTickCount() - start) / 1000.0, found.front().name.c_str(), found.front().hash);
     std::lock_guard<std::mutex> lock(g_m);
-    g_echoes.swap(found);
+    g_echoes = std::make_shared<const std::vector<Echo>>(std::move(found));
     return true;
 }
 

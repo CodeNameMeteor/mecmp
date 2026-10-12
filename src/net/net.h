@@ -52,6 +52,8 @@ bool remoteState(uint32_t id, PlayerState& out, uint32_t& ageMs);
 bool running();
 bool hosting();
 bool connectedToHost();   // joiner: the host has answered
+// The same number for everyone in a session (the host's session id); 0 while not known (e.g. solo test).
+uint32_t sessionKey();
 std::string lanCode();    // host: code for players on the same network
 void setName(const std::string& name);
 void setLook(uint32_t look); // our look, sent to everyone (see RemoteInfo::look)

@@ -28,6 +28,8 @@ struct Settings {
     std::string menuKey = "INSERT";       // INSERT, HOME, END, DELETE, PAGEUP, PAGEDOWN, PAUSE or F1..F12
     std::string menuPad = "LS+RS";        // gamepad buttons held together, e.g. LS+RS or BACK+Y; empty = none
     bool showNames = true;                // names above other players' ghosts
+    // [voice]
+    bool mumbleLink = true;               // positional voice through Mumble's Link plugin
     bool showNotices = true;              // "<name> joined / left" at the top of the screen
     // [debug]
     bool verbose = false;

@@ -35,6 +35,7 @@ add_library(mecmp SHARED
   src/game/level.cpp
   src/game/ghosts.cpp
   src/game/models.cpp
+  src/game/mumble_link.cpp
   src/game/local_player.cpp
   src/net/net.cpp
   src/net/protocol.cpp

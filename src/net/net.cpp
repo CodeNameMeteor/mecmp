@@ -92,6 +92,7 @@ std::atomic<bool> g_run{false};
 std::thread g_thread;
 SOCKET g_sock = INVALID_SOCKET;
 uint32_t g_session = 0;
+std::atomic<uint32_t> g_hostSession{0}; // JOIN: the host's session id, from its HELLO (0 until heard)
 float g_loopbackOffset = 3.0f;
 uint16_t g_port = 47800;
 // Router port mapping (host). Map and unmap calls are serialised, and an unmap is skipped when a
@@ -226,7 +227,8 @@ void sendHello() {
         std::lock_guard<std::mutex> lock(g_m);
         name = g_name;
     }
-    sendAll(buf, proto::writeHello(buf, header(proto::kTypeHello), name.c_str(), g_look.load()));
+    sendAll(buf, proto::writeHello(buf, header(proto::kTypeHello), name.c_str(), g_look.load(),
+                                   g_role == Role::Host ? proto::kHelloHost : 0));
 }
 
 // Player names are shown in the menu and written to the log: keep bytes that can be shown, drop control
@@ -320,7 +322,9 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
     if (h.type == proto::kTypeHello) {
         std::string raw;
         uint32_t look = 0;
-        proto::readHello(payload, len, raw, look);
+        uint8_t flags = 0;
+        proto::readHello(payload, len, raw, look, &flags);
+        if ((flags & proto::kHelloHost) && !own && g_role == Role::Join) g_hostSession = h.session;
         if (look != r.look) {
             r.look = look;
             if (peerLogAllowed()) MLOG("net: player %08x looks like %s", r.id, look ? "a ghost look" : "Faith");
@@ -561,6 +565,7 @@ bool start(uint16_t port, const std::string& join, float loopbackOffset, const s
         g_sendTo.clear();
         g_members.clear();
         g_heardFromHost = false;
+        g_hostSession = 0;
         g_joinCode.clear();
         g_lanCode.clear();
         g_name = name;
@@ -692,6 +697,10 @@ std::string joinCode() {
 }
 
 bool hosting() { return g_role == Role::Host; }
+uint32_t sessionKey() {
+    if (!g_run) return 0;
+    return g_role == Role::Host ? g_session : g_hostSession.load();
+}
 bool running() { return g_run.load(); }
 bool connectedToHost() { return g_heardFromHost; }
 std::string lanCode() {

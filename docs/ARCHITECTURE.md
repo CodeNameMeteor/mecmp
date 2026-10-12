@@ -115,6 +115,16 @@ as the default red ghost and is applied once the list is found. Some echo custom
 piece of their own (only colour unlocks): with ClearVisualState those left the ghost without a mesh, so
 they are built on the RunVis body pieces. New picks default to red RunVis (easy to see). At most one look is applied per tick.
 
+## Positional voice (`game/mumble_link.cpp`)
+
+Mumble's Link plugin reads the shared memory `MumbleLink` (`LinkedMem`, version 2). Each rendered frame
+(only while the camera can be read) the mod writes the camera position, look direction (minus the
+camera's forward row) and up as both avatar and camera, converted to Mumble's left-handed axes by
+negating z, and increments `uiTick`. The context is `MECMP-<host session id>`, the same for everyone
+in a session: the HELLO packet carries a host flag (u8 after the look; older builds omit it) so
+joiners learn the host's session id even though relayed packets all arrive from the host's address.
+Identity = the player's name. Turning it off writes `uiVersion = 0` and unmaps.
+
 ## Network (`net/`)
 
 UDP, one socket. Sessions have one host and any number of joiners (up to 16).

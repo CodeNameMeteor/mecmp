@@ -245,6 +245,12 @@ void lookSection() {
     bool showNotices = config::get()->showNotices;
     if (ImGui::Checkbox("Join/leave notices", &showNotices))
         config::change([showNotices](config::Settings& c) { c.showNotices = showNotices; });
+    bool mumble = config::get()->mumbleLink;
+    if (ImGui::Checkbox("Positional voice (Mumble)", &mumble))
+        config::change([mumble](config::Settings& c) { c.mumbleLink = mumble; });
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("With Mumble running (Positional Audio and the Link plugin on, everyone on the same\n"
+                          "Mumble server), players in this session hear each other from where they are.");
     if (ImGui::Button("Show ghosts")) game::ghosts::requestSpawnOrRefresh();
     ImGui::SameLine();
     if (ImGui::Button("Hide ghosts")) game::ghosts::requestHideAll();

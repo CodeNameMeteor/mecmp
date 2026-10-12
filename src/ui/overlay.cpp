@@ -16,6 +16,7 @@
 #include "core/mem.h"
 #include "game/ghosts.h"
 #include "game/hooks.h"
+#include "game/mumble_link.h"
 #include "imgui.h"
 #include "ui/gamepad.h"
 #include "ui/menu.h"
@@ -217,6 +218,7 @@ HRESULT STDMETHODCALLTYPE presentHook(IDXGISwapChain* sc, UINT sync, UINT flags)
         ImGui::GetIO().MouseDrawCursor = g_open.load();
         nametags::draw();
         notices::draw();
+        game::mumble::update();
         menu::draw(g_open.load());
         ImGui::Render();
         g_context->OMSetRenderTargets(1, &g_rtv, nullptr);

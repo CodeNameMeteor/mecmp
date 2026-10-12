@@ -206,14 +206,6 @@ int trajectorySlot(uint8_t* c, uint32_t n) {
 void placeAnchor(float* pose, int traj, const float pos[3]) {
     float* t = pose + traj * 8;
     if (traj == 1) {
-        static int logged = 0; // diagnostic: what bone 0 holds (expected: near identity)
-        static DWORD lastLog = 0;
-        if (logged < 3 && GetTickCount() - lastLog > 10000 && !(pose[0] == 0 && pose[1] == 0 && pose[2] == 0 && pose[7] == 1)) {
-            ++logged;
-            lastLog = GetTickCount();
-            MLOG("pose: bone 0 = t(%.4f %.4f %.4f w %.4f) q(%.5f %.5f %.5f %.5f)", pose[0], pose[1], pose[2], pose[3], pose[4],
-                 pose[5], pose[6], pose[7]);
-        }
         foldBone0(pose, t, pos);
     } else { // not the layout the placement code expects: plain position
         t[0] = pos[0]; t[1] = pos[1]; t[2] = pos[2]; t[3] = 1.f;

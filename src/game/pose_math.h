@@ -6,7 +6,8 @@
 // character at
 //     bone0.t + bone0.t.w * rotate(bone0.q, bone1.t)
 // (bone = {translation x,y,z,w; rotation x,y,z,w}). Bone 1 (the AITrajectory bone) holds the world
-// position; bone 0 carries a small rotation from the animation. Writing the player's position into
+// position; bone 0 is the identity, but after the wire's rotation compression (10 bits per
+// component) it decodes as a ~0.14 degree tilt. Writing the player's position into
 // bone 1 as is put the body off by that small angle times the distance from the level's origin, so
 // a few metres away from it the body floated or sank (more the higher the player). anchorBone1()
 // writes bone 1 so that the game's formula gives the position wanted.

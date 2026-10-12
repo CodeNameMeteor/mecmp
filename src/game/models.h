@@ -11,6 +11,7 @@
 // are invisible with the ghost shader) and on for projection models.
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -26,7 +27,8 @@ struct Echo {
     uintptr_t ccd = 0; // CustomizeCharacterData
     std::string name, style, colour;
 };
-std::vector<Echo> echoes(); // empty until findEchoes() succeeded (in a level with time-trial markers)
+// The catalogue; empty until findEchoes() succeeded (in a level with time-trial markers). Never changes once returned.
+std::shared_ptr<const std::vector<Echo>> echoes();
 bool findEchoes();          // mod thread: memory scan, a second at most; true if the list is known
 bool applyEcho(void* ghost, uint32_t hash); // game thread
 uint32_t defaultEcho(); // an easy-to-see look (red RunVis, the game's own ghost) for new picks; 0 if none

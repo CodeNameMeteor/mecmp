@@ -59,4 +59,22 @@ inline void anchorBone1(const float* bone0, float* bone1, const float* pos) {
     bone1[3] = 1.f;
 }
 
+// Better: fold bone 0 into bone 1 and leave bone 0 neutral. The client update places the body with
+// the formula above, but something else (seen while the game is paused, when that update does not
+// run) takes bone 1 as the position as is; with anchorBone1() alone the two disagreed by bone 0's
+// tilt times the distance from the origin, and the body jittered between them. With bone 0 = identity
+// and bone 1 = {pos, bone0.q * bone1.q} both give the same position and orientation. Bone 0's own
+// rotation is a fraction of a degree, so the skeleton under it moves by millimetres at most.
+inline void foldBone0(float* bone0, float* bone1, const float* pos) {
+    float q[4];
+    quatMul(&bone0[4], &bone1[4], q);
+    const float n = std::sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
+    if (n > 1e-6f && std::isfinite(n)) {
+        for (int j = 0; j < 4; ++j) bone1[4 + j] = q[j] / n;
+    }
+    bone1[0] = pos[0]; bone1[1] = pos[1]; bone1[2] = pos[2]; bone1[3] = 1.f;
+    const float identity[8] = {0, 0, 0, 1, 0, 0, 0, 1};
+    for (int j = 0; j < 8; ++j) bone0[j] = identity[j];
+}
+
 } // namespace mecmp::game

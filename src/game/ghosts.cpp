@@ -201,12 +201,20 @@ int trajectorySlot(uint8_t* c, uint32_t n) {
 }
 
 // Puts the trajectory bone (the body's anchor) of a pose buffer (8 floats per bone) at `pos`. The
-// game places the body from bones 0 and 1 together (pose_math.h); bone 1 is written so that this
-// comes out at `pos` exactly, whatever small rotation bone 0 has.
+// game places the body from bones 0 and 1 together, and something else reads bone 1 alone
+// (pose_math.h): bone 0 is folded into bone 1, so both give `pos`.
 void placeAnchor(float* pose, int traj, const float pos[3]) {
     float* t = pose + traj * 8;
     if (traj == 1) {
-        anchorBone1(pose, t, pos);
+        static int logged = 0; // diagnostic: what bone 0 holds (expected: near identity)
+        static DWORD lastLog = 0;
+        if (logged < 3 && GetTickCount() - lastLog > 10000 && !(pose[0] == 0 && pose[1] == 0 && pose[2] == 0 && pose[7] == 1)) {
+            ++logged;
+            lastLog = GetTickCount();
+            MLOG("pose: bone 0 = t(%.4f %.4f %.4f w %.4f) q(%.5f %.5f %.5f %.5f)", pose[0], pose[1], pose[2], pose[3], pose[4],
+                 pose[5], pose[6], pose[7]);
+        }
+        foldBone0(pose, t, pos);
     } else { // not the layout the placement code expects: plain position
         t[0] = pos[0]; t[1] = pos[1]; t[2] = pos[2]; t[3] = 1.f;
     }
@@ -260,8 +268,8 @@ void fixClient(Ghost& g, const net::PlayerState& st) {
         if ((idx[i] & 0xff) != 1) continue;
         float bones[2][8];
         if (i != 1 || !mem::read(pose, bones, sizeof(bones))) { poke(pose + i * 0x20, st.pos, sizeof(st.pos)); break; }
-        anchorBone1(bones[0], bones[1], st.pos);
-        poke(pose + 0x20, bones[1], 16); // translation only
+        foldBone0(bones[0], bones[1], st.pos);
+        poke(pose, bones, sizeof(bones));
         break;
     }
 }

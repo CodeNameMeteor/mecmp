@@ -60,8 +60,9 @@ Per remote player:
    body at `bone0.t + bone0.t.w * rotate(bone0.q, bone1.t)`. Bone 0 has a small rotation from the
    animation; with the world position written into bone 1 as is, the body was off by that angle
    times the distance from the level's origin (metres, growing with height; a pause, which stops
-   this update, put it right). Bone 1 is written so the formula gives the position (`pose_math.h`,
-   tested in `tests/pose_test.cpp`).
+   this update, put it right). Something else takes bone 1 alone as the position (seen while paused),
+   so bone 0 is folded into bone 1 (bone 0 = identity, bone 1 = {pos, bone0.q * bone1.q}): both then
+   agree, where two different answers made the body jitter (`pose_math.h`, `tests/pose_test.cpp`).
 4. **Visibility**: ghost client characters start hidden (time-trial markers normally show them).
    Call `clientCharacter->vtbl[0x3d8](true)` after creation and every few seconds; `false` when
    the player stops sending.

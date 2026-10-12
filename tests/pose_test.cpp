@@ -64,6 +64,24 @@ int main() {
         anchorBone1(zero, b1, pos);
         CHECK(near3(b1, pos, 1e-6f));
     }
+    // Folded: bone 1 is the position as is AND the game's formula gives it, with the same orientation.
+    {
+        float f0[8], f1[8] = {5, 6, 7, 1, 0.1f, 0.2f, 0.3f, 0.927f};
+        for (int j = 0; j < 8; ++j) f0[j] = b0[j];
+        float before[4];
+        quatMul(&b0[4], &f1[4], before);
+        foldBone0(f0, f1, pos);
+        CHECK(near3(f1, pos, 1e-6f));
+        float placed[3];
+        replayPlacement(f0, f1, placed);
+        CHECK(near3(placed, pos, 1e-3f));
+        float after[4];
+        quatMul(&f0[4], &f1[4], after);
+        const float nb = std::sqrt(before[0] * before[0] + before[1] * before[1] + before[2] * before[2] + before[3] * before[3]);
+        float dot = 0;
+        for (int j = 0; j < 4; ++j) dot += before[j] / nb * after[j];
+        CHECK(std::fabs(dot) > 0.99999f);
+    }
     if (g_failures == 0) std::printf("pose tests: all passed\n");
     return g_failures == 0 ? 0 : 1;
 }

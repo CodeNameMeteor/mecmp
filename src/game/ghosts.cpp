@@ -274,6 +274,13 @@ std::string desiredLook(uint32_t playerLook) { return config::lookName(playerLoo
 // red ghost meanwhile; returns false then, so it is tried again later.
 bool applyLook(void* ch, const std::string& key, std::string* used = nullptr) {
     if (key.rfind("echo:", 0) == 0) {
+        // A style that cannot render here (e.g. picked in an older version) would leave the ghost
+        // invisible: show the plain ghost instead, and count it as done (no retries).
+        if (!models::echoRenders(config::lookHash(key)) && !models::echoes().empty()) {
+            if (!models::apply(ch, "RunVis", used)) return false;
+            if (used) *used = "RunVis (their style is not available in free roam)";
+            return true;
+        }
         if (models::applyEcho(ch, config::lookHash(key))) {
             if (used) *used = key;
             return true;

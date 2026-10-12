@@ -108,6 +108,13 @@ per piece, the source's unlocks, ClearVisualState = 1) and applies it with `char
 - Built customizations are cached per (pieces, unlocks) and the cache and the echo list are emptied on
   level change (level data).
 
+**Only RunVis renders in free roam.** Every other style's piece is a `MeshAndVariationPair`: a separate
+projection body mesh (`female_runner_projection_01_fullbody`) plus an ObjectVariation that swaps in
+`FX_SS_Projection_<Style>` with MainColor/SecondaryColor. Applied in free roam the ghost shows nothing
+(every style tested, ghost shader on and off): those assets are not loaded there. The menu therefore
+offers Faith and the RunVis ghost; a received style that cannot render shows as RunVis
+(`models::echoRenders`). Loading them is open research.
+
 Each player picks their own look (menu *Your look*: Faith, or a ghost style and colour; `[player]
 look=` in mecmp.ini: `faith` or `echo:<hash>`) and sends it with their name. Every ghost shows its
 player's look; there is no override on the receiving side. A look the catalogue does not know yet shows

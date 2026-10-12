@@ -13,6 +13,7 @@
 #include "app/mod.h"
 #include "core/config.h"
 #include "game/ghosts.h"
+#include "game/teleport.h"
 #include "game/models.h"
 #include "imgui.h"
 #include "net/net.h"
@@ -135,7 +136,7 @@ void playersSection() {
         ImGui::TextDisabled("Nobody else here yet.");
         return;
     }
-    if (ImGui::BeginTable("players", 3, ImGuiTableFlags_SizingStretchProp)) {
+    if (ImGui::BeginTable("players", 4, ImGuiTableFlags_SizingStretchProp)) {
         for (const auto& r : remotes) {
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
@@ -153,6 +154,15 @@ void playersSection() {
                 ImGui::TextColored(c, "%s, %.0f%% lost", r.lossPct < 10.f ? "fair" : "poor", r.lossPct);
             }
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Share of their updates that did not arrive in the last 5 s.");
+            ImGui::TableNextColumn();
+            ImGui::PushID(static_cast<int>(r.id));
+            const bool can = game::teleport::available() && !game::teleport::busy() && r.ageMs < 1000;
+            ImGui::BeginDisabled(!can);
+            if (ImGui::SmallButton("Go to")) game::teleport::requestGoTo(r.id);
+            ImGui::EndDisabled();
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                ImGui::SetTooltip(game::teleport::available() ? "Travel to this player" : "Not available in this game build");
+            ImGui::PopID();
         }
         ImGui::EndTable();
     }

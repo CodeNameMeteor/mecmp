@@ -115,6 +115,18 @@ as the default red ghost and is applied once the list is found. Some echo custom
 piece of their own (only colour unlocks): with ClearVisualState those left the ghost without a mesh, so
 they are built on the RunVis body pieces. New picks default to red RunVis (easy to see). At most one look is applied per tick.
 
+## Go to a player (`game/teleport.cpp`)
+
+The menu's *Go to* uses the game's own character teleport, `ServerCharacterEntity_teleport`
+(0x143378830; what `ServerTeleportEntity_teleportPlayer` 0x143391430 calls): `(character, const
+LinearTransform*)`, target read with MOVAPS (16-byte aligned). It stores the target (+0x410), moves the
+physics controller (+0x60, vtbl+0x140, velocity zeroed via vtbl+0x168), sets the transform, sends
+`CharacterToComponentsOnTeleportedMessage` to the components and marks the character dirty, so
+the client follows. Sequence on the server tick: fade to black (350 ms, drawn by the overlay) ->
+teleport onto the other player's spot, facing their way -> hold 1.2 s while the area streams in
+(placed again if more than 2 m below the target, at most 6 times) -> fade in. Before the first use
+the function's bytes are checked; if they differ, *Go to* is off (logged), the rest of the mod runs.
+
 ## Network (`net/`)
 
 UDP, one socket. Sessions have one host and any number of joiners (up to 16).

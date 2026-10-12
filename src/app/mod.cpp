@@ -12,6 +12,7 @@
 #include "game/engine.h"
 #include "game/fingerprint.h"
 #include "game/ghosts.h"
+#include "game/teleport.h"
 #include "game/hooks.h"
 #include "game/level.h"
 #include "game/local_player.h"
@@ -33,7 +34,7 @@ uint64_t g_levelStartTick = 0;
 void onTick(void* world, float dt) {
     static void* lastWorld = nullptr;
     if (world != lastWorld) { // new level: everything of the old one is gone
-        if (lastWorld) game::ghosts::levelChanged();
+        if (lastWorld) { game::ghosts::levelChanged(); game::teleport::levelChanged(); }
         lastWorld = world;
         g_levelStartTick = g_ticks.load();
     }
@@ -46,6 +47,7 @@ void onTick(void* world, float dt) {
         g_localMotion.add(local);
     }
     game::ghosts::tick(n, n - g_levelStartTick);
+    game::teleport::tick();
 }
 
 // Waits until the engine has built its type list, then checks that this is the game build the

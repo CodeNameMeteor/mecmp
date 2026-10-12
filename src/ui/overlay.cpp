@@ -8,6 +8,7 @@
 #include "ui/overlay.h"
 
 #include <atomic>
+#include <cctype>
 
 #include "backends/imgui_impl_dx11.h"
 #include "backends/imgui_impl_win32.h"
@@ -16,7 +17,9 @@
 #include "core/mem.h"
 #include "game/ghosts.h"
 #include "game/hooks.h"
+#include "game/teleport.h"
 #include "imgui.h"
+#include "ui/chat.h"
 #include "ui/gamepad.h"
 #include "ui/menu.h"
 #include "ui/nametags.h"
@@ -44,6 +47,8 @@ std::atomic<bool> g_open{false};
 std::atomic<int> g_toggleKey{VK_INSERT};
 std::atomic<bool> g_keyCapture{false};
 std::atomic<bool> g_justOpened{false}; // focus the menu window on the next frame (gamepad navigation)
+std::atomic<int> g_chatKey{'T'};
+bool g_eatChar = false; // the character typed by the key that opened the chat (window thread)
 
 const MenuKey kMenuKeys[] = {
     {"INSERT", VK_INSERT, ImGuiKey_Insert}, {"HOME", VK_HOME, ImGuiKey_Home}, {"END", VK_END, ImGuiKey_End},
@@ -129,6 +134,15 @@ void applyRawMouse() {
     if (const int w = g_wheel.exchange(0)) io.AddMouseWheelEvent(0.f, static_cast<float>(w) / WHEEL_DELTA);
 }
 
+// A raw keyboard key press (not a release, not mouse).
+bool isRawKeyPress(LPARAM l) {
+    RAWINPUT ri{};
+    UINT size = sizeof(ri);
+    if (GetRawInputData(reinterpret_cast<HRAWINPUT>(l), RID_INPUT, &ri, &size, sizeof(RAWINPUTHEADER)) == static_cast<UINT>(-1))
+        return false;
+    return ri.header.dwType == RIM_TYPEKEYBOARD && !(ri.data.keyboard.Flags & RI_KEY_BREAK);
+}
+
 bool isMouseMessage(UINT msg) { return msg >= WM_MOUSEFIRST && msg <= WM_MOUSELAST; }
 
 LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
@@ -142,6 +156,26 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
         toggleMenu();
         return 0;
     }
+    // Chat: its key opens the input line (not while the menu is open). While it is open the keyboard
+    // and raw input go to it, not to the game; Escape cancels.
+    if (msg == WM_KEYDOWN && !g_open && !chat::isOpen() && g_ready && static_cast<int>(w) == g_chatKey.load() &&
+        !(l & (1 << 30))) {
+        chat::open();
+        g_eatChar = true;
+        return 0;
+    }
+    if (chat::isOpen() && g_ready && !g_open) {
+        if (msg == WM_KEYDOWN && w == VK_ESCAPE) { chat::close(); return 0; }
+        if (msg == WM_CHAR && g_eatChar) { g_eatChar = false; return 0; }
+        // Key presses go to the chat line only. Key releases and the mouse still reach the game, so a
+        // key held when the chat opened is released there (Faith does not keep running).
+        if (msg == WM_INPUT && isRawKeyPress(l)) return DefWindowProcW(hwnd, msg, w, l);
+        if (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN || msg == WM_CHAR || msg == WM_SYSCHAR) {
+            ImGui_ImplWin32_WndProcHandler(hwnd, msg, w, l);
+            return 0;
+        }
+        if (msg == WM_KEYUP || msg == WM_SYSKEYUP) ImGui_ImplWin32_WndProcHandler(hwnd, msg, w, l); // and the game
+    }
     // A pad plugged in later: let the backend look for it again (it only sets a flag).
     if (msg == WM_DEVICECHANGE && g_ready) ImGui_ImplWin32_WndProcHandler(hwnd, msg, w, l);
     if (g_open && g_ready) {
@@ -154,6 +188,15 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
         if (isInputMessage(msg)) return 0;
     }
     return CallWindowProcW(g_origWndProc, hwnd, msg, w, l);
+}
+
+// The chat key: a letter (A..Z), ENTER, or one of the menu keys.
+int chatKeyFromName(const std::string& n) {
+    if (n.size() == 1 && isalpha(static_cast<unsigned char>(n[0]))) return toupper(static_cast<unsigned char>(n[0]));
+    if (_stricmp(n.c_str(), "ENTER") == 0) return VK_RETURN;
+    for (const MenuKey& k : kMenuKeys)
+        if (_stricmp(n.c_str(), k.name) == 0) return k.vk;
+    return 'T';
 }
 
 int keyFromName(const std::string& n) {
@@ -216,7 +259,11 @@ HRESULT STDMETHODCALLTYPE presentHook(IDXGISwapChain* sc, UINT sync, UINT flags)
         if (g_justOpened.exchange(false)) ImGui::SetWindowFocus("###mecmp");
         ImGui::GetIO().MouseDrawCursor = g_open.load();
         nametags::draw();
+        if (const float a = game::teleport::fadeAlpha(); a > 0.f) // "Go to": the game's teleport behind a fade
+            ImGui::GetForegroundDrawList()->AddRectFilled(ImVec2(0, 0), ImGui::GetIO().DisplaySize,
+                                                          ImGui::GetColorU32(ImVec4(0, 0, 0, a)));
         notices::draw();
+        chat::draw();
         menu::draw(g_open.load());
         ImGui::Render();
         g_context->OMSetRenderTargets(1, &g_rtv, nullptr);
@@ -246,6 +293,7 @@ void toggleMenu() {
         g_rawMouse = false;
         g_justOpened = true;
     }
+    if (open) chat::close(); // the menu takes the keyboard
     if (!open) {
         g_keyCapture = false;
         gamepad::cancelCapture();
@@ -264,6 +312,7 @@ bool menuOpen() { return g_open.load(); }
 
 bool install() {
     g_toggleKey = keyFromName(config::get()->menuKey);
+    g_chatKey = chatKeyFromName(config::get()->chatKey);
     gamepad::setBinding(gamepad::parse(config::get()->menuPad));
     // A throwaway device + swap chain on a hidden window, only to find DXGI's swap-chain vtable.
     WNDCLASSEXW wc{};

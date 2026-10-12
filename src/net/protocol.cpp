@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <cstring>
+#include <string>
 
 namespace mecmp::net::protocol {
 namespace {
@@ -110,6 +111,37 @@ size_t utf8PrefixLength(const std::string& s, size_t maxBytes) {
     // Continuation bytes look like 10xxxxxx: back up to the first byte of the character that would be cut.
     while (n > 0 && (static_cast<unsigned char>(s[n]) & 0xC0) == 0x80) --n;
     return n;
+}
+
+std::string cleanChatText(const std::string& raw) {
+    std::string s;
+    for (unsigned char c : raw)
+        if (c >= 0x20 && c != 0x7f) s.push_back(static_cast<char>(c));
+    const size_t a = s.find_first_not_of(' ');
+    if (a == std::string::npos) return std::string();
+    s = s.substr(a, s.find_last_not_of(' ') - a + 1);
+    s.resize(utf8PrefixLength(s, kMaxChatBytes));
+    return s;
+}
+
+size_t writeChat(char* buf, const Header& h, uint32_t id, const std::string& text) {
+    const std::string t = cleanChatText(text);
+    char* p = buf;
+    put(p, h);
+    put(p, id);
+    put(p, static_cast<uint8_t>(t.size()));
+    memcpy(p, t.data(), t.size());
+    p += t.size();
+    return static_cast<size_t>(p - buf);
+}
+
+bool readChat(const char* payload, size_t n, uint32_t& id, std::string& text) {
+    const char* p = payload;
+    const char* end = payload + n;
+    uint8_t len = 0;
+    if (!get(p, end, id) || !get(p, end, len) || len > kMaxChatBytes || end - p < len) return false;
+    text = cleanChatText(std::string(p, len));
+    return !text.empty();
 }
 
 size_t writeHello(char* buf, const Header& h, const char* name, uint32_t look) {

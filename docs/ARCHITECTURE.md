@@ -108,6 +108,13 @@ per piece, the source's unlocks, ClearVisualState = 1) and applies it with `char
 - Built customizations are cached per (pieces, unlocks) and the cache and the echo list are emptied on
   level change (level data).
 
+**Only RunVis renders in free roam.** Every other style's piece is a `MeshAndVariationPair`: a separate
+projection body mesh (`female_runner_projection_01_fullbody`) plus an ObjectVariation that swaps in
+`FX_SS_Projection_<Style>` with MainColor/SecondaryColor. Applied in free roam the ghost shows nothing
+(every style tested, ghost shader on and off): those assets are not loaded there. The menu therefore
+offers Faith and the RunVis ghost; a received style that cannot render shows as RunVis
+(`models::echoRenders`). Loading them is open research.
+
 Each player picks their own look (menu *Your look*: Faith, or a ghost style and colour; `[player]
 look=` in mecmp.ini: `faith` or `echo:<hash>`) and sends it with their name. Every ghost shows its
 player's look; there is no override on the receiving side. A look the catalogue does not know yet leaves
@@ -117,6 +124,32 @@ piece of their own (only colour unlocks): with ClearVisualState those left the g
 they are built on the RunVis body pieces. New picks default to red RunVis (easy to see). At most one look is applied per tick.
 The look catalogue is published as an immutable list (`models::echoes()` returns a shared pointer), so the
 menu reads it every frame without copying it.
+
+## Chat (`ui/chat.cpp`, `net/`)
+
+CHAT packets (type 3: u32 message id, u8 length, UTF-8 text of at most 120 bytes after cleaning) are
+relayed by the host like the others. UDP may drop one, so each message goes out in 3 consecutive send
+cycles; receivers keep the last 16 ids per player and show a message once. Text is cleaned on both
+sides (`protocol::cleanChatText`: no control characters, cut at a UTF-8 boundary). At most 5 messages
+per player per 5 s are shown. The overlay opens the input line with `[ui] chat_key` (T): key presses
+then go to ImGui, while key releases, raw key releases and the mouse still reach the game (a key held
+when the chat opened is released). Escape cancels, Enter sends. The last 8 lines show bottom-left
+for 12 s, then fade (`[ui] show_chat`). The solo test does not echo your own message twice.
+
+## Go to a player (`game/teleport.cpp`)
+
+The menu's *Go to* uses the game's own character teleport, `ServerCharacterEntity_teleport`
+(0x143378830; what `ServerTeleportEntity_teleportPlayer` 0x143391430 calls): `(character, const
+LinearTransform*)`, target read with MOVAPS (16-byte aligned). It stores the target (+0x410), moves the
+physics controller (+0x60, vtbl+0x140, velocity zeroed via vtbl+0x168), sets the transform, sends
+`CharacterToComponentsOnTeleportedMessage` to the components and marks the character dirty, so
+the client follows. Sequence on the server tick: fade to black (350 ms, drawn by the overlay) ->
+teleport onto the other player's spot, facing their way -> hold 1.2 s while the area streams in
+(placed again if more than 2 m below the target, at most 3 times, only while it is still the same
+character near the target: a death or respawn ends it) -> fade in. The fade also ends by itself if a
+phase runs 4 s over (the server tick can stop while the game handles a death), so the screen never
+stays black. The target's own state is not checked: a player who is dead may stand somewhere deadly. Before the first use
+the function's bytes are checked; if they differ, *Go to* is off (logged), the rest of the mod runs.
 
 ## Network (`net/`)
 

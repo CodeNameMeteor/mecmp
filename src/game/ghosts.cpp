@@ -275,7 +275,17 @@ std::string desiredLook(uint32_t playerLook) { return config::lookName(playerLoo
 // later. Only spawning falls back to the default red ghost (see spawnGhost).
 bool applyLook(void* ch, const std::string& key, std::string* used = nullptr) {
     if (key.rfind("echo:", 0) == 0) {
-        if (!models::applyEcho(ch, config::lookHash(key))) return false;
+        const uint32_t hash = config::lookHash(key);
+        // A style that cannot render here (e.g. picked in an older version) would leave the ghost
+        // invisible: show the plain ghost instead, and count it as done (no retries).
+        if (!models::echoRenders(hash) && !models::echoes()->empty()) {
+            if (!models::apply(ch, "RunVis", used)) return false;
+            if (used) *used = "RunVis (their style is not available in free roam)";
+            return true;
+        }
+        // The catalogue is not loaded yet, or the look is unknown to it: keep the ghost's look, and the
+        // caller retries later (it does not reapply RunVis each time: that rebuilds the mesh).
+        if (!models::applyEcho(ch, hash)) return false;
         if (used) *used = key;
         return true;
     }

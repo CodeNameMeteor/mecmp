@@ -58,6 +58,9 @@ constexpr const char* kDefaultIni =
     "show_names=1\r\n"
     "; 1 = show a short notice when a player joins or leaves\r\n"
     "show_notices=1\r\n"
+    "; 1 = show chat messages; chat_key opens the chat line (a letter A..Z, ENTER, or INSERT/F1../...)\r\n"
+    "show_chat=1\r\n"
+    "chat_key=T\r\n"
     "\r\n"
     "[debug]\r\n"
     "; 1 = detailed diagnostic log (for bug reports)\r\n"
@@ -106,6 +109,8 @@ void load(const std::wstring& dir) {
     s.menuPad = readString(ini, L"ui", L"menu_pad", "LS+RS");
     s.showNames = readInt(ini, L"ui", L"show_names", 1) != 0;
     s.showNotices = readInt(ini, L"ui", L"show_notices", 1) != 0;
+    s.showChat = readInt(ini, L"ui", L"show_chat", 1) != 0;
+    s.chatKey = readString(ini, L"ui", L"chat_key", "T");
     s.verbose = readInt(ini, L"debug", L"verbose", 0) != 0;
     log::verbose = s.verbose;
     s.ignoreBuildCheck = readInt(ini, L"debug", L"ignore_build_check", 0) != 0;
@@ -171,6 +176,7 @@ void applyPending() {
     put(L"ui", L"menu_pad", snapshot->menuPad);
     put(L"ui", L"show_names", snapshot->showNames ? "1" : "0");
     put(L"ui", L"show_notices", snapshot->showNotices ? "1" : "0");
+    put(L"ui", L"show_chat", snapshot->showChat ? "1" : "0");
     MLOG("config: saved");
 }
 

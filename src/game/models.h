@@ -29,7 +29,8 @@ struct Echo {
 std::vector<Echo> echoes(); // empty until findEchoes() succeeded (in a level with time-trial markers)
 bool findEchoes();          // mod thread: memory scan, a second at most; true if the list is known
 bool applyEcho(void* ghost, uint32_t hash); // game thread
-uint32_t defaultEcho(); // an easy-to-see look (red RunVis, the game's own ghost) for new picks; 0 if none
+uint32_t defaultEcho();
+bool echoRenders(uint32_t hash); // false for the styles whose assets are not loaded in free roam // an easy-to-see look (red RunVis, the game's own ghost) for new picks; 0 if none
 
 // Applies a model to a ghost (game thread). `wanted` = "faith" or part of a model name.
 bool apply(void* ghost, const std::string& wanted, std::string* usedName = nullptr);

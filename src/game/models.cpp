@@ -24,7 +24,17 @@ std::vector<Echo> g_echoes; // the game's echo (runner ghost) look catalogue, gu
 // CustomizeCharacterData vtable (in the game image, so valid in every level), from any template seen.
 uintptr_t g_ccdVtable = 0;
 uintptr_t g_shaderData = 0;   // ghost character data whose ghost-shader flag we switched off
+uintptr_t g_shaderDataType = 0; // its first word when we did (checked before writing it back)
 DWORD g_shaderRestoreAt = 0;  // when to switch it back on (game thread)
+
+// Switches the shared ghost-shader flag back on. Every projection character uses that data (the
+// game's own time-trial ghosts, the main menu's "Your Echo" preview), so it must never stay off.
+void restoreShaderFlag() {
+    if (g_shaderData && mem::readOr<uintptr_t>(g_shaderData) == g_shaderDataType)
+        poke<uint8_t>(g_shaderData + CharData_GhostShader, 1);
+    g_shaderData = 0;
+    g_shaderRestoreAt = 0;
+}
 
 std::string lower(std::string s) {
     for (auto& c : s) c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
@@ -130,16 +140,14 @@ void reset() {
     g_models.clear();
     g_cache.clear();
     g_echoes.clear(); // level data may go with the level: found again by findEchoes()
-    g_shaderData = 0;
-    g_shaderRestoreAt = 0;
+    // A level change within the 3 s after a Faith look used to leave the flag off for good, and the
+    // main menu's "Your Echo" preview (also a projection character) then drew wrongly.
+    restoreShaderFlag();
 }
 
 void tick() {
-    if (g_shaderData && g_shaderRestoreAt && static_cast<int32_t>(GetTickCount() - g_shaderRestoreAt) >= 0) {
-        poke<uint8_t>(g_shaderData + CharData_GhostShader, 1);
-        g_shaderData = 0;
-        g_shaderRestoreAt = 0;
-    }
+    if (g_shaderData && g_shaderRestoreAt && static_cast<int32_t>(GetTickCount() - g_shaderRestoreAt) >= 0)
+        restoreShaderFlag();
 }
 
 namespace {
@@ -181,6 +189,7 @@ bool applyPieces(void* ghost, std::vector<uintptr_t> visuals, uintptr_t unlockAr
             if (cur != want) poke(data + CharData_GhostShader, want);
             if (!ghostShader) {
                 g_shaderData = data;
+                g_shaderDataType = mem::readOr<uintptr_t>(data);
                 g_shaderRestoreAt = GetTickCount() + 3000;
             }
         }
@@ -281,14 +290,22 @@ bool applyEcho(void* ghost, uint32_t hash) {
     return applyPieces(ghost, visuals, unlocks, e.ccd, e.name, true);
 }
 
+// Only the RunVis look renders in free roam: every other style is a separate projection body mesh
+// with a material variation (MeshAndVariationPair -> ObjectVariation on FX_SS_Projection_<Style>),
+// which is not loaded there; applied, the ghost shows nothing. Tested with every style, with and
+// without the ghost shader flag.
+bool echoRenders(uint32_t hash) {
+    std::lock_guard<std::mutex> lock(g_m);
+    for (const auto& e : g_echoes)
+        if (e.hash == hash) return _stricmp(e.style.c_str(), "RunVis") == 0;
+    return false;
+}
+
 uint32_t defaultEcho() {
     std::lock_guard<std::mutex> lock(g_m);
-    uint32_t any = 0;
-    for (const auto& e : g_echoes) {
-        if (_stricmp(e.style.c_str(), "RunVis") == 0 && _stricmp(e.colour.c_str(), "Red") == 0) return e.hash;
-        if (!any && _stricmp(e.colour.c_str(), "Black") != 0) any = e.hash;
-    }
-    return any ? any : (g_echoes.empty() ? 0 : g_echoes.front().hash);
+    for (const auto& e : g_echoes)
+        if (_stricmp(e.style.c_str(), "RunVis") == 0) return e.hash;
+    return g_echoes.empty() ? 0 : g_echoes.front().hash;
 }
 
 // PamServerCustomizeProjectionCharacterEntity (time-trial markers; vtable 0x141c7ea80): +0x28 its data,

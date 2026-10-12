@@ -198,7 +198,29 @@ static void testHelloLook() {
     CHECK(protocol::readHello(buf + sizeof(h), 3, name, look) && name == "Met" && look == 0);
 }
 
+static void testChat() {
+    char buf[protocol::kMaxPacket];
+    protocol::Header h{};
+    const size_t n = protocol::writeChat(buf, h, 77, "  hello \x1b[2Jthere\n ");
+    uint32_t id = 0;
+    std::string text;
+    CHECK(protocol::readChat(buf + sizeof(h), n - sizeof(h), id, text));
+    CHECK(id == 77 && text == "hello [2Jthere"); // control characters and outer spaces gone
+    // Long text is cut to the limit without splitting a UTF-8 character.
+    std::string longText(protocol::kMaxChatBytes - 1, 'a');
+    longText += "\xC3\xA9";
+    CHECK(protocol::cleanChatText(longText).size() == protocol::kMaxChatBytes - 1);
+    // Truncated or empty messages are refused.
+    CHECK(!protocol::readChat(buf + sizeof(h), 4, id, text));
+    const size_t e = protocol::writeChat(buf, h, 1, "   ");
+    CHECK(!protocol::readChat(buf + sizeof(h), e - sizeof(h), id, text));
+    // A length byte beyond the limit or the packet is refused.
+    char bad[8] = {1, 0, 0, 0, static_cast<char>(200), 'x'};
+    CHECK(!protocol::readChat(bad, 6, id, text));
+}
+
 int main() {
+    testChat();
     testLossWindow();
     testHelloLook();
     testDelayEstimator();

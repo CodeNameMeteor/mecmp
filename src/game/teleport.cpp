@@ -78,7 +78,7 @@ void requestGoTo(uint32_t peer) {
 
 bool busy() { return g_phase != Idle; }
 
-bool available() { return g_available.load() != 0; }
+bool available() { return checkFunction(); } // checked once (on the first call), then remembered
 
 float fadeAlpha() {
     const int p = g_phase.load();

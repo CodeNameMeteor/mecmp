@@ -25,6 +25,8 @@ constexpr uint32_t kMagic = 0x4d43454d; // "MECM"
 constexpr uint16_t kProtocol = 5;
 constexpr uint16_t kTypeState = 1;
 constexpr uint16_t kTypeHello = 2;
+constexpr uint16_t kTypeChat = 3;
+constexpr size_t kMaxChatBytes = 120; // UTF-8, after cleaning
 constexpr size_t kNameLen = 24;
 constexpr uint32_t kFullEvery = 30;
 constexpr size_t kMaxPacket = 1024;
@@ -119,6 +121,14 @@ struct LossWindow {
         return g + l ? 100.f * static_cast<float>(l) / static_cast<float>(g + l) : 0.f;
     }
 };
+
+// type 3 CHAT: u32 message id | u8 length | text (UTF-8, at most kMaxChatBytes). Each message is sent
+// a few times (UDP may drop one); receivers keep the ids they have seen and show it once.
+// Keeps what can be shown: no control characters (a message must not be able to forge log lines or
+// move the cursor), at most kMaxChatBytes without splitting a UTF-8 character, no leading/trailing spaces.
+std::string cleanChatText(const std::string& raw);
+size_t writeChat(char* buf, const Header& h, uint32_t id, const std::string& text);
+bool readChat(const char* payload, size_t n, uint32_t& id, std::string& text);
 
 size_t writeState(char* buf, const Header& h, const PlayerState& s, Encoder& enc);
 size_t writeHello(char* buf, const Header& h, const char* name, uint32_t look = 0);

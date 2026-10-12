@@ -18,6 +18,7 @@
 #include "game/ghosts.h"
 #include "game/hooks.h"
 #include "game/teleport.h"
+#include "game/mumble_link.h"
 #include "imgui.h"
 #include "ui/chat.h"
 #include "ui/gamepad.h"
@@ -263,6 +264,7 @@ HRESULT STDMETHODCALLTYPE presentHook(IDXGISwapChain* sc, UINT sync, UINT flags)
             ImGui::GetForegroundDrawList()->AddRectFilled(ImVec2(0, 0), ImGui::GetIO().DisplaySize,
                                                           ImGui::GetColorU32(ImVec4(0, 0, 0, a)));
         notices::draw();
+        game::mumble::update();
         chat::draw();
         menu::draw(g_open.load());
         ImGui::Render();

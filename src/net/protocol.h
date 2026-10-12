@@ -131,9 +131,13 @@ size_t writeChat(char* buf, const Header& h, uint32_t id, const std::string& tex
 bool readChat(const char* payload, size_t n, uint32_t& id, std::string& text);
 
 size_t writeState(char* buf, const Header& h, const PlayerState& s, Encoder& enc);
-size_t writeHello(char* buf, const Header& h, const char* name, uint32_t look = 0);
+// HELLO: char name[24] | u32 look | u8 flags (bit 0: the sender hosts this session). Older senders stop
+// after the name or the look; missing fields read as 0.
+constexpr uint8_t kHelloHost = 1;
+constexpr size_t kHelloFlagsOffset = kNameLen + sizeof(uint32_t); // payload offset of the flags byte (after name and look)
+size_t writeHello(char* buf, const Header& h, const char* name, uint32_t look = 0, uint8_t flags = 0);
 // HELLO payload (after the header). `name` = the raw field (cleaned by the caller); `look` = 0 if absent.
-bool readHello(const char* payload, size_t n, std::string& name, uint32_t& look);
+bool readHello(const char* payload, size_t n, std::string& name, uint32_t& look, uint8_t* flags = nullptr);
 // Decodes a STATE payload (after the header). `full` tells whether to commit it as the new base.
 bool readState(const char* payload, size_t n, const Decoder& dec, PlayerState& out, bool& full);
 void commitBase(Decoder& dec, const PlayerState& s);

@@ -144,7 +144,7 @@ bool readChat(const char* payload, size_t n, uint32_t& id, std::string& text) {
     return !text.empty();
 }
 
-size_t writeHello(char* buf, const Header& h, const char* name, uint32_t look) {
+size_t writeHello(char* buf, const Header& h, const char* name, uint32_t look, uint8_t flags) {
     char* p = buf;
     put(p, h);
     const std::string full = name ? name : "";
@@ -153,10 +153,11 @@ size_t writeHello(char* buf, const Header& h, const char* name, uint32_t look) {
     memcpy(p, n, kNameLen);
     p += kNameLen;
     put(p, look);
+    put(p, flags);
     return static_cast<size_t>(p - buf);
 }
 
-bool readHello(const char* payload, size_t n, std::string& name, uint32_t& look) {
+bool readHello(const char* payload, size_t n, std::string& name, uint32_t& look, uint8_t* flags) {
     if (n == 0) return false;
     const size_t nameBytes = n < kNameLen ? n : kNameLen;
     size_t len = 0;
@@ -164,6 +165,7 @@ bool readHello(const char* payload, size_t n, std::string& name, uint32_t& look)
     name.assign(payload, len);
     look = 0;
     if (n >= kNameLen + sizeof(uint32_t)) memcpy(&look, payload + kNameLen, sizeof(look));
+    if (flags) *flags = n >= kNameLen + sizeof(uint32_t) + 1 ? static_cast<uint8_t>(payload[kNameLen + sizeof(uint32_t)]) : 0;
     return true;
 }
 

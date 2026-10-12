@@ -53,6 +53,20 @@ Solo test: *Solo test* in the menu, or `join=127.0.0.1:47800`. Your own packets 
 ghost copies your moves 3 m away along the world X axis (`loopback_offset`); it stays put while you
 turn, so you can walk around it.
 
+## Positional voice (Mumble)
+
+MECMP has no voice chat of its own; it tells [Mumble](https://www.mumble.info) where you are, so
+players hear each other from the direction of their ghost, quieter with distance.
+
+1. Everyone installs Mumble and joins the same Mumble server and channel.
+2. In Mumble: *Settings > Audio Output > Positional Audio* on, and *Settings > Plugins > Link* enabled
+   (with *Link to Game and Transmit Position* on).
+3. Play in the same MECMP session. Mumble says it linked to "Mirror's Edge Catalyst (MECMP)".
+
+Only players in the same MECMP session are positioned for each other (outside the game, or in another
+session, Mumble falls back to normal voice). Turn it off with *Positional voice (Mumble)* in the menu or
+`[voice] mumble_link=0`.
+
 ## Security and privacy
 
 - Traffic is plain UDP, with no encryption and no login. Anyone who can reach the host's port can

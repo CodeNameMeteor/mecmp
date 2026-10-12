@@ -151,6 +151,16 @@ phase runs 4 s over (the server tick can stop while the game handles a death), s
 stays black. The target's own state is not checked: a player who is dead may stand somewhere deadly. Before the first use
 the function's bytes are checked; if they differ, *Go to* is off (logged), the rest of the mod runs.
 
+## Positional voice (`game/mumble_link.cpp`)
+
+Mumble's Link plugin reads the shared memory `MumbleLink` (`LinkedMem`, version 2). Each rendered frame
+(only while the camera can be read) the mod writes the camera position, look direction (minus the
+camera's forward row) and up as both avatar and camera, converted to Mumble's left-handed axes by
+negating z, and increments `uiTick`. The context is `MECMP-<host session id>`, the same for everyone
+in a session: the HELLO packet carries a host flag (u8 after the look; older builds omit it) so
+joiners learn the host's session id even though relayed packets all arrive from the host's address.
+Identity = the player's name. Turning it off writes `uiVersion = 0` and unmaps.
+
 ## Network (`net/`)
 
 UDP, one socket. Sessions have one host and any number of joiners (up to 16).

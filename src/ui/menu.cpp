@@ -268,6 +268,12 @@ void lookSection() {
     if (ImGui::Checkbox("Chat", &showChat)) config::change([showChat](config::Settings& c) { c.showChat = showChat; });
     ImGui::SameLine();
     ImGui::TextDisabled("(%s to type)", config::get()->chatKey.c_str());
+    bool mumble = config::get()->mumbleLink;
+    if (ImGui::Checkbox("Positional voice (Mumble)", &mumble))
+        config::change([mumble](config::Settings& c) { c.mumbleLink = mumble; });
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("With Mumble running (Positional Audio and the Link plugin on, everyone on the same\n"
+                          "Mumble server), players in this session hear each other from where they are.");
     if (ImGui::Button("Show ghosts")) game::ghosts::requestSpawnOrRefresh();
     ImGui::SameLine();
     if (ImGui::Button("Hide ghosts")) game::ghosts::requestHideAll();

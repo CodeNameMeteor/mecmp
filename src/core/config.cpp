@@ -48,6 +48,11 @@ constexpr const char* kDefaultIni =
     "; spawn other players' ghosts automatically when their packets arrive\r\n"
     "auto_spawn=1\r\n"
     "\r\n"
+    "[voice]\r\n"
+    "; 1 = positional voice through Mumble: players in the same session hear each other from where they\r\n"
+    "; are (needs Mumble running with Positional Audio and its Link plugin on). 0 = off\r\n"
+    "mumble_link=1\r\n"
+    "\r\n"
     "[ui]\r\n"
     "; key that opens the in-game menu: INSERT, HOME, END, DELETE, PAGEUP, PAGEDOWN, PAUSE or F1..F12\r\n"
     "menu_key=INSERT\r\n"
@@ -112,6 +117,7 @@ void load(const std::wstring& dir) {
     s.menuKey = readString(ini, L"ui", L"menu_key", "INSERT");
     s.menuPad = readString(ini, L"ui", L"menu_pad", "LS+RS");
     s.showNames = readInt(ini, L"ui", L"show_names", 1) != 0;
+    s.mumbleLink = readInt(ini, L"voice", L"mumble_link", 1) != 0;
     s.showNotices = readInt(ini, L"ui", L"show_notices", 1) != 0;
     s.showChat = readInt(ini, L"ui", L"show_chat", 1) != 0;
     s.chatKey = readString(ini, L"ui", L"chat_key", "T");
@@ -179,6 +185,7 @@ void applyPending() {
     put(L"ui", L"menu_key", snapshot->menuKey);
     put(L"ui", L"menu_pad", snapshot->menuPad);
     put(L"ui", L"show_names", snapshot->showNames ? "1" : "0");
+    put(L"voice", L"mumble_link", snapshot->mumbleLink ? "1" : "0");
     put(L"ui", L"show_notices", snapshot->showNotices ? "1" : "0");
     put(L"ui", L"show_chat", snapshot->showChat ? "1" : "0");
     MLOG("config: saved");

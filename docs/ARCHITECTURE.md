@@ -118,9 +118,7 @@ offers Faith and the RunVis ghost; a received style that cannot render shows as 
 Each player picks their own look (menu *Your look*: Faith, or a ghost style and colour; `[player]
 look=` in mecmp.ini: `faith` or `echo:<hash>`) and sends it with their name. Every ghost shows its
 player's look; there is no override on the receiving side. A look the catalogue does not know yet shows
-as the default red ghost and is applied once the list is found. Some echo customizations carry no body
-piece of their own (only colour unlocks): with ClearVisualState those left the ghost without a mesh, so
-they are built on the RunVis body pieces. New picks default to red RunVis (easy to see). At most one look is applied per tick.
+as the default red ghost and is applied once the list is found. New picks default to the RunVis ghost. At most one look is applied per tick.
 
 ## Network (`net/`)
 

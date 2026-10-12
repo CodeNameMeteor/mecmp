@@ -17,6 +17,7 @@
 #include "core/mem.h"
 #include "game/ghosts.h"
 #include "game/hooks.h"
+#include "game/teleport.h"
 #include "imgui.h"
 #include "ui/chat.h"
 #include "ui/gamepad.h"
@@ -258,6 +259,9 @@ HRESULT STDMETHODCALLTYPE presentHook(IDXGISwapChain* sc, UINT sync, UINT flags)
         if (g_justOpened.exchange(false)) ImGui::SetWindowFocus("###mecmp");
         ImGui::GetIO().MouseDrawCursor = g_open.load();
         nametags::draw();
+        if (const float a = game::teleport::fadeAlpha(); a > 0.f) // "Go to": the game's teleport behind a fade
+            ImGui::GetForegroundDrawList()->AddRectFilled(ImVec2(0, 0), ImGui::GetIO().DisplaySize,
+                                                          ImGui::GetColorU32(ImVec4(0, 0, 0, a)));
         notices::draw();
         chat::draw();
         menu::draw(g_open.load());

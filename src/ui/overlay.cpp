@@ -53,6 +53,7 @@ std::atomic<bool> g_justOpened{false}; // focus the menu window on the next fram
 std::atomic<int> g_chatKey{'T'};
 std::atomic<int> g_pingKey{0}; // 0 = none
 bool g_eatChar = false; // the character typed by the key that opened the chat (window thread)
+int g_openingChatKey = 0;
 
 const MenuKey kMenuKeys[] = {
     {"INSERT", VK_INSERT, ImGuiKey_Insert}, {"HOME", VK_HOME, ImGuiKey_Home}, {"END", VK_END, ImGuiKey_End},
@@ -150,6 +151,13 @@ bool isRawKeyPress(LPARAM l) {
 bool isMouseMessage(UINT msg) { return msg >= WM_MOUSEFIRST && msg <= WM_MOUSELAST; }
 
 LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
+    const bool keyUp = msg == WM_KEYUP || msg == WM_SYSKEYUP;
+    if (keyUp && g_ready) ImGui_ImplWin32_WndProcHandler(hwnd, msg, w, l);
+    if (msg == WM_KILLFOCUS) { g_openingChatKey = 0; g_eatChar = false; }
+    const int openingChar = g_openingChatKey >= 'A' && g_openingChatKey <= 'Z' ? g_openingChatKey + ('a' - 'A') : g_openingChatKey;
+    if (g_openingChatKey && ((msg == WM_KEYDOWN && static_cast<int>(w) == g_openingChatKey) ||
+        (msg == WM_CHAR && (static_cast<int>(w) == g_openingChatKey || static_cast<int>(w) == openingChar)))) return 0;
+    if (keyUp && static_cast<int>(w) == g_openingChatKey) { g_openingChatKey = 0; g_eatChar = false; }
     if (msg == WM_DESTROY && hwnd == g_window) {
         if (auto fn = g_onDestroyed.exchange(nullptr)) fn();
     }
@@ -165,6 +173,8 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
     if (msg == WM_KEYDOWN && !g_open && !chat::isOpen() && g_ready && static_cast<int>(w) == g_chatKey.load() &&
         !(l & (1 << 30))) {
         chat::open();
+        if (!chat::isOpen()) return CallWindowProcW(g_origWndProc, hwnd, msg, w, l);
+        g_openingChatKey = static_cast<int>(w);
         g_eatChar = true;
         return 0;
     }
@@ -182,7 +192,6 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
             ImGui_ImplWin32_WndProcHandler(hwnd, msg, w, l);
             return 0;
         }
-        if (msg == WM_KEYUP || msg == WM_SYSKEYUP) ImGui_ImplWin32_WndProcHandler(hwnd, msg, w, l); // and the game
     }
     // A pad plugged in later: let the backend look for it again (it only sets a flag).
     if (msg == WM_DEVICECHANGE && g_ready) ImGui_ImplWin32_WndProcHandler(hwnd, msg, w, l);

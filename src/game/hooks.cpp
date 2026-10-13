@@ -4,6 +4,8 @@
 #include "game/engine.h"
 #include "game/ghosts.h"
 #include "game/level.h"
+#include "net/net.h"
+#include "MinHook.h"
 
 #include <atomic>
 #include <vector>
@@ -115,6 +117,52 @@ void undoPatches(const std::vector<Patch>& undo) {
 using PostUpdateFn = void (*)(void* world, void* updateInfo);
 PostUpdateFn g_origPostUpdate = nullptr;
 TickFn g_onTick = nullptr;
+using PauseConsumerFn = void (*)(const void* controller, void* client);
+PauseConsumerFn g_origPauseConsumer = nullptr;
+
+void pauseConsumer(const void* controller, void* client) {
+    if (controller && net::running() && (net::hosting() || net::connectedToHost())) {
+        struct ControllerView { uintptr_t vtable; int32_t requests, fullRequests; } view{};
+        static_assert(sizeof(ControllerView) == 0x10, "UI pause consumer read layout");
+        if (mem::read(reinterpret_cast<uintptr_t>(controller), view.vtable)) {
+            // The native consumer reads only these counts; retain native references for offline resume.
+            g_origPauseConsumer(&view, client);
+            return;
+        }
+    }
+    g_origPauseConsumer(controller, client);
+}
+
+void installPauseConsumer() {
+    const uintptr_t target = rva(Fn_UIPauseConsumer);
+    uint8_t bytes[9]{};
+    const uint8_t expected[] = {0x48, 0x85, 0xd2, 0x0f, 0x84, 0x43, 0x01, 0x00, 0x00};
+    if (!mem::read(target, bytes, sizeof(bytes)) || std::memcmp(bytes, expected, sizeof(bytes)) != 0) {
+        MLOG("hook UI pause: unexpected native consumer; not hooking");
+        return;
+    }
+    MH_STATUS status = MH_Initialize();
+    if (status != MH_OK && status != MH_ERROR_ALREADY_INITIALIZED) {
+        MLOG("hook UI pause: initialize failed (%s)", MH_StatusToString(status));
+        return;
+    }
+    status = MH_CreateHook(reinterpret_cast<void*>(target), reinterpret_cast<void*>(&pauseConsumer),
+                           reinterpret_cast<void**>(&g_origPauseConsumer));
+    if (status != MH_OK) {
+        MLOG("hook UI pause: create failed (%s)", MH_StatusToString(status));
+        return;
+    }
+    status = MH_EnableHook(reinterpret_cast<void*>(target));
+    if (status != MH_OK) {
+        MH_RemoveHook(reinterpret_cast<void*>(target));
+        g_origPauseConsumer = nullptr;
+        MLOG("hook UI pause: enable failed (%s)", MH_StatusToString(status));
+        return;
+    }
+    MLOG("hook UI pause: installed (native unpaused state while multiplayer is active)");
+}
+
+
 
 void postUpdate(void* world, void* updateInfo) {
     g_origPostUpdate(world, updateInfo);
@@ -158,6 +206,7 @@ bool install(TickFn onTick, Installed* out) {
         return false;
     }
     got.tick = true;
+    installPauseConsumer();
     hookUpdaters(); // the vtable is in the game image, so this does not wait for a component
     if (out) *out = got;
     if (got.spawners && got.ghostClients) MLOG("hooks: all installed");

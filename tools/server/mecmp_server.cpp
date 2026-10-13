@@ -328,7 +328,8 @@ void runCommand(const std::string& cmd, mecmp::server::Relay& relay) {
         const auto& s = relay.stats();
         logLine("'" + relay.config().name + "': " +
                 std::to_string(relay.members().size()) + " players, " + std::to_string(s.received) + " received, " +
-                std::to_string(s.relayed) + " relayed, " + std::to_string(s.dropped) + " dropped");
+                std::to_string(s.relayed) + " relayed, " + std::to_string(s.dropped) + " dropped, " +
+                std::to_string(s.infoAnswered) + " server-list queries answered");
     } else if (verb == "help") {
         logLine("commands: list | kick <id|name> | ban <id|name|ip> | unban <ip> | bans | say <text> | status | quit");
     } else {

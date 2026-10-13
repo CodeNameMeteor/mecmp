@@ -202,6 +202,11 @@ UDP, one socket. Sessions have one host and any number of joiners (up to 16).
   the server's name) gives clients the session id (Mumble context) and the name for the menu; it sends
   no STATE, so it never gets a ghost or a player-list entry. It binds each player id to the address
   that first used it, rate-limits per player and drops silent players after 10 s.
+- **Server list** (`net/serverlist.cpp`, menu *Servers*): while the menu is open, its own socket and
+  thread ask each saved server every 5 s with an INFO packet (type 5: an 80-byte question, a 44-byte
+  answer with name, players, max players; the header echoes the question's seq for the round trip).
+  INFO is not a session packet (not in `knownType`), and a server answers whatever the protocol, so
+  the list can say "other version". Addresses are looked up on that thread.
 - Packets: STATE 30 Hz and HELLO (name and look: u32, 0 = Faith, else the echo hash) ~1 Hz. Remote players are keyed by the random session id
   in each packet. Pose compression: rotations smallest-three 32-bit, translations i16 at 1/1024 m,
   only for bones that changed since the last full packet (one per second); about 150 bytes.

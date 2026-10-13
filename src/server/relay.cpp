@@ -84,6 +84,21 @@ void Relay::onPacket(const Addr& from, const char* buf, size_t n, uint32_t nowMs
     proto::Header h;
     if (n < sizeof(h) || n > proto::kMaxPacket) { ++stats_.dropped; return; }
     memcpy(&h, buf, sizeof(h));
+    if (h.magic == proto::kMagic && h.type == proto::kTypeInfo) { // a server list asking; any protocol
+        if (!bans_.count(from.ip) && proto::isInfoRequest(buf + sizeof(h), n - sizeof(h))) {
+            proto::ServerInfo info;
+            info.players = static_cast<uint8_t>(members_.size() > 255 ? 255 : members_.size());
+            info.maxPlayers = static_cast<uint8_t>(cfg_.maxPlayers > 255 ? 255 : cfg_.maxPlayers);
+            info.name = cfg_.name;
+            char out[proto::kMaxPacket];
+            const proto::Header ah{proto::kMagic, proto::kProtocol, proto::kTypeInfo, session_, h.seq};
+            send_(from, out, proto::writeInfoAnswer(out, ah, info));
+            ++stats_.infoAnswered;
+        } else {
+            ++stats_.dropped;
+        }
+        return;
+    }
     if (h.magic != proto::kMagic || h.protocol != proto::kProtocol || !proto::knownType(h.type)) {
         ++stats_.dropped;
         return;

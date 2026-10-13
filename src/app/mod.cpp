@@ -20,6 +20,7 @@
 #include "game/ping_point.h"
 #include "game/motion_stats.h"
 #include "net/net.h"
+#include "net/serverlist.h"
 #include "ui/gamepad.h"
 #include "ui/overlay.h"
 
@@ -202,6 +203,7 @@ void run(HMODULE self) {
     ui::setOnWindowDestroyed([] {
         MLOG("game window closed: stopping multiplayer");
         net::shutdown(2000);
+        net::servers::shutdown();
     });
     ui::install();
     const auto cfg = config::get();

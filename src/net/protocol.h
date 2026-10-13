@@ -28,6 +28,15 @@ constexpr uint16_t kTypeState = 1;
 constexpr uint16_t kTypeHello = 2;
 constexpr uint16_t kTypeChat = 3;
 constexpr uint16_t kTypePing = 4; // experimental: a world marker
+// type 5 INFO: a server list's question "who are you?" and a dedicated server's answer. Not a session
+// packet: it is not in knownType (never stored or forwarded), and a server answers it whatever the
+// protocol in the header, so a list can say "other version" instead of nothing.
+//   request (kInfoRequestSize bytes in all): u8 kind = 0 | zero padding. Padded so that the answer is
+//     never bigger than the question (nobody can use a server to send more traffic at someone else).
+//   answer: u8 kind = 1 | u8 players | u8 maxPlayers | u8 flags (0) | char name[24]. The header carries
+//     the server's protocol and session, and the request's seq (to match it and time the round trip).
+constexpr uint16_t kTypeInfo = 5;
+constexpr size_t kInfoRequestSize = 80;
 // The packet types this version understands. Anything else is dropped before it can create state or
 // be forwarded, so a new type needs no protocol bump: older versions simply ignore it.
 constexpr bool knownType(uint16_t type) {
@@ -178,6 +187,16 @@ bool parseRgb(const std::string& hex, uint8_t rgb[3]);
 std::string formatRgb(const uint8_t rgb[3]);
 
 size_t writeState(char* buf, const Header& h, const PlayerState& s, Encoder& enc);
+
+struct ServerInfo {
+    uint8_t players = 0, maxPlayers = 0;
+    std::string name;
+};
+size_t writeInfoRequest(char* buf, const Header& h);
+size_t writeInfoAnswer(char* buf, const Header& h, const ServerInfo& info);
+// Payload after the header. False if it is not a request / an answer.
+bool isInfoRequest(const char* payload, size_t n);
+bool readInfoAnswer(const char* payload, size_t n, ServerInfo& out);
 // HELLO: char name[24] | u32 look | u8 flags (bit 0: the sender hosts this session; bit 1: the sender is
 // a dedicated server, not a player: it sends no STATE and has no ghost). Older senders stop after the
 // name or the look; missing fields read as 0.

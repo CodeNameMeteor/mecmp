@@ -19,6 +19,7 @@
 #include "imgui.h"
 #include "net/net.h"
 #include "net/protocol.h"
+#include "net/serverlist.h"
 #include "ui/gamepad.h"
 #include "ui/overlay.h"
 
@@ -134,6 +135,78 @@ void sessionSection() {
         ImGui::SetTooltip("Enter the host's join code, or a server's address (name or ip, :port if not 47800).");
     if (ImGui::Button("Solo test (mirror me)")) startSession("127.0.0.1:" + std::to_string(config::get()->port));
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Test on your own PC: a ghost copies your moves 3 m away (it does not turn with you; look around for it).");
+}
+
+// Saved dedicated servers: name, players and round trip of each (asked while the menu is open).
+char g_addServer[128] = {};
+void serversSection() {
+    ImGui::SeparatorText("Servers");
+    const auto cfg = config::get();
+    std::vector<std::string> saved = net::servers::split(cfg->servers);
+    net::servers::update(saved, true);
+    const auto entries = net::servers::snapshot();
+    std::string remove;
+    if (entries.empty()) ImGui::TextDisabled("No servers saved yet: add one by its address below.");
+    if (!entries.empty() &&
+        ImGui::BeginTable("##servers", 4, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_RowBg)) {
+        for (size_t i = 0; i < entries.size(); ++i) {
+            const auto& e = entries[i];
+            ImGui::PushID(static_cast<int>(i));
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            const bool joined = net::running() && !net::hosting() && cfg->join == e.address;
+            const bool otherVersion = e.answered && e.protocol != net::protocol::kProtocol;
+            ImGui::Text("%s%s", e.answered && !e.name.empty() ? e.name.c_str() : e.address.c_str(), joined ? "  (joined)" : "");
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", e.address.c_str());
+            ImGui::TableNextColumn();
+            if (e.answered) ImGui::Text("%d/%d", e.players, e.maxPlayers);
+            else ImGui::TextDisabled("%s", e.resolved ? "no answer" : "...");
+            ImGui::TableNextColumn();
+            if (otherVersion) ImGui::TextColored(ImVec4(1.f, 0.5f, 0.3f, 1.f), "other version");
+            else if (e.answered) ImGui::Text("%d ms", e.pingMs);
+            if (otherVersion && ImGui::IsItemHovered())
+                ImGui::SetTooltip("The server runs MECMP protocol %u, this mod %u: update one of them.", e.protocol,
+                                  net::protocol::kProtocol);
+            ImGui::TableNextColumn();
+            ImGui::BeginDisabled(joined || otherVersion);
+            if (ImGui::SmallButton("Join")) {
+                snprintf(g_code, sizeof(g_code), "%s", e.address.c_str());
+                startSession(e.address);
+            }
+            ImGui::EndDisabled();
+            ImGui::SameLine();
+            if (ImGui::SmallButton("X")) remove = e.address;
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Remove from the list");
+            ImGui::PopID();
+        }
+        ImGui::EndTable();
+    }
+    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 12);
+    ImGui::InputTextWithHint("##addserver", "server address", g_addServer, sizeof(g_addServer));
+    ImGui::SameLine();
+    std::string add = g_addServer;
+    while (!add.empty() && add.back() == ' ') add.pop_back();
+    while (!add.empty() && add.front() == ' ') add.erase(add.begin());
+    ImGui::BeginDisabled(add.empty());
+    if (ImGui::Button("Add")) {
+        bool have = false;
+        for (const auto& s : saved) have = have || s == add;
+        if (!have) saved.push_back(add);
+        g_addServer[0] = 0;
+        const std::string list = net::servers::join(saved);
+        config::change([list](config::Settings& c) { c.servers = list; });
+        net::servers::refreshNow();
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    if (ImGui::Button("Refresh")) net::servers::refreshNow();
+    if (!remove.empty()) {
+        std::vector<std::string> kept;
+        for (const auto& s : saved)
+            if (s != remove) kept.push_back(s);
+        const std::string list = net::servers::join(kept);
+        config::change([list](config::Settings& c) { c.servers = list; });
+    }
 }
 
 void playersSection() {
@@ -512,6 +585,9 @@ void draw(bool open) {
         snprintf(g_code, sizeof(g_code), "%s", config::get()->join.c_str());
         g_hintUntil = GetTickCount() + 10000;
     }
+    static bool wasOpen = false;
+    if (wasOpen && !open) net::servers::update(net::servers::split(config::get()->servers), false); // stop asking
+    wasOpen = open;
     if (!open) {
         // A short hint after start-up, top-left.
         if (GetTickCount() < g_hintUntil) {
@@ -532,6 +608,7 @@ void draw(bool open) {
     snprintf(title, sizeof(title), "MECMP %s###mecmp", app::kVersion);
     ImGui::Begin(title, nullptr, ImGuiWindowFlags_NoCollapse);
     sessionSection();
+    serversSection();
     playersSection();
     myLookSection();
     lookSection();

@@ -70,6 +70,7 @@ constexpr const char* kDefaultIni =
     "chat_key=T\r\n"
     "; markers (experimental): ping_key places yours where you stand (a letter A..Z, ENTER, or INSERT/F1../...;\r\n"
     "; empty = no key), ping_pad = gamepad buttons for it (as menu_pad; empty = none). It lasts 30 s.\r\n"
+    "; Both can be changed in the menu.\r\n"
     "ping_key=G\r\n"
     "ping_pad=\r\n"
     "; 1 = show the players' markers\r\n"
@@ -206,6 +207,7 @@ void applyPending() {
     put(L"voice", L"mumble_link", snapshot->mumbleLink ? "1" : "0");
     put(L"ui", L"show_notices", snapshot->showNotices ? "1" : "0");
     put(L"ui", L"show_chat", snapshot->showChat ? "1" : "0");
+    put(L"ui", L"ping_key", snapshot->pingKey);
     put(L"ui", L"ping_pad", snapshot->pingPad);
     put(L"ui", L"show_pings", snapshot->showPings ? "1" : "0");
     put(L"ui", L"show_arrows", snapshot->showArrows ? "1" : "0");

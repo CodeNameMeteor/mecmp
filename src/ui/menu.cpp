@@ -28,6 +28,8 @@ char g_name[net::protocol::kMaxNameBytes + 1] = {}; // what fits on the wire
 char g_code[64] = {};
 bool g_inited = false;
 bool g_keyCapture = false; // waiting for a new menu key
+bool g_pingKeyCapture = false; // waiting for a new marker key
+std::string g_pingKeyNote;     // why the last marker key was refused (empty = nothing to say)
 gamepad::Action g_padCapture = gamepad::Action::Count; // which gamepad binding is being recorded (Count = none)
 DWORD g_hintUntil = 0;
 
@@ -313,6 +315,27 @@ void lookSection() {
     if (ImGui::Button("Hide ghosts")) game::ghosts::requestHideAll();
 }
 
+// The action key pressed this frame (as ping_key names it: a letter, ENTER or a menu key), if any.
+bool pressedActionKey(std::string& name) {
+    for (int i = 0; i < 26; ++i) {
+        if (!ImGui::IsKeyPressed(static_cast<ImGuiKey>(ImGuiKey_A + i), false)) continue;
+        name.assign(1, static_cast<char>('A' + i));
+        return true;
+    }
+    if (ImGui::IsKeyPressed(ImGuiKey_Enter, false)) {
+        name = "ENTER";
+        return true;
+    }
+    int count = 0;
+    const ui::MenuKey* keys = ui::menuKeys(count);
+    for (int i = 0; i < count; ++i) {
+        if (!ImGui::IsKeyPressed(static_cast<ImGuiKey>(keys[i].imguiKey), false)) continue;
+        name = keys[i].name;
+        return true;
+    }
+    return false;
+}
+
 // One gamepad binding: its buttons, Change (hold the buttons, let go) and Clear.
 void padRow(const char* label, gamepad::Action action, const std::string& current, std::string config::Settings::*field) {
     ImGui::PushID(static_cast<int>(action));
@@ -382,17 +405,56 @@ void controlsSection() {
     } else {
         ImGui::Text("%s", cfg->menuKey.c_str());
         ImGui::SameLine();
+        ImGui::BeginDisabled(g_pingKeyCapture); // one key is recorded at a time
         if (ImGui::SmallButton("Change##key")) {
             g_keyCapture = true;
             ui::setKeyCapture(true);
         }
+        ImGui::EndDisabled();
     }
     // Gamepad buttons that open it.
     padRow("Gamepad:", gamepad::Action::Menu, cfg->menuPad, &config::Settings::menuPad);
-    // The marker: its key is set in mecmp.ini ([ui] ping_key), its gamepad buttons here.
+    // The marker key: a letter, Enter or one of the menu keys. Change = press the new key; Clear = none.
     ImGui::AlignTextToFramePadding();
-    ImGui::Text("Marker key: %s", cfg->pingKey.empty() ? "none" : cfg->pingKey.c_str());
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("[ui] ping_key in mecmp.ini (read when the game starts)");
+    ImGui::Text("Marker key:");
+    ImGui::SameLine();
+    if (g_pingKeyCapture) {
+        ImGui::TextColored(ImVec4(1.f, 0.85f, 0.3f, 1.f), "press a key (Esc cancels)");
+        std::string name;
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+            g_pingKeyCapture = false;
+        } else if (pressedActionKey(name)) {
+            if (ui::setPingKey(name)) {
+                config::change([name](config::Settings& c) { c.pingKey = name; });
+                g_pingKeyNote.clear();
+            } else {
+                g_pingKeyNote = name + " is the menu or chat key";
+            }
+            g_pingKeyCapture = false;
+        }
+        if (!g_pingKeyCapture) ui::setKeyCapture(false);
+    } else {
+        ImGui::Text("%s", cfg->pingKey.empty() ? "none" : cfg->pingKey.c_str());
+        ImGui::SameLine();
+        ImGui::BeginDisabled(g_keyCapture || gamepad::capturing());
+        if (ImGui::SmallButton("Change##pingkey")) {
+            g_pingKeyCapture = true;
+            g_pingKeyNote.clear();
+            ui::setKeyCapture(true);
+        }
+        ImGui::EndDisabled();
+        if (!cfg->pingKey.empty()) {
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Clear##pingkey")) {
+                ui::setPingKey("");
+                config::change([](config::Settings& c) { c.pingKey.clear(); });
+            }
+        }
+        if (!g_pingKeyNote.empty()) {
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(1.f, 0.45f, 0.4f, 1.f), "%s", g_pingKeyNote.c_str());
+        }
+    }
     padRow("Marker gamepad:", gamepad::Action::Ping, cfg->pingPad, &config::Settings::pingPad);
     if (!gamepad::active()) ImGui::TextDisabled("No gamepad seen yet.");
 }

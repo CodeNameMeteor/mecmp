@@ -307,6 +307,16 @@ const MenuKey* menuKeys(int& count) {
     return kMenuKeys;
 }
 void setMenuKey(const std::string& name) { g_toggleKey = keyFromName(name); }
+bool setPingKey(const std::string& name) {
+    if (name.empty()) {
+        g_pingKey = 0;
+        return true;
+    }
+    const int key = actionKeyFromName(name);
+    if (key == 0 || key == g_toggleKey.load() || key == g_chatKey.load()) return false;
+    g_pingKey = key;
+    return true;
+}
 void setKeyCapture(bool on) { g_keyCapture = on; }
 
 bool menuOpen() { return g_open.load(); }

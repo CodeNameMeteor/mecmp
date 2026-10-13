@@ -26,6 +26,9 @@ bool setPingKey(const std::string& name);
 // The same for the key that removes all your markers when held for a moment. It may also be a mouse
 // button: MOUSE3 (middle), MOUSE4, MOUSE5. False if it is the menu, chat or marker key.
 bool setPingClearKey(const std::string& name);
+// The chat key (as chat_key; empty = none), at once. False if it is not such a key or is the menu,
+// marker or clear-markers key.
+bool setChatKey(const std::string& name);
 int pingClearVk();  // its virtual-key code (0 = none)
 bool gameFocused(); // the game's window has the keyboard
 // A key name as shown to the player: "Middle click" for MOUSE3, "Mouse 4", "Mouse 5", else the name itself.

@@ -35,8 +35,8 @@ char g_code[64] = {};
 char g_label[config::kWheels][config::kPingSlots][net::protocol::kMaxPingLabelBytes + 1] = {}; // the marker wheels' titles
 bool g_inited = false;
 bool g_keyCapture = false; // waiting for a new menu key
-int g_bindCapture = -1;        // which key of the Markers section is being recorded (see kKeyBinds; -1 = none)
-std::string g_bindNote[2];     // why the last key was refused (empty = nothing to say)
+int g_bindCapture = -1;        // which key of the Controls tab is being recorded (see kKeyBinds; -1 = none)
+std::string g_bindNote[3];     // why the last key was refused (empty = nothing to say)
 gamepad::Action g_padCapture = gamepad::Action::Count; // which gamepad binding is being recorded (Count = none)
 DWORD g_hintUntil = 0;
 
@@ -505,9 +505,10 @@ struct KeyBind {
     bool (*set)(const std::string&);
     bool mouse; // mouse buttons 3..5 may be bound too
 };
-const KeyBind kKeyBinds[2] = {
+const KeyBind kKeyBinds[3] = {
     {"Tap to place a marker. Hold to open the marker wheel.", &config::Settings::pingKey, &ui::setPingKey, false},
     {"Hold for a moment to remove all your markers.", &config::Settings::pingClearKey, &ui::setPingClearKey, true},
+    {"Opens the chat line (Enter sends, Escape cancels).", &config::Settings::chatKey, &ui::setChatKey, false},
 };
 
 void keyRow(const config::Settings& cfg, int which) {
@@ -938,22 +939,7 @@ void markersSection() {
         ImGui::SetTooltip("How many markers you can have at the same time. Your oldest one is removed when you go\n"
                           "over the limit. Placing the same marker within 1.5 m of one of yours moves it instead.");
 
-    if (ImGui::TreeNode("Marker binds")) {
-        ImGui::TextUnformatted("Place a marker / open the wheel");
-        ImGui::Indent();
-        keyRow(cfg, 0);
-        padRow("Gamepad:", gamepad::Action::Ping, cfg.pingPad, &config::Settings::pingPad,
-               "The same on a gamepad: tap to place and hold for the wheel. The right stick chooses.");
-        ImGui::Unindent();
-        ImGui::TextUnformatted("Clear markers");
-        ImGui::Indent();
-        keyRow(cfg, 1);
-        padRow("Gamepad:", gamepad::Action::PingClear, cfg.pingClearPad, &config::Settings::pingClearPad,
-               "While you hold the marker button: removes all your markers.");
-        ImGui::Unindent();
-        tapModeRows(cfg);
-        ImGui::TreePop();
-    }
+    ImGui::TextDisabled("The marker keys and buttons are on the Controls tab.");
     if (ImGui::TreeNode("Marker wheels")) {
         if (ImGui::BeginTabBar("wheels")) {
             for (int w = 0; w < cfg.wheelCount; ++w) {
@@ -982,6 +968,7 @@ void markersSection() {
 
 void controlsSection() {
     const auto cfg = config::get();
+    ImGui::SeparatorText("Menu");
     // Keyboard key that opens the menu.
     ImGui::AlignTextToFramePadding();
     ImGui::Text("Menu key:");
@@ -1017,6 +1004,24 @@ void controlsSection() {
     // Gamepad buttons that open it.
     padRow("Gamepad:", gamepad::Action::Menu, cfg->menuPad, &config::Settings::menuPad,
            "Buttons held together to open and close this menu");
+
+    ImGui::SeparatorText("Chat");
+    keyRow(*cfg, 2);
+
+    ImGui::SeparatorText("Markers");
+    ImGui::TextUnformatted("Place a marker / open the wheel");
+    ImGui::Indent();
+    keyRow(*cfg, 0);
+    padRow("Gamepad:", gamepad::Action::Ping, cfg->pingPad, &config::Settings::pingPad,
+           "The same on a gamepad: tap to place and hold for the wheel. The right stick chooses.");
+    ImGui::Unindent();
+    ImGui::TextUnformatted("Clear markers");
+    ImGui::Indent();
+    keyRow(*cfg, 1);
+    padRow("Gamepad:", gamepad::Action::PingClear, cfg->pingClearPad, &config::Settings::pingClearPad,
+           "While you hold the marker button: removes all your markers.");
+    ImGui::Unindent();
+    tapModeRows(*cfg);
 }
 
 // "INSERT or LS+RS"
@@ -1081,10 +1086,10 @@ void draw(bool open) {
         if (ImGui::BeginTabItem("Session")) {
             sessionSection();
             serversSection();
-            playersSection();
             ImGui::EndTabItem();
         }
         if (ImGui::BeginTabItem("Players")) {
+            playersSection();
             myLookSection();
             lookSection();
             ImGui::EndTabItem();

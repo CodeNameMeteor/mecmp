@@ -28,7 +28,12 @@ struct Echo {
 };
 // The catalogue; empty until findEchoes() succeeded (in a level with time-trial markers). Never changes once returned.
 std::shared_ptr<const std::vector<Echo>> echoes();
-bool findEchoes();          // mod thread: memory scan, a second at most; true if the list is known
+// Mod thread. Reads the list from a look-picker entity seen being created (onCustomizeEntity); with
+// `allowScan`, falls back to a memory scan (a second at most; for a level that was running before the
+// mod loaded). True if the list is known.
+bool findEchoes(bool allowScan);
+// Hook (level loading thread): a PamServerCustomizeProjectionCharacterEntity was created.
+void onCustomizeEntity(void* entity);
 bool applyEcho(void* ghost, uint32_t hash); // game thread
 uint32_t defaultEcho();
 bool echoRenders(uint32_t hash); // catalogue contains this look

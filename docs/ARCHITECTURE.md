@@ -23,8 +23,10 @@ worlds in one process; the mod uses both.
    factory hooks already in place are taken out again, so a failed start leaves the game as it was.
    Then start the network thread (`net/net.cpp`). The DLL pins itself so it is never unloaded.
 4. The mod thread then watches for level changes and hotkeys, and scans game memory for spawners
-   when they were missed (`game/level.cpp`, see `scanForMissing`): 15 s into a level and, while
-   something is still missing, after about 1, 3 and 7 more minutes (at most 4 scans per level).
+   when they were missed (`game/level.cpp`, see `scanForMissing`). A scan reads the whole heap (about
+   a second of one core), so it is a fallback: in the level that was already running when the mod
+   loaded, 15 s in and, while something is still missing, after about 1, 3 and 7 more minutes; in later
+   levels (which the hooks see being built) at most once, 60 s in, and only in a level you play in.
 5. When the game window is destroyed, multiplayer stops and the router port is closed (2 s at most).
 
 ## Hooks (`game/hooks.cpp`)
@@ -34,6 +36,7 @@ worlds in one process; the mod uses both.
 | Character spawner factories | capture the player's spawner (`Characters/FaithCharacter`) and the city-ghost spawner (`Characters/Projection/ProjectionCharacter`); collect spawn-template looks for models |
 | Client replay player factory | claim our ghosts' client components; others give the reference bone setup |
 | Client character factory | claim our ghosts' client characters (to make them visible) |
+| Look-picker factory (`PamServerCustomizeProjectionCharacterEntity`) | the echo look catalogue, without a memory scan (optional) |
 | `ServerGameWorld::postUpdate` | the per-tick update |
 | `PamUISystem` update (vtable slot `0x141cb64f0`, `0x143b16c50`) | in a session, menus do not pause the game (below) |
 
@@ -100,8 +103,9 @@ per piece, the source's unlocks, ClearVisualState = 1) and applies it with `char
 
 - **Faith**: the local player's current outfit (first-person `_1p` pieces dropped).
 - **Echo looks** (the game's runner-ghost styles x colours): the catalogue comes from a time-trial
-  marker's `PamServerCustomizeProjectionCharacterEntity` (vtable `0x141c7ea80`), found by a short memory
-  scan 5, 10, 20 and 40 s into a level (then 2 and 4 min if none yet): entity `+0x28` data, data `+0x20` `PamEchoCustomizationDefinitionsMeta`,
+  marker's `PamServerCustomizeProjectionCharacterEntity` (vtable `0x141c7ea80`), noted as it is created
+  (creator slot `0x141c7eb40`, create thunk `0x143a83490`) and read on the mod thread within a second;
+  a memory scan is the fallback (20 s and 60 s into the first level, as above): entity `+0x28` data, data `+0x20` `PamEchoCustomizationDefinitionsMeta`,
   meta `+0x18` array of `{NameSid, DescriptionSid, TextureId, CustomizationData*, u32 CustomizationHash}`.
   An echo look's colour is an unlock (an ObjectVariation on the projection shader), so the unlocks are
   carried over. The hash is the game's own id for the look.

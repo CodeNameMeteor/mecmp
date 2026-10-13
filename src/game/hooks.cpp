@@ -4,6 +4,7 @@
 #include "game/engine.h"
 #include "game/ghosts.h"
 #include "game/level.h"
+#include "game/models.h"
 #include "net/net.h"
 
 #include <atomic>
@@ -13,14 +14,22 @@ namespace mecmp::game::hooks {
 namespace {
 
 using FactoryFn = void* (*)(void* creator, void* ci, void* a3, void* a4);
-enum Factory { kSpawner, kPamSpawner, kClientReplay, kClientCharacter, kFactoryCount };
+enum Factory { kSpawner, kPamSpawner, kClientReplay, kClientCharacter, kCustomize, kFactoryCount };
 FactoryFn g_orig[kFactoryCount] = {};
 const char* const kNames[kFactoryCount] = {"ServerCharacterSpawnEntity", "PamServerCharacterSpawnEntity",
-                                           "PamClientReplayPlayerComponent", "PamClientCharacterEntity"};
+                                           "PamClientReplayPlayerComponent", "PamClientCharacterEntity",
+                                           "PamServerCustomizeProjectionCharacterEntity"};
 
 void* spawnerFactory(void* creator, void* ci, void* a3, void* a4) {
     void* e = g_orig[kSpawner](creator, ci, a3, a4);
     level::onSpawnerCreated(ci, e);
+    return e;
+}
+// Time-trial marker look pickers carry the echo look catalogue: noting them as they are created saves a
+// memory scan per level. Only objects with the right vtable count (checked when they are read).
+void* customizeFactory(void* creator, void* ci, void* a3, void* a4) {
+    void* e = g_orig[kCustomize](creator, ci, a3, a4);
+    models::onCustomizeEntity(e);
     return e;
 }
 void* pamSpawnerFactory(void* creator, void* ci, void* a3, void* a4) {
@@ -195,6 +204,8 @@ bool install(TickFn onTick, Installed* out) {
     got.spawners = sp1 && sp2;
     const bool replay = installFactory(kClientReplay, Slot_ClientReplayPlayerFactory, Fn_ClientReplayPlayerFactory, &clientReplayFactory, undo);
     const bool chars = installFactory(kClientCharacter, Slot_ClientCharacterFactory, Fn_ClientCharacterFactory, &clientCharacterFactory, undo);
+    // Optional: without it the look catalogue is found by a memory scan instead.
+    installFactory(kCustomize, Slot_CustomizeProjectionFactory, Fn_CustomizeProjectionCreate, &customizeFactory, undo);
     got.ghostClients = replay && chars;
     installUIPauseHook(undo);
     // The tick hook goes in last: nothing reaches the mod's code before every other hook is in, and

@@ -64,6 +64,10 @@ constexpr size_t PamCustomizeCharacterData_Size = 0x70;
 // creation): set per ghost, so the shared character data is never changed.
 constexpr size_t ClientChar_GhostShader = 0x334;
 constexpr uintptr_t Slot_ClientCharacterFactory = 0x141c3cd80;
+// Creator slot of PamServerCustomizeProjectionCharacterEntity (time-trial marker look picker): holds the
+// create thunk 0x143a83490, which calls the factory 0x143a7b5a0.
+constexpr uintptr_t Slot_CustomizeProjectionFactory = 0x141c7eb40;
+constexpr uintptr_t Fn_CustomizeProjectionCreate = 0x143a83490;
 constexpr uintptr_t Fn_ClientCharacterFactory = 0x143910d20;
 constexpr uintptr_t Slot_ServerWorldPostUpdate = 0x141b42d28; // ServerGameWorld vtable +0x28
 constexpr uintptr_t Fn_ServerWorldPostUpdate = 0x143341ee0;

@@ -823,6 +823,14 @@ void stop() {
     WSACleanup();
 }
 
+void leave() {
+    if (!g_run) return;
+    stop();
+    g_routerWanted = 0;
+    std::thread(routerUnmap).detach();
+    MLOG("net: left the session; offline");
+}
+
 void shutdown(uint32_t routerWaitMs) {
     stop();
     g_routerWanted = 0;

@@ -36,6 +36,9 @@ constexpr const char* kDefaultIni =
     "; JOIN: paste the host's join code, e.g. join=8H3KQ-ZT1V4 (or the host's ip:port).\r\n"
     "; solo test: join=127.0.0.1:47800 (a ghost mirrors you)\r\n"
     "join=\r\n"
+    "; 1 = start that session (host, or join= above) as soon as the game starts; 0 = stay offline until\r\n"
+    ";     you host or join in the menu (nothing is opened on your router until then)\r\n"
+    "auto_start=0\r\n"
     "; the menu's server list: dedicated servers' addresses, comma separated (the menu edits it)\r\n"
     "servers=\r\n"
     "; solo test only: how far the mirrored ghost stands from you, along the world X axis (metres)\r\n"
@@ -223,6 +226,8 @@ void load(const std::wstring& dir) {
     s.join = readString(ini, L"net", L"join", "\x01");
     if (s.join == "\x01") s.join = readString(ini, L"net", L"peer", ""); // older mecmp.ini files (no join= line)
     s.servers = readString(ini, L"net", L"servers", "");
+    // Files from before this setting existed started the session at launch: keep that for them.
+    s.autoStart = readInt(ini, L"net", L"auto_start", 1) != 0;
     const float offset = static_cast<float>(atof(readString(ini, L"net", L"loopback_offset", "3.0").c_str()));
     s.loopbackOffset = std::isfinite(offset) ? offset : 3.0f; // "nan" or "inf" would poison the mirrored position
     s.name = readString(ini, L"player", L"name", "Runner");
@@ -340,6 +345,7 @@ void applyPending() {
     put(L"player", L"name", snapshot->name);
     put(L"net", L"join", snapshot->join);
     put(L"net", L"servers", snapshot->servers);
+    put(L"net", L"auto_start", snapshot->autoStart ? "1" : "0");
     put(L"player", L"look", snapshot->look);
     put(L"ui", L"menu_key", snapshot->menuKey);
     put(L"ui", L"menu_pad", snapshot->menuPad);

@@ -208,11 +208,15 @@ void run(HMODULE self) {
     ui::install();
     const auto cfg = config::get();
     net::setLook(config::lookHash(cfg->look));
+    const bool startNow = cfg->netEnabled && cfg->autoStart;
     if (!cfg->netEnabled) MLOG("net: disabled in mecmp.ini");
+    else if (!cfg->autoStart) MLOG("net: offline until you host or join in the menu ([net] auto_start=1 starts at launch)");
     else if (!net::start(cfg->port, cfg->join, cfg->loopbackOffset, cfg->name))
         MLOG("net: multiplayer is NOT running (see the net: lines above); the rest of the mod still works");
     MLOG("ready. %s Menu: %s%s%s.",
-         cfg->join.empty() ? "Hosting: friends join with your join code (see below)." : "Joining: other players appear once the host answers.",
+         !startNow ? "Host, join or pick a server in the menu."
+         : cfg->join.empty() ? "Hosting: friends join with your join code (see below)."
+                             : "Joining: other players appear once the host answers.",
          cfg->menuKey.c_str(), cfg->menuPad.empty() ? "" : " or ", cfg->menuPad.c_str());
 #if MECMP_DEBUG_KEYS
     MLOG("developer keys: F7 = spawn/show ghosts, F12 = hide ghosts, F9 = status, "

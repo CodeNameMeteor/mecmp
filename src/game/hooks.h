@@ -1,5 +1,6 @@
 #pragma once
 // Hooks. All of them swap a pointer in a vtable or an entity-creator table (data, not code):
+//   - PamUISystem update (vtable slot)  -> game menus do not pause the simulation in a session
 //   - character spawner factories      -> level::onSpawnerCreated
 //   - client replay player factory     -> ghosts / level reference setup
 //   - client character factory         -> ghosts (visibility)

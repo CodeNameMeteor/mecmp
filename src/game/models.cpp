@@ -26,19 +26,6 @@ std::map<std::pair<std::vector<uintptr_t>, uintptr_t>, uintptr_t> g_cache; // (p
 std::shared_ptr<const std::vector<Echo>> g_echoes = std::make_shared<const std::vector<Echo>>();
 // CustomizeCharacterData vtable (in the game image, so valid in every level), from any template seen.
 uintptr_t g_ccdVtable = 0;
-uintptr_t g_shaderData = 0;   // ghost character data whose ghost-shader flag we switched off
-uintptr_t g_shaderDataType = 0; // its first word when we did (checked before writing it back)
-DWORD g_shaderRestoreAt = 0;  // when to switch it back on (game thread)
-
-// Switches the shared ghost-shader flag back on. Every projection character uses that data (the
-// game's own time-trial ghosts, the main menu's "Your Echo" preview), so it must never stay off.
-void restoreShaderFlag() {
-    if (g_shaderData && mem::readOr<uintptr_t>(g_shaderData) == g_shaderDataType)
-        poke<uint8_t>(g_shaderData + CharData_GhostShader, 1);
-    g_shaderData = 0;
-    g_shaderRestoreAt = 0;
-}
-
 std::string lower(std::string s) {
     for (auto& c : s) c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
     return s;
@@ -80,10 +67,16 @@ void visualsOf(uintptr_t ccd, std::vector<uintptr_t>& out) {
 // Our own CustomizeCharacterData: one group per piece (so the game's random pick is that piece), the
 // source's unlocks (an echo look's colour is an unlock: an ObjectVariation on the projection shader),
 // ClearVisualState = 1. Never freed (the game may keep pointers to it).
-uintptr_t makeCustomization(const std::vector<uintptr_t>& visuals, uintptr_t vtable, uintptr_t unlockArray) {
+uintptr_t makeCustomization(const std::vector<uintptr_t>& visuals, uintptr_t vtable, uintptr_t unlockArray, uintptr_t preset) {
     if (!vtable) return 0; // never hand the game a data object without a vtable
     auto block = [](size_t n) { return static_cast<uint8_t*>(calloc(1, n)); };
-    uint8_t* ccd = block(0x40);
+    uint8_t* ccd = block(PamCustomizeCharacterData_Size);
+    if (!ccd) return 0;
+    // Pam presets carry material and animation parameters beyond the base customization.
+    if (preset && vtable == rva(Vtbl_PamCustomizeCharacterData) && !mem::read(preset, ccd, PamCustomizeCharacterData_Size)) {
+        free(ccd);
+        return 0;
+    }
     uint8_t* groups = block(8 + visuals.size() * 8);
     uint8_t* unlocks = block(16);
     if (!ccd || !groups || !unlocks) return 0;
@@ -143,20 +136,12 @@ void reset() {
     g_models.clear();
     g_cache.clear();
     g_echoes = std::make_shared<const std::vector<Echo>>(); // level data may go with the level: found again by findEchoes()
-    // A level change within the 3 s after a Faith look used to leave the flag off for good, and the
-    // main menu's "Your Echo" preview (also a projection character) then drew wrongly.
-    restoreShaderFlag();
-}
-
-void tick() {
-    if (g_shaderData && g_shaderRestoreAt && static_cast<int32_t>(GetTickCount() - g_shaderRestoreAt) >= 0)
-        restoreShaderFlag();
 }
 
 namespace {
 // Builds (or reuses) our customization from these pieces and unlocks and applies it to the ghost.
 bool applyPieces(void* ghost, std::vector<uintptr_t> visuals, uintptr_t unlockArray, uintptr_t vtableFrom,
-                 const std::string& used, bool ghostShader) {
+                 const std::string& used) {
     std::vector<uintptr_t> kept;
     for (uintptr_t v : visuals)
         if (!isFirstPersonPiece(v)) kept.push_back(v);
@@ -170,7 +155,7 @@ bool applyPieces(void* ghost, std::vector<uintptr_t> visuals, uintptr_t unlockAr
         auto it = g_cache.find(key);
         if (it != g_cache.end()) {
             ccd = it->second;
-        } else if ((ccd = makeCustomization(visuals, vtable, unlockArray)) != 0) {
+        } else if ((ccd = makeCustomization(visuals, vtable, unlockArray, vtableFrom)) != 0) {
             g_cache[key] = ccd;
         } else {
             MLOG("model: cannot build '%s' yet (no customization template seen in this game session)", used.c_str());
@@ -181,22 +166,6 @@ bool applyPieces(void* ghost, std::vector<uintptr_t> visuals, uintptr_t unlockAr
     const uintptr_t ch = reinterpret_cast<uintptr_t>(ghost);
     uintptr_t vt = 0, fn = 0;
     if (!mem::read(ch, vt) || !inImage(vt) || !mem::read(vt + Vtbl_ApplyCustomize, fn) || !inImage(fn)) return false;
-    // Ghost shader off while a normal look (Faith...) is built on the ghost: with it on, normal meshes
-    // are invisible. The flag lives in the ProjectionCharacter data that the game's own time-trial
-    // ghosts share, so it is switched back on shortly after (tick()); a TT ghost needs it.
-    {
-        const uintptr_t data = mem::readOr<uintptr_t>(ch + Character_Data);
-        uint8_t cur = 0;
-        if (data && mem::read(data + CharData_GhostShader, cur)) {
-            const uint8_t want = ghostShader ? 1 : 0;
-            if (cur != want) poke(data + CharData_GhostShader, want);
-            if (!ghostShader) {
-                g_shaderData = data;
-                g_shaderDataType = mem::readOr<uintptr_t>(data);
-                g_shaderRestoreAt = GetTickCount() + 3000;
-            }
-        }
-    }
     // Arguments of vtbl[0x340] (0x14336cf00): +0x00 character; +0x08 player (null: apply the data
     // as is via 0x14336c860, non-null: the player's own unlock path); +0x10 CustomizeCharacterData
     // (reads +0x18 groups, +0x20 unlocks, +0x28 a fade time, +0x30/+0x31 flags); +0x18 non-zero =
@@ -251,7 +220,7 @@ bool apply(void* ghost, const std::string& wanted, std::string* usedName) {
         }
         if (visuals.empty()) return false;
     }
-    if (!applyPieces(ghost, visuals, unlocks, vtableFrom, used, lower(used).find("projection") != std::string::npos))
+    if (!applyPieces(ghost, visuals, unlocks, vtableFrom, used))
         return false;
     if (usedName) *usedName = used;
     return true;
@@ -291,17 +260,12 @@ bool applyEcho(void* ghost, uint32_t hash) {
          static_cast<unsigned long long>(own), static_cast<unsigned long long>(visuals.size()),
          unlocks ? mem::readOr<uint32_t>(unlocks - 4) : 0u);
     if (visuals.empty()) return false; // nothing to build a body from: leave the ghost as it is
-    return applyPieces(ghost, visuals, unlocks, e.ccd, e.name, true);
+    return applyPieces(ghost, visuals, unlocks, e.ccd, e.name);
 }
 
-// Only the RunVis look renders in free roam: every other style is a separate projection body mesh
-// with a material variation (MeshAndVariationPair -> ObjectVariation on FX_SS_Projection_<Style>),
-// which is not loaded there; applied, the ghost shows nothing. Tested with every style, with and
-// without the ghost shader flag.
 bool echoRenders(uint32_t hash) {
     std::lock_guard<std::mutex> lock(g_m);
-    for (const auto& e : *g_echoes)
-        if (e.hash == hash) return _stricmp(e.style.c_str(), "RunVis") == 0;
+    for (const auto& e : *g_echoes) if (e.hash == hash) return true;
     return false;
 }
 

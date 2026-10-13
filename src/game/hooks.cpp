@@ -4,6 +4,7 @@
 #include "game/engine.h"
 #include "game/ghosts.h"
 #include "game/level.h"
+#include "net/net.h"
 
 #include <atomic>
 #include <vector>
@@ -115,6 +116,48 @@ void undoPatches(const std::vector<Patch>& undo) {
 using PostUpdateFn = void (*)(void* world, void* updateInfo);
 PostUpdateFn g_origPostUpdate = nullptr;
 TickFn g_onTick = nullptr;
+// Game menus keep the simulation running while a multiplayer session is on (everyone else keeps
+// running too). PamUISystem's per-frame update ends with the call that pauses or resumes the client
+// from its pause controller's request counts (+0x08 requests, +0x0c full requests). Those counts are
+// plain counters (UIPauseController_request, 0x143b16210: +1 / -1, no clamping), so during the update
+// they are set to 0 and afterwards put back plus whatever changed meanwhile: the pause call sees no
+// request, every menu opening or closing is kept, and with no session the menus pause as usual.
+using UISystemUpdateFn = void (*)(void* uiSystem);
+UISystemUpdateFn g_origUISystemUpdate = nullptr;
+
+void uiSystemUpdate(void* uiSystem) {
+    uintptr_t controller = 0;
+    int32_t saved[2] = {};
+    const bool session = net::running() && (net::hosting() || net::connectedToHost());
+    if (!session || !mem::read(reinterpret_cast<uintptr_t>(uiSystem) + UISystem_PauseController, controller) || !controller ||
+        !mem::read(controller + 8, saved, sizeof(saved))) {
+        g_origUISystemUpdate(uiSystem);
+        return;
+    }
+    int32_t* counts = reinterpret_cast<int32_t*>(controller + 8);
+    counts[0] = 0;
+    counts[1] = 0;
+    g_origUISystemUpdate(uiSystem);
+    counts[0] += saved[0]; // what changed during the update stays
+    counts[1] += saved[1];
+}
+
+void installUIPauseHook(std::vector<Patch>& undo) {
+    const uintptr_t slot = rva(Slot_PamUISystemUpdate);
+    uintptr_t current = 0;
+    if (!mem::read(slot, current) || current != rva(Fn_PamUISystemUpdate)) {
+        MLOG("hook UI pause: slot holds %p, expected %p; menus pause the game as usual", reinterpret_cast<void*>(current),
+             reinterpret_cast<void*>(rva(Fn_PamUISystemUpdate)));
+        return;
+    }
+    if (!mem::patchPointer(slot, reinterpret_cast<uintptr_t>(&uiSystemUpdate), nullptr)) {
+        MLOG("hook UI pause: VirtualProtect failed (%lu)", GetLastError());
+        return;
+    }
+    g_origUISystemUpdate = reinterpret_cast<UISystemUpdateFn>(current);
+    undo.push_back({slot, current});
+    VLOG("hook UI pause: installed");
+}
 
 void postUpdate(void* world, void* updateInfo) {
     g_origPostUpdate(world, updateInfo);
@@ -150,6 +193,7 @@ bool install(TickFn onTick, Installed* out) {
     const bool replay = installFactory(kClientReplay, Slot_ClientReplayPlayerFactory, Fn_ClientReplayPlayerFactory, &clientReplayFactory, undo);
     const bool chars = installFactory(kClientCharacter, Slot_ClientCharacterFactory, Fn_ClientCharacterFactory, &clientCharacterFactory, undo);
     got.ghostClients = replay && chars;
+    installUIPauseHook(undo);
     // The tick hook goes in last: nothing reaches the mod's code before every other hook is in, and
     // if it fails, the factory hooks above are taken out again.
     if (!mem::patchPointer(slot, reinterpret_cast<uintptr_t>(&postUpdate), nullptr)) {

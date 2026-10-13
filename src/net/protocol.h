@@ -23,7 +23,7 @@
 namespace mecmp::net::protocol {
 
 constexpr uint32_t kMagic = 0x4d43454d; // "MECM"
-constexpr uint16_t kProtocol = 5;
+constexpr uint16_t kProtocol = 6;
 constexpr uint16_t kTypeState = 1;
 constexpr uint16_t kTypeHello = 2;
 constexpr uint16_t kTypeChat = 3;

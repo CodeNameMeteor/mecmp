@@ -64,7 +64,7 @@ struct Member {
 };
 
 struct Stats {
-    uint64_t received = 0, relayed = 0, dropped = 0;
+    uint64_t received = 0, relayed = 0, dropped = 0, infoAnswered = 0;
 };
 
 class Relay {

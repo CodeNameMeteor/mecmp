@@ -61,6 +61,7 @@ add_library(mecmp SHARED
   src/net/protocol.cpp
   src/net/upnp.cpp
   src/net/joincode.cpp
+  src/net/serverlist.cpp
   src/ui/overlay.cpp
   src/ui/menu.cpp
   src/ui/gamepad.cpp

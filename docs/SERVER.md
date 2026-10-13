@@ -62,7 +62,8 @@ network, and from the internet (with a join code). On a home connection the inte
 works once the UDP port is forwarded on the router to the PC the log names. On a VPS the public
 address is the machine's own, and that is the only line.
 
-In the MECMP menu, type the server's address in the join field (`play.example.com` or
+In the MECMP menu, add the server's address under *Servers*: the list shows its name, how many
+players are on it and the round trip, and has a *Join* button. Or type the address in the join field (`play.example.com` or
 `203.0.113.7`, with `:port` when it is not 47800) and press *Join*. Or set `join=play.example.com:47800`
 in `mecmp.ini`. The menu then shows *Server: <name>*.
 

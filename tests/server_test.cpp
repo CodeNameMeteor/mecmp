@@ -363,7 +363,38 @@ static void testMotd() {
     CHECK(chatsTo(t, B) == 3); // bob's own welcome, not alice's
 }
 
+static void testInfo() {
+    server::Config cfg;
+    cfg.name = "Beat Link";
+    cfg.maxPlayers = 12;
+    Harness t(cfg);
+    auto hB = hello(2, "bob");
+    t.relay.onPacket(B, hB.data(), hB.size(), 0);
+    t.sent.clear();
+    char req[proto::kMaxPacket];
+    proto::Header h{proto::kMagic, static_cast<uint16_t>(proto::kProtocol + 3), proto::kTypeInfo, 0x55, 77};
+    const size_t n = proto::writeInfoRequest(req, h);
+    CHECK(n == proto::kInfoRequestSize);
+    t.relay.onPacket(A, req, n, 10); // another protocol version: answered anyway
+    CHECK(t.sent.size() == 1 && t.sent[0].to == A);
+    CHECK(t.sent[0].data.size() <= n); // never more than asked with
+    proto::Header ah;
+    memcpy(&ah, t.sent[0].data.data(), sizeof(ah));
+    CHECK(ah.type == proto::kTypeInfo && ah.seq == 77 && ah.protocol == proto::kProtocol);
+    proto::ServerInfo info;
+    CHECK(proto::readInfoAnswer(t.sent[0].data.data() + sizeof(ah), t.sent[0].data.size() - sizeof(ah), info));
+    CHECK(info.players == 1 && info.maxPlayers == 12 && info.name == "Beat Link");
+    CHECK(t.relay.members().size() == 1); // asking does not join
+    t.sent.clear();
+    t.relay.onPacket(A, req, 40, 20); // too short to be a request: no answer
+    CHECK(t.sent.empty());
+    t.relay.ban("10.0.0.1");
+    t.relay.onPacket(A, req, n, 30); // banned: no answer
+    CHECK(t.sent.empty());
+}
+
 int main() {
+    testInfo();
     testBans();
     testFullNoticeAndPerIp();
     testMotd();

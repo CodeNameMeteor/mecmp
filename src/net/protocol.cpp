@@ -195,6 +195,39 @@ bool readChat(const char* payload, size_t n, uint32_t& id, std::string& text) {
     return !text.empty();
 }
 
+size_t writeInfoRequest(char* buf, const Header& h) {
+    memset(buf, 0, kInfoRequestSize);
+    memcpy(buf, &h, sizeof(h));
+    return kInfoRequestSize;
+}
+
+size_t writeInfoAnswer(char* buf, const Header& h, const ServerInfo& info) {
+    char* p = buf;
+    put(p, h);
+    const uint8_t head[4] = {1, info.players, info.maxPlayers, 0};
+    memcpy(p, head, sizeof(head));
+    p += sizeof(head);
+    char n[kNameLen] = {};
+    memcpy(n, info.name.data(), utf8PrefixLength(info.name, kMaxNameBytes));
+    memcpy(p, n, kNameLen);
+    p += kNameLen;
+    return static_cast<size_t>(p - buf);
+}
+
+bool isInfoRequest(const char* payload, size_t n) {
+    return n + sizeof(Header) >= kInfoRequestSize && payload[0] == 0;
+}
+
+bool readInfoAnswer(const char* payload, size_t n, ServerInfo& out) {
+    if (n < 4 + kNameLen || payload[0] != 1) return false;
+    out.players = static_cast<uint8_t>(payload[1]);
+    out.maxPlayers = static_cast<uint8_t>(payload[2]);
+    size_t len = 0;
+    while (len < kNameLen && payload[4 + len]) ++len;
+    out.name.assign(payload + 4, len);
+    return true;
+}
+
 size_t writeHello(char* buf, const Header& h, const char* name, uint32_t look, uint8_t flags) {
     char* p = buf;
     put(p, h);

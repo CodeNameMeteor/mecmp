@@ -13,7 +13,7 @@ Status: experimental. Ghosts are visual only (no collision).
 ## Use
 
 1. Put `mecmp.dll` and `mecmp_inject.exe` in one folder. The first run creates `mecmp.ini` there.
-2. Start the game, run `mecmp_inject.exe` (two beeps = the mod is active), load into free roam.
+2. Start the game, run `mecmp_inject.exe` (it says when the mod is loaded; `mecmp.log` says "ready"), load into free roam.
 
 **In game, press INSERT, or click both sticks (LS+RS) on a gamepad,** for the MECMP menu: host a
 session, paste a join code and join, set your name, see who is connected, pick your own look (Faith,

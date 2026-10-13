@@ -111,6 +111,11 @@ void sessionSection() {
         if (net::connectedToHost()) ImGui::TextColored(ImVec4(0.4f, 1.f, 0.4f, 1.f), "connected");
         else ImGui::TextColored(ImVec4(1.f, 0.5f, 0.3f, 1.f), "waiting for the host...");
     }
+    if (running) {
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Leave")) net::leave();
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Stop this session and go offline");
+    }
 
     ImGui::Spacing();
     ImGui::SetNextItemWidth(ImGui::GetFontSize() * 10);
@@ -122,6 +127,13 @@ void sessionSection() {
         net::setName(name);
         config::change([name](config::Settings& c) { c.name = name; });
     }
+
+    bool autoStart = config::get()->autoStart;
+    if (ImGui::Checkbox("Start this session when the game starts", &autoStart))
+        config::change([autoStart](config::Settings& c) { c.autoStart = autoStart; });
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Off: the mod stays offline until you host or join here.\n"
+                          "On: it hosts, or joins the last session you joined, at launch.");
 
     ImGui::Spacing();
     if (ImGui::Button("Host a session")) startSession("");

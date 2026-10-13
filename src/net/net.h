@@ -39,6 +39,8 @@ struct RemoteInfo {
 // session (the old one is stopped first).
 bool start(uint16_t port, const std::string& join, float loopbackOffset, const std::string& name);
 void stop();
+// Menu "Leave": stop and close the router port this session opened (in the background).
+void leave();
 // Game exit: stop, and close the router port this session opened (waits at most routerWaitMs).
 void shutdown(uint32_t routerWaitMs = 2000);
 

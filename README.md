@@ -25,7 +25,11 @@ chat (not while the game's own pause menu or map is up): type a line and press E
 gamepad. The *Controls* tab changes the keys and buttons for the menu, chat and markers. Everything can also be set in
 `mecmp.ini` (the menu saves to it).
 
-**Hosting** (the menu's *Host a session*, or `join=` empty in `mecmp.ini`): the mod asks your router to open UDP port 47800
+The mod starts **offline**: nothing is sent and no router port is opened until you host, join or pick
+a server in the menu. *Leave* goes offline again. *Start this session when the game starts*
+(`[net] auto_start=1`) hosts, or joins the last session you joined, at launch.
+
+**Hosting** (the menu's *Host a session*, or `join=` empty with `auto_start=1` in `mecmp.ini`): the mod asks your router to open UDP port 47800
 (UPnP) and makes a **join code** like `2HMAS-W9ENR`. It is shown in the menu (*Copy* puts it on
 the clipboard), saved in `join_code.txt` and written to `mecmp.log`. Send it to your friends. The host
 forwards everyone's movement to everyone, so friends need nothing opened on their side.

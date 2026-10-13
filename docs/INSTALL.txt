@@ -1,0 +1,41 @@
+MECMP - Mirror's Edge Catalyst multiplayer (public beta)
+=======================================================
+
+INSTALL
+1. Unzip this folder anywhere (not inside the game folder is fine).
+2. Start Mirror's Edge Catalyst and wait for the main menu.
+3. Run mecmp_inject.exe. It says when the mod is loaded. A log, mecmp.log, is written
+   next to mecmp.dll; the first run also creates mecmp.ini there.
+4. Load into free roam.
+
+PLAY
+- Press INSERT (or click both sticks on a gamepad) for the MECMP menu.
+- Session tab:
+  * Host a session: you get a join code (e.g. 2HMAS-W9ENR). Send it to your friends.
+  * Join: paste a friend's join code, or a server's address, and press Join.
+  * Servers: add a server's address to see its name, players and ping, and join it.
+  * Leave: go offline again. The mod starts offline; nothing is sent until you host or join.
+- Enter opens the chat. Markers: tap G to place one, hold G for the marker wheel.
+- Keys and gamepad buttons can be changed on the Controls tab.
+
+HOSTING
+The mod asks your router to open UDP port 47800 (UPnP). If your router does not allow that,
+forward UDP 47800 to your PC by hand, or let a friend host, or use a dedicated server.
+
+DEDICATED SERVER
+mecmp_server.exe runs a session without the game (Windows; a Linux build is in the release too).
+  mecmp_server.exe --name "My server" --port 47800
+See docs/SERVER.md on the project page for options, bans and running it on a VPS.
+
+VOICE
+Positional voice works through Mumble (www.mumble.info) with its Link plugin and Positional
+Audio turned on. Everyone joins the same Mumble server. The menu shows whether it is working.
+
+GOOD TO KNOW
+- Everyone needs the same MECMP version.
+- The mod does not touch the game's online services, Denuvo or the EA app.
+- Traffic is not encrypted: only play with people and servers you trust.
+- Problems? Send mecmp.log (and mecmp.prev.log after a crash) with your report.
+
+Project page, source and issues: https://github.com/CodeNameMeteor/mecmp
+MIT licence (see LICENSE). Uses Dear ImGui (see THIRD_PARTY_NOTICES.md).

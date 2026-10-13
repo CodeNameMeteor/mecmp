@@ -1,0 +1,96 @@
+name: release
+
+# Push a tag like v0.9.0 to build the release packages and open a draft GitHub release with them
+# (publish it by hand after a last look). Run it by hand ("Run workflow") to only build the packages.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Version
+        id: v
+        run: |
+          ver=$(sed -n 's/.*kVersion = "\(.*\)".*/\1/p' src/app/mod.h)
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ] && [ "${GITHUB_REF_NAME}" != "v$ver" ]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match the mod's version $ver (src/app/mod.h)"; exit 1
+          fi
+      - name: Install MinGW-w64 and CMake
+        run: sudo apt-get update && sudo apt-get install -y g++-mingw-w64-x86-64 cmake ninja-build zip
+      - name: Build (x64, Release, no developer keys)
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_SYSTEM_NAME=Windows \
+            -DCMAKE_CXX_COMPILER=x86_64-w64-mingw32-g++-posix \
+            -DCMAKE_C_COMPILER=x86_64-w64-mingw32-gcc-posix \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DMECMP_DEBUG_KEYS=OFF
+          cmake --build build
+      - name: Package
+        run: |
+          name="MECMP-${{ steps.v.outputs.version }}-windows"
+          mkdir -p "pkg/$name/docs"
+          cp build/mecmp.dll build/mecmp_inject.exe build/mecmp_server.exe "pkg/$name/"
+          cp docs/INSTALL.txt "pkg/$name/README.txt"
+          cp LICENSE THIRD_PARTY_NOTICES.md CHANGELOG.md "pkg/$name/"
+          cp docs/SERVER.md "pkg/$name/docs/"
+          (cd pkg && zip -r "../$name.zip" "$name")
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: MECMP-*-windows.zip
+
+  linux-server:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the server
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --target mecmp_server
+          strip build/mecmp_server
+      - name: Server tests
+        run: |
+          g++ -std=c++17 -Wall -Wextra -Isrc tests/server_test.cpp src/server/relay.cpp src/net/protocol.cpp -o server_test
+          ./server_test
+      - name: Package
+        run: |
+          ver=$(sed -n 's/.*kVersion = "\(.*\)".*/\1/p' src/app/mod.h)
+          name="mecmp_server-$ver-linux-x64"
+          mkdir -p "pkg/$name"
+          cp build/mecmp_server docs/SERVER.md LICENSE "pkg/$name/"
+          tar -C pkg -czf "$name.tar.gz" "$name"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-server
+          path: mecmp_server-*-linux-x64.tar.gz
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: [windows, linux-server]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ver="${GITHUB_REF_NAME#v}"
+          # This version's section of CHANGELOG.md (from its heading to the next one).
+          awk -v v="$ver" '$0 ~ "^## "v {on=1; next} on && /^## / {exit} on' CHANGELOG.md > notes.md
+          prerelease=""
+          case "$ver" in 0.*) prerelease="--prerelease" ;; esac
+          gh release create "$GITHUB_REF_NAME" dist/* --draft $prerelease \
+            --title "MECMP $ver" --notes-file notes.md

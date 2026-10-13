@@ -2,13 +2,14 @@
 
 See other players running through the city with you. Every remote player appears as Faith (or
 one of the game's ghost looks, as they pick), animated live from their own movement: running, jumping, climbing.
-Free roam, peer to peer, no custom server needed.
+Free roam: one player hosts and friends join with a code, or everyone joins a dedicated server.
 
 The mod does not touch the game's online services, Denuvo or the EA app. It talks to other
 players over its own small UDP connection (port 47800 by default). Custom servers that only
 change the server address (e.g. Beat Revival) keep working alongside it.
 
-Status: experimental. Ghosts are visual only (no collision).
+Status: public beta (0.9.0, see [CHANGELOG.md](CHANGELOG.md)). Ghosts are visual only (no collision).
+Download the latest release from the [Releases](https://github.com/CodeNameMeteor/mecmp/releases) page.
 
 ## Use
 
@@ -118,3 +119,14 @@ docs        how it works and the roadmap
 ```
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and [docs/ROADMAP.md](docs/ROADMAP.md).
+
+## Licence
+
+MIT, see [LICENSE](LICENSE). Dear ImGui is MIT too ([THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)).
+
+## Releases
+
+Push a tag `v<version>` matching `kVersion` in `src/app/mod.h` (e.g. `v0.9.0`). The release workflow
+builds the Windows package (mod, injector and server, without the developer keys) and the Linux server,
+and opens a **draft** GitHub release with them and that version's CHANGELOG section. Check it and
+publish it by hand.

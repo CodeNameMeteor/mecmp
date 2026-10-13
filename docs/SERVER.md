@@ -23,6 +23,7 @@ mecmp_server --name "My server" --port 47800 --max-players 16
 | `--max-players` | 16 | The game shows at most 15 other players, so 16 is the useful maximum. |
 | `--log` | mecmp_server.log | Log file (joins, leaves, names, chat). `--log ""` for none. |
 | `--config` | mecmp_server.ini | Settings file, read first; options on the command line win. |
+| `--bans` | bans.txt | Banned addresses (below). `--bans ""` for none. |
 | `--mirror` | off | Test mode: each player also sees a copy of themselves 3 m away. |
 
 `mecmp_server.ini` (optional, next to the program, or `--config <file>`):
@@ -33,7 +34,13 @@ port=47800
 max_players=16
 log=mecmp_server.log
 log_chat=1
+motd=Welcome! Be nice.
+max_per_ip=4
+bans=bans.txt
 ```
+
+`motd` is a chat line each player gets when they join. `max_per_ip` limits players from one IP address
+(a household can share one; more than a few is usually someone filling the server).
 
 Console commands (type them in the server's window):
 
@@ -41,6 +48,9 @@ Console commands (type them in the server's window):
 |---|---|
 | `list` | players: id, name, address, time connected, packets |
 | `kick <id or name>` | removes a player; their address is refused for 60 s |
+| `ban <id, name or IP>` | removes the player and refuses their IP address from now on (saved in bans.txt) |
+| `unban <IP>` | lifts a ban |
+| `bans` | lists banned addresses |
 | `say <text>` | a chat message from the server |
 | `status` | totals |
 | `quit` | stops the server (Ctrl+C works too) |
@@ -112,8 +122,19 @@ sudo systemctl enable --now mecmp
 journalctl -u mecmp -f      # the log
 ```
 
-A service has no console, so `list`, `kick` and `say` need the server running in a terminal (for
-example inside `tmux`) instead.
+A service has no console. Bans still work: edit `bans.txt` (one IP per line, `#` starts a comment)
+and the server picks the change up within 5 s. For `list`, `kick` and `say`, run the server in a terminal
+instead (for example inside `tmux`).
+
+## Bans
+
+`bans.txt` holds one IPv4 address per line; anything after the address is a comment (the `ban`
+command writes the player's name and the date there). Banned players are dropped at once and told
+"You are banned from this server." when they try again. Players who are refused because the server
+is full, or their address has too many players, are told so too (at most once every 15 s).
+
+A ban is by IP address, so it also hits others behind the same address, and a player whose address
+changes can come back. There are no accounts to ban instead.
 
 ## What the server checks
 
@@ -124,6 +145,7 @@ example inside `tmux`) instead.
 - At most 80 packets a second per player (bursts up to 160); a client sends about 31.
 - Only the server may say it hosts: the host and server flags are cleared from forwarded HELLOs.
 - A player silent for 10 s is dropped.
+- At most `max_per_ip` players from one IP address; banned addresses get nothing but the notice.
 
 Traffic is not encrypted and there are no accounts: names are whatever players type. Chat is written
 to the server log (`log_chat=0` turns that off).

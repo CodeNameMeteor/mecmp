@@ -16,6 +16,20 @@ std::string toString(const Addr& a) {
     return buf;
 }
 
+std::string ipToString(uint32_t ip) {
+    const std::string s = toString({ip, 0});
+    return s.substr(0, s.rfind(':'));
+}
+
+bool parseIp(const std::string& text, uint32_t& ip) {
+    unsigned a = 0, b = 0, c = 0, d = 0;
+    char tail = 0;
+    if (sscanf(text.c_str(), "%u.%u.%u.%u%c", &a, &b, &c, &d, &tail) != 4 || a > 255 || b > 255 || c > 255 || d > 255)
+        return false;
+    ip = (a << 24) | (b << 16) | (c << 8) | d;
+    return true;
+}
+
 std::string cleanText(const std::string& raw) {
     std::string out;
     for (unsigned char c : raw)
@@ -74,6 +88,11 @@ void Relay::onPacket(const Addr& from, const char* buf, size_t n, uint32_t nowMs
         ++stats_.dropped;
         return;
     }
+    if (bans_.count(from.ip)) {
+        ++stats_.dropped;
+        notify(from, "You are banned from this server.", nowMs);
+        return;
+    }
     if (blocked(from, nowMs)) { ++stats_.dropped; return; }
     Member* m = find(from);
     if (!m) {
@@ -85,6 +104,15 @@ void Relay::onPacket(const Addr& from, const char* buf, size_t n, uint32_t nowMs
                 fullWarnAt_ = nowMs;
                 log_("server full (" + std::to_string(members_.size()) + " players); not admitting " + toString(from));
             }
+            notify(from, "This server is full (" + std::to_string(members_.size()) + "/" + std::to_string(cfg_.maxPlayers) +
+                             "). Try again later.", nowMs);
+            return;
+        }
+        size_t sameIp = 0;
+        for (const auto& o : members_) sameIp += o.addr.ip == from.ip;
+        if (sameIp >= cfg_.maxPerIp) {
+            ++stats_.dropped;
+            notify(from, "Too many players from your address on this server.", nowMs);
             return;
         }
         Member nm;
@@ -127,6 +155,7 @@ void Relay::onPacket(const Addr& from, const char* buf, size_t n, uint32_t nowMs
             m->name = name;
             log_("player " + hex(m->session) + " '" + name + "' joined from " + toString(from) + "; " +
                  std::to_string(members_.size()) + " connected");
+            if (!cfg_.motd.empty()) queueChat(cfg_.motd, &from);
         } else if (name != m->name) {
             log_("player " + hex(m->session) + " '" + m->name + "' is now called '" + name + "'");
             m->name = name;
@@ -178,6 +207,36 @@ void Relay::sendHello() {
     for (const auto& m : members_) send_(m.addr, buf, n);
 }
 
+void Relay::sendHelloTo(const Addr& to) {
+    char buf[proto::kMaxPacket];
+    const proto::Header h{proto::kMagic, proto::kProtocol, proto::kTypeHello, session_, ++seq_};
+    send_(to, buf, proto::writeHello(buf, h, cfg_.name.c_str(), 0, proto::kHelloHost | proto::kHelloServer));
+}
+
+void Relay::notify(const Addr& to, const std::string& text, uint32_t nowMs) {
+    for (size_t i = 0; i < notices_.size();) {
+        if (nowMs - notices_[i].at >= 15000) { notices_.erase(notices_.begin() + static_cast<long>(i)); continue; }
+        if (notices_[i].to == to) return; // told recently
+        ++i;
+    }
+    if (notices_.size() >= 256) return; // many strangers at once: do not let them make us send
+    notices_.push_back({to, nowMs});
+    // Our HELLO first, so the client knows who is talking; then the line twice (UDP may drop one).
+    sendHelloTo(to);
+    char buf[proto::kMaxPacket];
+    const uint32_t id = ++chatId_;
+    for (int k = 0; k < 2; ++k) {
+        const proto::Header h{proto::kMagic, proto::kProtocol, proto::kTypeChat, session_, ++seq_};
+        send_(to, buf, proto::writeChat(buf, h, id, proto::cleanChatText(text)));
+    }
+}
+
+void Relay::queueChat(const std::string& raw, const Addr* only) {
+    const std::string text = proto::cleanChatText(raw);
+    if (text.empty()) return;
+    chat_.push_back({++chatId_, text, 3, only != nullptr, only ? *only : Addr{}});
+}
+
 void Relay::tick(uint32_t nowMs) {
     for (size_t i = 0; i < members_.size();) {
         if (nowMs - members_[i].lastSeen > cfg_.timeoutMs) {
@@ -196,7 +255,8 @@ void Relay::tick(uint32_t nowMs) {
         char buf[proto::kMaxPacket];
         const proto::Header h{proto::kMagic, proto::kProtocol, proto::kTypeChat, session_, ++seq_};
         const size_t n = proto::writeChat(buf, h, c.id, c.text);
-        for (const auto& m : members_) send_(m.addr, buf, n);
+        for (const auto& m : members_)
+            if (!c.targeted || m.addr == c.to) send_(m.addr, buf, n);
         --c.left;
     }
     while (!chat_.empty() && chat_.front().left <= 0) chat_.pop_front();
@@ -215,10 +275,39 @@ bool Relay::kick(const std::string& who, uint32_t nowMs) {
 }
 
 void Relay::say(const std::string& raw) {
-    std::string text = proto::cleanChatText(raw);
+    const std::string text = proto::cleanChatText(raw);
     if (text.empty()) return;
-    chat_.push_back({++chatId_, text, 3});
+    queueChat(text, nullptr);
     log_("chat (server): " + text);
+}
+
+uint32_t Relay::ban(const std::string& who) {
+    uint32_t ip = 0;
+    if (!parseIp(who, ip)) {
+        for (const auto& m : members_)
+            if (hex(m.session) == who || m.name == who) ip = m.addr.ip;
+    }
+    if (!ip) return 0;
+    std::set<uint32_t> next = bans_;
+    next.insert(ip);
+    setBans(std::move(next));
+    log_("banned " + ipToString(ip));
+    return ip;
+}
+
+bool Relay::unban(const std::string& text) {
+    uint32_t ip = 0;
+    if (!parseIp(text, ip) || !bans_.erase(ip)) return false;
+    log_("unbanned " + ipToString(ip));
+    return true;
+}
+
+void Relay::setBans(std::set<uint32_t> ips) {
+    bans_ = std::move(ips);
+    for (size_t i = 0; i < members_.size();) {
+        if (bans_.count(members_[i].addr.ip)) { drop(i, "banned"); continue; }
+        ++i;
+    }
 }
 
 } // namespace mecmp::server

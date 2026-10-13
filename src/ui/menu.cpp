@@ -295,7 +295,7 @@ void lookSection() {
     if (ImGui::Checkbox("Names above players", &showNames))
         config::change([showNames](config::Settings& c) { c.showNames = showNames; });
     bool showNotices = config::get()->showNotices;
-    if (ImGui::Checkbox("Join/leave notices", &showNotices))
+    if (ImGui::Checkbox("Notices (join/leave, markers)", &showNotices))
         config::change([showNotices](config::Settings& c) { c.showNotices = showNotices; });
     bool showChat = config::get()->showChat;
     if (ImGui::Checkbox("Chat", &showChat)) config::change([showChat](config::Settings& c) { c.showChat = showChat; });

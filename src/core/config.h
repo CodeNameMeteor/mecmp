@@ -36,7 +36,7 @@ struct Settings {
     std::string pingPad;                  // gamepad buttons that place it (as menu_pad); empty = none
     // [voice]
     bool mumbleLink = true;               // positional voice through Mumble's Link plugin
-    bool showNotices = true;              // "<name> joined / left" at the top of the screen
+    bool showNotices = true;              // "<name> joined / left / placed a marker" at the top of the screen
     bool showChat = true;                 // chat messages bottom-left
     std::string chatKey = "T";            // opens the chat line: a letter, ENTER, or a menu key name
     // [debug]

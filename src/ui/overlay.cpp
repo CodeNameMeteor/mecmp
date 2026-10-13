@@ -139,14 +139,16 @@ void applyRawMouse() {
     if (const int w = g_wheel.exchange(0)) io.AddMouseWheelEvent(0.f, static_cast<float>(w) / WHEEL_DELTA);
 }
 
-// A raw keyboard key press (not a release, not mouse).
-bool isRawKeyPress(LPARAM l) {
+// A raw keyboard event: 1 = key press, 2 = key release, 0 = not the keyboard.
+int rawKeyEvent(LPARAM l) {
     RAWINPUT ri{};
     UINT size = sizeof(ri);
     if (GetRawInputData(reinterpret_cast<HRAWINPUT>(l), RID_INPUT, &ri, &size, sizeof(RAWINPUTHEADER)) == static_cast<UINT>(-1))
-        return false;
-    return ri.header.dwType == RIM_TYPEKEYBOARD && !(ri.data.keyboard.Flags & RI_KEY_BREAK);
+        return 0;
+    if (ri.header.dwType != RIM_TYPEKEYBOARD) return 0;
+    return (ri.data.keyboard.Flags & RI_KEY_BREAK) ? 2 : 1;
 }
+bool isRawKeyPress(LPARAM l) { return rawKeyEvent(l) == 1; }
 
 bool isMouseMessage(UINT msg) { return msg >= WM_MOUSEFIRST && msg <= WM_MOUSELAST; }
 
@@ -170,8 +172,12 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
     }
     // Chat: its key opens the input line (not while the menu is open). While it is open the keyboard
     // and raw input go to it, not to the game; Escape cancels.
+    // Not while one of the game's own menus is up (pause menu, map): Enter there picks a menu item.
     if (msg == WM_KEYDOWN && !g_open && !chat::isOpen() && g_ready && static_cast<int>(w) == g_chatKey.load() &&
-        !(l & (1 << 30))) {
+        !(l & (1 << 30)) && game::hooks::gameMenuOpen())
+        MLOG("chat: not opened (a game menu is up)");
+    else if (msg == WM_KEYDOWN && !g_open && !chat::isOpen() && g_ready && static_cast<int>(w) == g_chatKey.load() &&
+             !(l & (1 << 30))) {
         chat::open();
         if (!chat::isOpen()) return CallWindowProcW(g_origWndProc, hwnd, msg, w, l);
         g_openingChatKey = static_cast<int>(w);
@@ -180,7 +186,7 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
     }
     // Marker key: only noted here (the server tick places the marker); the game still gets the key.
     if (msg == WM_KEYDOWN && !g_open && !chat::isOpen() && g_ready && g_pingKey.load() != 0 &&
-        static_cast<int>(w) == g_pingKey.load() && !(l & (1 << 30)))
+        static_cast<int>(w) == g_pingKey.load() && !(l & (1 << 30)) && !game::hooks::gameMenuOpen())
         game::ping::request();
     if (chat::isOpen() && g_ready && !g_open) {
         if (msg == WM_KEYDOWN && w == VK_ESCAPE) { chat::close(); return 0; }
@@ -196,7 +202,13 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
     // A pad plugged in later: let the backend look for it again (it only sets a flag).
     if (msg == WM_DEVICECHANGE && g_ready) ImGui_ImplWin32_WndProcHandler(hwnd, msg, w, l);
     if (g_open && g_ready) {
+        // Key releases still reach the game (ImGui got them above), so a key held when the menu
+        // opened is released there and Faith does not keep running.
+        if (keyUp) return CallWindowProcW(g_origWndProc, hwnd, msg, w, l);
         if (msg == WM_INPUT) {
+            const int key = rawKeyEvent(l);
+            if (key == 2) return CallWindowProcW(g_origWndProc, hwnd, msg, w, l);
+            if (key == 1) return DefWindowProcW(hwnd, msg, w, l); // a key press: swallowed
             handleRawMouse(l);
             return DefWindowProcW(hwnd, msg, w, l); // swallowed: the game does not see it
         }

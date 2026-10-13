@@ -16,6 +16,7 @@ namespace mecmp::game {
 using mem::rva;
 
 // --- Globals -------------------------------------------------------------------------------------
+constexpr uintptr_t Fn_UIPauseConsumer = 0x143b16ae0; // (const UIPauseController*, Client*)
 constexpr uintptr_t kTypeInfoListHead = 0x14215d028;
 constexpr uintptr_t kServerGameWorld = 0x1425469e0; // ServerGameWorld* (null between levels)
 // Camera: ClientCameraViewManagers list (ClientCameraViewManagers_postSimUpdateAll, ..._postSimUpdate)

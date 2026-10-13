@@ -21,6 +21,13 @@ else()
 endif()
 
 # --- mecmp.dll: the mod ------------------------------------------------------------------------
+add_library(mecmp_minhook STATIC
+  third_party/minhook/src/buffer.c
+  third_party/minhook/src/hook.c
+  third_party/minhook/src/trampoline.c
+  third_party/minhook/src/hde/hde64.c
+)
+target_include_directories(mecmp_minhook PUBLIC third_party/minhook/include)
 add_library(mecmp SHARED
   src/app/dllmain.cpp
   src/app/mod.cpp
@@ -62,7 +69,7 @@ option(MECMP_DEBUG_KEYS "Developer hotkeys F7/F8/F9/F12 (OFF for release builds)
 if(MECMP_DEBUG_KEYS)
   target_compile_definitions(mecmp PRIVATE MECMP_DEBUG_KEYS=1)
 endif()
-target_link_libraries(mecmp PRIVATE ws2_32 d3d11 dxgi d3dcompiler dwmapi)
+target_link_libraries(mecmp PRIVATE mecmp_minhook ws2_32 d3d11 dxgi d3dcompiler dwmapi)
 set_target_properties(mecmp PROPERTIES OUTPUT_NAME "mecmp" PREFIX "")
 
 # --- mecmp_inject.exe: loads mecmp.dll into the running game -------------------------------------

@@ -204,14 +204,6 @@ void myLookSection() {
         ImGui::TextDisabled("The ghost styles load in free roam.");
         return;
     }
-    // Only the RunVis ghost renders in free roam (models::echoRenders): no style or colour picker
-    // until the other styles' assets can be loaded.
-    constexpr bool kStylePicker = false;
-    if (!kStylePicker) {
-        if (!game::models::echoRenders(mine)) setMyLook(game::models::defaultEcho());
-        ImGui::TextDisabled("More ghost styles and colours are coming later.");
-        return;
-    }
     const game::models::Echo* cur = nullptr;
     for (const auto& e : echoes)
         if (e.hash == mine) cur = &e;

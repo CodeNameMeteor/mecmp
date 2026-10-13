@@ -65,7 +65,7 @@ constexpr const char* kDefaultIni =
     "show_notices=1\r\n"
     "; 1 = show chat messages; chat_key opens the chat line (a letter A..Z, ENTER, or INSERT/F1../...)\r\n"
     "show_chat=1\r\n"
-    "chat_key=T\r\n"
+    "chat_key=ENTER\r\n"
     "\r\n"
     "[debug]\r\n"
     "; 1 = detailed diagnostic log (for bug reports)\r\n"
@@ -120,7 +120,7 @@ void load(const std::wstring& dir) {
     s.mumbleLink = readInt(ini, L"voice", L"mumble_link", 1) != 0;
     s.showNotices = readInt(ini, L"ui", L"show_notices", 1) != 0;
     s.showChat = readInt(ini, L"ui", L"show_chat", 1) != 0;
-    s.chatKey = readString(ini, L"ui", L"chat_key", "T");
+    s.chatKey = readString(ini, L"ui", L"chat_key", "ENTER");
     s.verbose = readInt(ini, L"debug", L"verbose", 0) != 0;
     log::verbose = s.verbose;
     s.ignoreBuildCheck = readInt(ini, L"debug", L"ignore_build_check", 0) != 0;

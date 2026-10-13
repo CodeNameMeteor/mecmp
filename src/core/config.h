@@ -32,7 +32,7 @@ struct Settings {
     bool mumbleLink = true;               // positional voice through Mumble's Link plugin
     bool showNotices = true;              // "<name> joined / left" at the top of the screen
     bool showChat = true;                 // chat messages bottom-left
-    std::string chatKey = "T";            // opens the chat line: a letter, ENTER, or a menu key name
+    std::string chatKey = "ENTER";        // opens the chat line: a letter, ENTER, or a menu key name
     // [debug]
     bool verbose = false;
     bool ignoreBuildCheck = false;        // run even if the game build check fails (for testing a new build)

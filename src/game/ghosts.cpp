@@ -52,6 +52,7 @@ struct Ghost {
     int visibleCalls = 0;
     bool hidden = false;
     bool posing = false;
+    bool ghostShader = true;
     DWORD posingSince = 0;        // when the current player started driving it
     float lastPos[3] = {0, 0, 0}; // where it was last driven
     std::string lookKey;          // look applied now ("faith", "echo:<hash>" or a model name); empty = redo
@@ -267,6 +268,33 @@ void fixClient(Ghost& g, const net::PlayerState& st) {
     }
 }
 
+void setGhostShader(Ghost& ghost, bool enabled) {
+    ghost.ghostShader = enabled;
+    const uintptr_t client = reinterpret_cast<uintptr_t>(ghost.clientChar);
+    uint8_t current = 0;
+    if (!client || mem::readOr<uintptr_t>(client) != rva(Vtbl_PamClientCharacterEntity) ||
+        mem::readOr<uintptr_t>(client + Character_Data) != g_ghostCharData.load() ||
+        !mem::read(client + 0x334, current) || current == static_cast<uint8_t>(enabled)) return;
+    // Character creation caches the definition's shader flag in each client entity.
+    poke<uint8_t>(client + 0x334, enabled ? 1 : 0);
+}
+bool applyGhostModel(void* character, const std::string& key, std::string* used) {
+    std::string applied;
+    const bool ok = key.rfind("echo:", 0) == 0
+        ? models::applyEcho(character, config::lookHash(key))
+        : models::apply(character, key, &applied);
+    if (!ok) return false;
+    {
+        std::lock_guard<std::mutex> lock(g_m);
+        for (auto& ghost : g_ghosts) if (ghost.character == character) {
+            setGhostShader(ghost, key.rfind("echo:", 0) == 0 || applied != "faith");
+            break;
+        }
+    }
+    if (used) *used = key.rfind("echo:", 0) == 0 ? key : applied;
+    return true;
+}
+
 // The look a player's ghost should have: the one they chose (sent in HELLO).
 std::string desiredLook(uint32_t playerLook) { return config::lookName(playerLook); }
 
@@ -279,17 +307,17 @@ bool applyLook(void* ch, const std::string& key, std::string* used = nullptr) {
         // A style that cannot render here (e.g. picked in an older version) would leave the ghost
         // invisible: show the plain ghost instead, and count it as done (no retries).
         if (!models::echoRenders(hash) && !models::echoes()->empty()) {
-            if (!models::apply(ch, "RunVis", used)) return false;
+            if (!applyGhostModel(ch, "RunVis", used)) return false;
             if (used) *used = "RunVis (their style is not available in free roam)";
             return true;
         }
         // The catalogue is not loaded yet, or the look is unknown to it: keep the ghost's look, and the
         // caller retries later (it does not reapply RunVis each time: that rebuilds the mesh).
-        if (!models::applyEcho(ch, hash)) return false;
+        if (!applyGhostModel(ch, key, used)) return false;
         if (used) *used = key;
         return true;
     }
-    return models::apply(ch, key, used);
+    return applyGhostModel(ch, key, used);
 }
 
 // How long to wait before trying a look again: an echo the catalogue does not have is retried rarely
@@ -350,7 +378,7 @@ void* spawnGhost(uint32_t peer, const std::string& name, uint32_t look, const ne
     std::string used;
     const std::string key = desiredLook(look);
     const bool done = applyLook(ch, key, &used);
-    if (!done) models::apply(ch, "RunVis", &used); // visible at least; the wanted look is retried later
+    if (!done) applyGhostModel(ch, "RunVis", &used); // visible at least; the wanted look is retried later
     {
         std::lock_guard<std::mutex> lock(g_m);
         for (auto& g : g_ghosts)
@@ -415,6 +443,7 @@ void onClientCharacter(void* ent) {
             if (g.peer == peer && !g.clientChar) {
                 g.clientChar = ent;
                 g.clientCharAt = GetTickCount();
+                setGhostShader(g, g.ghostShader);
                 break;
             }
     }
@@ -520,7 +549,6 @@ void tick(uint64_t tick, uint64_t ticksInLevel) {
     (void)tick;
     const double t0 = nowUs();
     handleRequests();
-    models::tick();
     std::vector<Present> players; // present now
     for (const auto& r : net::remotes(kHideAfterMs))
         if (r.ageMs < kHideAfterMs) players.push_back({r.id, r.name, r.ageMs, r.look});

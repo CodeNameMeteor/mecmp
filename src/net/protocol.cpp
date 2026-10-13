@@ -18,8 +18,9 @@ uint32_t encodeQuat(const float* q) {
     int shift = 20;
     for (int i = 0; i < 4; ++i) {
         if (i == big) continue;
-        float v = (q[i] * sign * kSqrt2 + 1.f) * 0.5f * 1023.f + 0.5f; // [-1/sqrt2, 1/sqrt2] -> 0..1023
-        const int iv = v < 0 ? 0 : (v > 1023 ? 1023 : static_cast<int>(v));
+        // Integer centre preserves exact zero in the world-space root rotation.
+        float v = (q[i] * sign * kSqrt2 + 1.f) * 511.f + 0.5f;
+        const int iv = v < 0 ? 0 : (v > 1022 ? 1022 : static_cast<int>(v));
         out |= static_cast<uint32_t>(iv) << shift;
         shift -= 10;
     }
@@ -32,7 +33,8 @@ void decodeQuat(uint32_t w, float* q) {
     float sum = 0;
     for (int i = 0; i < 4; ++i) {
         if (i == big) continue;
-        q[i] = (static_cast<float>((w >> shift) & 1023) / 1023.f * 2.f - 1.f) / kSqrt2;
+        const uint32_t component = (w >> shift) & 1023;
+        q[i] = (static_cast<float>(component > 1022 ? 1022 : component) / 1022.f * 2.f - 1.f) / kSqrt2;
         sum += q[i] * q[i];
         shift -= 10;
     }

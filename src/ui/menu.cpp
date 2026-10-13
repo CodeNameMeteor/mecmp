@@ -283,6 +283,10 @@ void markersSection() {
     bool showArrows = cfg->showArrows;
     if (ImGui::Checkbox("Arrows to players off screen (experimental)", &showArrows))
         config::change([showArrows](config::Settings& c) { c.showArrows = showArrows; });
+    bool pingPulse = cfg->pingPulse;
+    if (ImGui::Checkbox("Flash a marker when it arrives", &pingPulse))
+        config::change([pingPulse](config::Settings& c) { c.pingPulse = pingPulse; });
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("The marker blinks and rings spread from it for a moment when it is placed or moves");
 }
 
 void lookSection() {

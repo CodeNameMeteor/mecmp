@@ -72,12 +72,25 @@ void draw() {
             const float alpha = game::distanceFade(e.distance) * std::clamp(left / kFadeLastMs, 0.f, 1.f);
             if (alpha <= 0.f) continue;
             snprintf(text, sizeof(text), "%s  %.0f m", p.name.c_str(), e.distance);
+            // A flash when it arrives, so a new or moved marker is noticed (unless switched off).
+            const game::Pulse pulse = cfg->pingPulse ? game::pingPulse(p.ageMs) : game::Pulse{};
+            // During the blinks the marker's colour goes towards white.
+            uint8_t lit[3];
+            for (int i = 0; i < 3; ++i) lit[i] = static_cast<uint8_t>(p.rgb[i] + (255 - p.rgb[i]) * pulse.flash);
             if (e.onScreen) {
                 const float r = unit * std::clamp(1.1f - e.distance / 120.f, 0.55f, 1.1f);
-                diamond(dl, ImVec2(e.x, e.y), r, colour(p.rgb, alpha), alpha);
-                label(dl, font, unit * 0.85f, ImVec2(e.x, e.y + r + unit * 0.6f), text, alpha, screen);
+                if (pulse.ring < 1.f) {
+                    // Two rings: a thick one close in and a thinner one beyond it. Both thin out and
+                    // lose their colour as they spread.
+                    const float fade = (1.f - pulse.ring) * alpha;
+                    const ImVec2 c(e.x, e.y);
+                    dl->AddCircle(c, r * (1.f + 1.8f * pulse.ring), colour(lit, fade), 0, unit * 0.32f * (1.f - 0.6f * pulse.ring));
+                    dl->AddCircle(c, r * (1.f + 3.4f * pulse.ring), colour(lit, fade * 0.75f), 0, unit * 0.14f * (1.f - 0.5f * pulse.ring));
+                }
+                diamond(dl, ImVec2(e.x, e.y), r * pulse.scale, colour(lit, alpha), alpha);
+                label(dl, font, unit * 0.85f, ImVec2(e.x, e.y + r * pulse.scale + unit * 0.6f), text, alpha, screen);
             } else {
-                arrow(dl, font, e, unit * 0.7f, colour(p.rgb, alpha), text, alpha, screen);
+                arrow(dl, font, e, unit * 0.7f * pulse.scale, colour(lit, alpha), text, alpha, screen);
             }
         }
     }

@@ -42,6 +42,31 @@ inline float distanceFade(float depth) {
     return 1.f - (depth - kFadeFullUntil) / (kFadeGoneAt - kFadeFullUntil);
 }
 
+// The flash a marker makes when it arrives, so a new or moved one is noticed: the marker blinks
+// white twice and swells and settles, while rings spread from it and fade. One pass of kPulseMs,
+// then it stays at rest.
+constexpr unsigned kPulseMs = 1800;
+struct Pulse {
+    float ring = 1.f;  // 0 = rings just started, 1 = finished (nothing to draw)
+    float scale = 1.f; // multiplier for the marker's size
+    float flash = 0.f; // 0..1: how far the marker's colour is blended to white (two blinks)
+};
+inline Pulse pingPulse(unsigned ageMs) {
+    Pulse p;
+    if (ageMs >= kPulseMs) return p;
+    const float t = static_cast<float>(ageMs) / static_cast<float>(kPulseMs);
+    // A blink: a smooth bump of half-width w around c (0 outside it).
+    auto bump = [](float x, float c, float w) {
+        const float d = std::fabs(x - c);
+        return d >= w ? 0.f : 0.5f * (1.f + std::cos(3.14159265f * d / w));
+    };
+    // Two short blinks 200 ms apart (peaks at 90 ms and 288 ms), clearly separate.
+    p.flash = std::fmax(bump(t, 0.05f, 0.04f), bump(t, 0.16f, 0.04f));
+    p.ring = 1.f - (1.f - t) * (1.f - t); // fast at first, then settling
+    p.scale = 1.f + (0.5f + 0.25f * p.flash) * (1.f - t);
+    return p;
+}
+
 // Where to draw a pointer to world point `p`: on the point itself while it is on screen, otherwise
 // on the screen's edge in its direction.
 struct EdgeIndicator {

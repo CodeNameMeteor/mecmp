@@ -86,6 +86,27 @@ int main() {
     CHECK(!edgeIndicator(c, ahead, 60, 60, 40, e));
     const float nan3[3] = {std::nanf(""), 0, 0};
     CHECK(!edgeIndicator(c, nan3, W, H, M, e));
+    // The arrival pulse: the rings start at once and only spread, the marker blinks white twice (two
+    // separate peaks), and everything ends at rest.
+    {
+        using mecmp::game::kPulseMs;
+        using mecmp::game::pingPulse;
+        const auto at = [](float frac) { return pingPulse(static_cast<unsigned>(frac * kPulseMs)); };
+        CHECK(near(pingPulse(0).ring, 0.f, 0.001f) && near(pingPulse(0).flash, 0.f, 0.001f));
+        CHECK(pingPulse(kPulseMs).ring == 1.f && pingPulse(kPulseMs).scale == 1.f && pingPulse(kPulseMs).flash == 0.f);
+        CHECK(pingPulse(kPulseMs + 20000).ring == 1.f && pingPulse(4000000000u).scale == 1.f);
+        CHECK(at(0.05f).flash > 0.97f && at(0.16f).flash > 0.97f); // two blinks, ~200 ms apart...
+        CHECK(at(0.105f).flash < 0.05f && at(0.7f).flash == 0.f);  // ...with a gap between and nothing after
+        CHECK(at(0.05f).scale > 1.5f);                              // swollen at a blink
+        float lastRing = -1.f;
+        for (unsigned t = 0; t <= kPulseMs; t += 25) {
+            const auto p = pingPulse(t);
+            CHECK(p.ring >= 0.f && p.ring <= 1.f && p.flash >= 0.f && p.flash <= 1.f);
+            CHECK(p.scale >= 1.f && p.scale <= 1.76f);
+            CHECK(p.ring >= lastRing);
+            lastRing = p.ring;
+        }
+    }
     if (g_failures == 0) std::printf("camera tests: all passed\n");
     return g_failures == 0 ? 0 : 1;
 }

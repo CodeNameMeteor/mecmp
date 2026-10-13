@@ -76,6 +76,8 @@ constexpr const char* kDefaultIni =
     "show_pings=1\r\n"
     "; 1 = show an arrow on the screen's edge towards each player who is off screen\r\n"
     "show_arrows=1\r\n"
+    "; 1 = a marker flashes for a moment when it arrives or moves (0 = no animation)\r\n"
+    "ping_pulse=1\r\n"
     "\r\n"
     "[debug]\r\n"
     "; 1 = detailed diagnostic log (for bug reports)\r\n"
@@ -135,6 +137,7 @@ void load(const std::wstring& dir) {
     s.pingPad = readString(ini, L"ui", L"ping_pad", "");
     s.showPings = readInt(ini, L"ui", L"show_pings", 1) != 0;
     s.showArrows = readInt(ini, L"ui", L"show_arrows", 1) != 0;
+    s.pingPulse = readInt(ini, L"ui", L"ping_pulse", 1) != 0;
     s.pingColor = readString(ini, L"player", L"ping_color", "ffd23c");
     s.verbose = readInt(ini, L"debug", L"verbose", 0) != 0;
     log::verbose = s.verbose;
@@ -206,6 +209,7 @@ void applyPending() {
     put(L"ui", L"ping_pad", snapshot->pingPad);
     put(L"ui", L"show_pings", snapshot->showPings ? "1" : "0");
     put(L"ui", L"show_arrows", snapshot->showArrows ? "1" : "0");
+    put(L"ui", L"ping_pulse", snapshot->pingPulse ? "1" : "0");
     put(L"player", L"ping_color", snapshot->pingColor);
     MLOG("config: saved");
 }

@@ -31,6 +31,7 @@ struct Settings {
     bool showNames = true;                // names above other players' ghosts
     bool showPings = true;                // markers placed by players (experimental)
     bool showArrows = true;               // arrows on the screen's edge to players who are off screen
+    bool pingPulse = true;                // a new marker flashes briefly when it arrives
     std::string pingKey = "G";            // places your marker: a letter, ENTER, or a menu key name; empty = none
     std::string pingPad;                  // gamepad buttons that place it (as menu_pad); empty = none
     // [voice]

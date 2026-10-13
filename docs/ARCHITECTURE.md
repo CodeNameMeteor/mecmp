@@ -137,6 +137,34 @@ style would need those assets loaded: open research. Also open: with the mod loa
 "Your Echo" preview can appear and vanish at once; the ghost spawner's list does not change when it does,
 so it is not the preview and our ghosts competing for that spawner. The cause is not known.
 
+### Your own look, and Faith's outfits
+
+The same call works on the local player (`models::tick`, with `player = null` as for ghosts), so the look
+a player picks can be theirs in their own game too (`[player] look_self`): the echo look, or one of
+changes to Faith's outfit (`[player] outfit` and `outfit_...`: the prologue outfit, the arm tattoo on or
+off, without the MagRope or the tool bag, with the GridLink). The changes go to the others as one more
+byte at the end of HELLO (`wear`, `kWear...` bits; absent = none); their "faith" ghost is built from
+their own player's pieces with the same changes.
+
+- Pieces come from one heap scan per level (`models::findPieces`, mod thread, only once an outfit or an
+  own look needs it): every object with the vtable of the player's own pieces, by asset name. About 120
+  to 140 are loaded in free roam, among them everything the player spawner (`PF_SPSpawn_01`) refers
+  to, which is why the prologue outfit is there.
+- `VisualUnlockAsset::RenderIn1p` (+0xf8) decides the ONE view a piece is drawn in, which is why Faith's
+  body parts come in pairs (`..._1p`). An echo body has no pair, so the player would see no body of their
+  own. It gets a first-person twin: its contents with the flag set, written into one of the game's
+  placeholder pieces (`Unlock_*ErrorTemplate_Fullbody`, three exist, worn by nobody) and worn beside it.
+  A copy in memory of our own did not work: the whole character disappeared, presumably because pieces
+  reach the client through the level's network registry. Leaving the echo look restores the placeholders.
+- The echo look needs the runner ghost shader on the player's own client character
+  (`Fn_LocalClientCharacter`, +0x334), set before the pieces are applied.
+- The pieces the game gave the player are remembered (`g_ownOriginal`): going back to "as in your game"
+  reapplies them, and the others' Faith ghosts are built from them rather than from the changed look.
+  Twice a second the player's pieces are compared with what was applied: a new character (respawn) or a
+  change by the game itself (story progress) becomes the new base and the look is put on again.
+- Bodies made for other skeletons (K-Sec, civilians) can be applied the same way but break on Faith's
+  skeleton (the arms come apart), so they are not offered.
+
 Each player picks their own look (menu *Your look*: Faith, or a ghost style and colour; `[player]
 look=` in mecmp.ini: `faith` or `echo:<hash>`) and sends it with their name. Every ghost shows its
 player's look; there is no override on the receiving side. A newly chosen look is applied on the next tick.

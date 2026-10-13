@@ -63,6 +63,11 @@ constexpr size_t PamCustomizeCharacterData_Size = 0x70;
 // PamClientCharacterEntity keeps its own copy of the data's PamUseRunnersGhostShader (read at
 // creation): set per ghost, so the shared character data is never changed.
 constexpr size_t ClientChar_GhostShader = 0x334;
+// VisualUnlockAsset (a look piece; type size 0x100): after the DataContainer header (vtable, reference
+// data, name) come its own fields; RenderIn1p decides the one view it is drawn in (1 = first person).
+constexpr size_t VisualUnlockAsset_Size = 0x100;
+constexpr size_t DataContainer_Header = 0x18;
+constexpr size_t VisualUnlock_RenderIn1p = 0xf8;
 constexpr uintptr_t Slot_ClientCharacterFactory = 0x141c3cd80;
 // Creator slot of PamServerCustomizeProjectionCharacterEntity (time-trial marker look picker): holds the
 // create thunk 0x143a83490, which calls the factory 0x143a7b5a0.

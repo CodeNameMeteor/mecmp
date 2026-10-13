@@ -287,7 +287,7 @@ bool readInfoAnswer(const char* payload, size_t n, ServerInfo& out) {
     return true;
 }
 
-size_t writeHello(char* buf, const Header& h, const char* name, uint32_t look, uint8_t flags) {
+size_t writeHello(char* buf, const Header& h, const char* name, uint32_t look, uint8_t flags, uint8_t wear) {
     char* p = buf;
     put(p, h);
     const std::string full = name ? name : "";
@@ -297,10 +297,11 @@ size_t writeHello(char* buf, const Header& h, const char* name, uint32_t look, u
     p += kNameLen;
     put(p, look);
     put(p, flags);
+    put(p, wear);
     return static_cast<size_t>(p - buf);
 }
 
-bool readHello(const char* payload, size_t n, std::string& name, uint32_t& look, uint8_t* flags) {
+bool readHello(const char* payload, size_t n, std::string& name, uint32_t& look, uint8_t* flags, uint8_t* wear) {
     if (n == 0) return false;
     const size_t nameBytes = n < kNameLen ? n : kNameLen;
     size_t len = 0;
@@ -309,6 +310,7 @@ bool readHello(const char* payload, size_t n, std::string& name, uint32_t& look,
     look = 0;
     if (n >= kNameLen + sizeof(uint32_t)) memcpy(&look, payload + kNameLen, sizeof(look));
     if (flags) *flags = n >= kNameLen + sizeof(uint32_t) + 1 ? static_cast<uint8_t>(payload[kNameLen + sizeof(uint32_t)]) : 0;
+    if (wear) *wear = n >= kNameLen + sizeof(uint32_t) + 2 ? static_cast<uint8_t>(payload[kNameLen + sizeof(uint32_t) + 1]) : 0;
     return true;
 }
 

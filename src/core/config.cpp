@@ -49,6 +49,15 @@ constexpr const char* kDefaultIni =
     "name=Runner\r\n"
     "; how the other players see you: faith, or a ghost style and color (pick it in the in-game menu)\r\n"
     "look=faith\r\n"
+    "; with look=faith, Faith's outfit: default (as in your game) or prologue; her arm tattoo: default,\r\n"
+    "; on or off; 0 = without the MagRope / the tool bag; 1 = with the GridLink\r\n"
+    "outfit=default\r\n"
+    "outfit_tattoo=default\r\n"
+    "outfit_magrope=1\r\n"
+    "outfit_toolbag=1\r\n"
+    "outfit_gridlink=0\r\n"
+    "; 1 = you look that way to yourself as well (your own body in the game), 0 = only to the others\r\n"
+    "look_self=1\r\n"
     "; color of the markers you place, as the others see them: RRGGBB\r\n"
     "ping_color=ffd23c\r\n"
     "; color of the small diamond inside the diamond marker\r\n"
@@ -237,6 +246,16 @@ void load(const std::wstring& dir) {
     s.name.resize(net::protocol::utf8PrefixLength(s.name, net::protocol::kMaxNameBytes)); // what goes on the wire
     s.autoSpawn = readInt(ini, L"ghost", L"auto_spawn", 1) != 0;
     s.look = readString(ini, L"player", L"look", "faith");
+    {
+        namespace proto = net::protocol;
+        const std::string tattoo = readString(ini, L"player", L"outfit_tattoo", "default");
+        s.outfit = (_stricmp(readString(ini, L"player", L"outfit", "default").c_str(), "prologue") == 0 ? proto::kWearPrologue : 0) |
+                   (_stricmp(tattoo.c_str(), "on") == 0 ? proto::kWearTattoo : _stricmp(tattoo.c_str(), "off") == 0 ? proto::kWearNoTattoo : 0) |
+                   (readInt(ini, L"player", L"outfit_magrope", 1) == 0 ? proto::kWearNoMagRope : 0) |
+                   (readInt(ini, L"player", L"outfit_toolbag", 1) == 0 ? proto::kWearNoToolbag : 0) |
+                   (readInt(ini, L"player", L"outfit_gridlink", 0) != 0 ? proto::kWearGridLink : 0);
+    }
+    s.lookSelf = readInt(ini, L"player", L"look_self", 1) != 0;
     // The [ghost] model setting is gone: each player picks their own look ([player] look=) in the menu.
     const std::string legacyModel = readString(ini, L"ghost", L"model", "");
     if (!legacyModel.empty() && legacyModel != "faith")
@@ -350,6 +369,16 @@ void applyPending() {
     put(L"net", L"servers", snapshot->servers);
     put(L"net", L"auto_start", snapshot->autoStart ? "1" : "0");
     put(L"player", L"look", snapshot->look);
+    {
+        namespace proto = net::protocol;
+        const int o = snapshot->outfit;
+        put(L"player", L"outfit", o & proto::kWearPrologue ? "prologue" : "default");
+        put(L"player", L"outfit_tattoo", o & proto::kWearTattoo ? "on" : o & proto::kWearNoTattoo ? "off" : "default");
+        put(L"player", L"outfit_magrope", o & proto::kWearNoMagRope ? "0" : "1");
+        put(L"player", L"outfit_toolbag", o & proto::kWearNoToolbag ? "0" : "1");
+        put(L"player", L"outfit_gridlink", o & proto::kWearGridLink ? "1" : "0");
+    }
+    put(L"player", L"look_self", snapshot->lookSelf ? "1" : "0");
     put(L"ui", L"menu_key", snapshot->menuKey);
     put(L"ui", L"menu_pad", snapshot->menuPad);
     put(L"ui", L"show_names", snapshot->showNames ? "1" : "0");

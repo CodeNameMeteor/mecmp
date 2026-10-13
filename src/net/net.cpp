@@ -59,6 +59,7 @@ struct Remote {
     sockaddr_in addr{};
     std::string name;
     uint32_t look = 0;
+    uint8_t outfit = 0;
     bool loopback = false;
     uint32_t lastSeq = 0;
     bool haveSeq = false;
@@ -107,6 +108,7 @@ bool g_haveLocal = false;
 DWORD g_localAt = 0; // when g_local was published
 std::string g_name;
 std::atomic<uint32_t> g_look{0};
+std::atomic<uint8_t> g_outfit{0};
 
 std::atomic<bool> g_run{false};
 std::thread g_thread;
@@ -249,7 +251,7 @@ void sendHello() {
         name = g_name;
     }
     sendAll(buf, proto::writeHello(buf, header(proto::kTypeHello), name.c_str(), g_look.load(),
-                                   g_role == Role::Host ? proto::kHelloHost : 0));
+                                   g_role == Role::Host ? proto::kHelloHost : 0, g_outfit.load()));
 }
 
 // Player names are shown in the menu and written to the log: keep bytes that can be shown, drop control
@@ -487,7 +489,8 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
         std::string raw;
         uint32_t look = 0;
         uint8_t flags = 0;
-        proto::readHello(payload, len, raw, look, &flags);
+        uint8_t wear = 0;
+        proto::readHello(payload, len, raw, look, &flags, &wear);
         // Accepted only straight from the host (forwarded copies come from the host's address too, but have the flag cleared).
         if ((flags & proto::kHelloHost) && !own && g_role == Role::Join && sameAddr(from, g_hostAddr)) {
             g_hostSession = h.session;
@@ -500,9 +503,11 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
                 return;
             }
         }
-        if (look != r.look) {
+        const uint8_t outfit = look ? 0 : wear;
+        if (look != r.look || outfit != r.outfit) {
             r.look = look;
-            if (peerLogAllowed()) MLOG("net: player %08x looks like %s", r.id, look ? "a ghost look" : "Faith");
+            r.outfit = outfit;
+            if (peerLogAllowed()) MLOG("net: player %08x looks like %s (outfit %u)", r.id, look ? "a ghost look" : "Faith", outfit);
         }
         const std::string name = cleanName(raw.data(), raw.size());
         if (r.name != name) {
@@ -1009,7 +1014,7 @@ std::vector<RemoteInfo> remotes(uint32_t maxAgeMs) {
     for (const auto& kv : g_remotes) {
         const Remote& r = kv.second;
         if (!r.fill || now - r.lastTick > maxAgeMs) continue;
-        v.push_back({r.id, r.name, r.loopback, now - r.lastTick, r.loss.percent(nowMs()), r.look});
+        v.push_back({r.id, r.name, r.loopback, now - r.lastTick, r.loss.percent(nowMs()), r.look, r.outfit});
     }
     return v;
 }
@@ -1058,7 +1063,10 @@ std::string lanCode() {
     std::lock_guard<std::mutex> lock(g_m);
     return g_lanCode;
 }
-void setLook(uint32_t look) { g_look = look; }
+void setLook(uint32_t look, uint8_t outfit) {
+    g_look = look;
+    g_outfit = look ? 0 : outfit;
+}
 
 void setName(const std::string& name) {
     std::lock_guard<std::mutex> lock(g_m);

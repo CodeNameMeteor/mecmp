@@ -12,6 +12,7 @@
 //   is world space and is clamped; receivers place it at pos instead.
 // type 2 HELLO (about once a second): char name[24] (UTF-8, at most 23 bytes, NUL padded)
 //   | u32 look (0 = Faith, else the game's echo CustomizationHash; absent from older versions = 0)
+//   | u8 flags (kHelloHost, kHelloServer) | u8 wear (Faith's outfit changes, kWear...; absent = 0)
 // type 3 CHAT and type 4 PING: see below.
 
 #include <cstddef>
@@ -260,10 +261,21 @@ bool readInfoAnswer(const char* payload, size_t n, ServerInfo& out);
 // name or the look; missing fields read as 0.
 constexpr uint8_t kHelloHost = 1;
 constexpr uint8_t kHelloServer = 2;
+// `wear`: what a player whose look is 0 (Faith) changed about her outfit; 0 = nothing, each viewer
+// shows her as in their own game. The bits are game::models::Wear. Hosts and servers pass the byte on
+// with the rest of the packet; older versions do not send it and ignore it.
+constexpr uint8_t kWearPrologue = 1;   // the prologue outfit instead of the runner's (the gear stays on)
+constexpr uint8_t kWearTattoo = 2;     // the arm tattoo, whatever the story says
+constexpr uint8_t kWearNoTattoo = 4;   // no arm tattoo (kWearTattoo wins if both are set)
+constexpr uint8_t kWearNoMagRope = 8;  // without the MagRope and its upgrades
+constexpr uint8_t kWearNoToolbag = 16; // without the tool bag
+constexpr uint8_t kWearGridLink = 32;  // with the GridLink
 constexpr size_t kHelloFlagsOffset = kNameLen + sizeof(uint32_t); // payload offset of the flags byte (after name and look)
-size_t writeHello(char* buf, const Header& h, const char* name, uint32_t look = 0, uint8_t flags = 0);
-// HELLO payload (after the header). `name` = the raw field (cleaned by the caller); `look` = 0 if absent.
-bool readHello(const char* payload, size_t n, std::string& name, uint32_t& look, uint8_t* flags = nullptr);
+size_t writeHello(char* buf, const Header& h, const char* name, uint32_t look = 0, uint8_t flags = 0, uint8_t wear = 0);
+// HELLO payload (after the header). `name` = the raw field (cleaned by the caller); `look`, `flags` and
+// `wear` = 0 if absent.
+bool readHello(const char* payload, size_t n, std::string& name, uint32_t& look, uint8_t* flags = nullptr,
+               uint8_t* wear = nullptr);
 // Decodes a STATE payload (after the header). `full` tells whether to commit it as the new base.
 bool readState(const char* payload, size_t n, const Decoder& dec, PlayerState& out, bool& full);
 void commitBase(Decoder& dec, const PlayerState& s);

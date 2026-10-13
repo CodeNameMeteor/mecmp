@@ -57,6 +57,7 @@ struct Ghost {
     float lastPos[3] = {0, 0, 0}; // where it was last driven
     std::string lookKey;          // look applied now ("faith", "echo:<hash>" or a model name); empty = redo
     DWORD lookTriedAt = 0;
+    std::string lookWanted;       // the look last asked for; a new choice is tried at once
     DWORD parkUntil = 0;          // while hidden: keep it parked below lastPos until then
 };
 
@@ -320,8 +321,9 @@ bool applyLook(void* ch, const std::string& key, std::string* used = nullptr) {
     return applyGhostModel(ch, key, used);
 }
 
-// How long to wait before trying a look again: an echo the catalogue does not have is retried rarely
-// (each attempt rebuilds the ghost's mesh), other looks sooner.
+// How long to wait before trying a look that failed again: an echo the catalogue does not have is
+// retried rarely (each attempt rebuilds the ghost's mesh), other looks sooner. A newly chosen look and a
+// look list that just arrived (retryLooksNow) are tried at once.
 DWORD lookRetryMs(const std::string& key) { return key.rfind("echo:", 0) == 0 ? 15000 : 2000; }
 
 void* spawnGhost(uint32_t peer, const std::string& name, uint32_t look, const net::PlayerState& st) {
@@ -382,7 +384,11 @@ void* spawnGhost(uint32_t peer, const std::string& name, uint32_t look, const ne
     {
         std::lock_guard<std::mutex> lock(g_m);
         for (auto& g : g_ghosts)
-            if (g.character == ch) { g.lookKey = done ? key : std::string(); g.lookTriedAt = GetTickCount(); }
+            if (g.character == ch) {
+                g.lookKey = done ? key : std::string();
+                g.lookWanted = key;
+                g.lookTriedAt = GetTickCount();
+            }
     }
     if (used.empty()) MLOG("ghost: no look could be applied (the ghost may be invisible)");
     MLOG("ghost: spawned for player %08x as '%s'", peer, used.c_str());
@@ -393,6 +399,12 @@ void* spawnGhost(uint32_t peer, const std::string& name, uint32_t look, const ne
 void redoLooks() {
     std::lock_guard<std::mutex> lock(g_m);
     for (auto& g : g_ghosts) { g.lookKey.clear(); g.lookTriedAt = 0; }
+}
+
+// The look list just arrived: looks waiting for it are tried on the next ticks, not after the retry wait.
+void retryLooksNow() {
+    std::lock_guard<std::mutex> lock(g_m);
+    for (auto& g : g_ghosts) g.lookWanted.clear();
 }
 
 void handleRequests() {
@@ -516,6 +528,7 @@ bool reuseFreeGhost(const Present& p, const std::vector<Present>& present) {
     pick->posingSince = 0;
     pick->lookKey.clear(); // the new player's own look
     pick->lookTriedAt = 0;
+    pick->lookWanted.clear();
     pick->visibleCalls = 0;
     pick->hidden = true;               // the tick shows it again on its next pass
     pick->clientCharAt = GetTickCount();
@@ -646,9 +659,11 @@ void tick(uint64_t tick, uint64_t ticksInLevel) {
                 if (p.id == g.peer) look = p.look;
             const std::string want = desiredLook(look);
             const DWORD nowTick = GetTickCount();
-            if (want != g.lookKey && nowTick - g.lookTriedAt > lookRetryMs(want) && nowTick != lastLookApply) {
+            const bool due = want != g.lookWanted || nowTick - g.lookTriedAt > lookRetryMs(want);
+            if (want != g.lookKey && due && nowTick != lastLookApply) {
                 lastLookApply = nowTick;
                 g.lookTriedAt = nowTick;
+                g.lookWanted = want;
                 std::string used;
                 if (applyLook(g.character, want, &used)) {
                     g.lookKey = want;
@@ -676,7 +691,11 @@ void tick(uint64_t tick, uint64_t ticksInLevel) {
         if (live && live->peer == g.peer) {
             live->posing = g.posing;
             live->posingSince = g.posingSince;
-            if (lookChanged) { live->lookKey = g.lookKey; live->lookTriedAt = g.lookTriedAt; }
+            if (lookChanged) {
+                live->lookKey = g.lookKey;
+                live->lookTriedAt = g.lookTriedAt;
+                live->lookWanted = g.lookWanted;
+            }
             memcpy(live->lastPos, g.lastPos, sizeof(live->lastPos));
             if (visibilityChanged) { live->hidden = g.hidden; live->visibleCalls = g.visibleCalls; live->parkUntil = g.parkUntil; }
             else if (have) live->parkUntil = 0;
@@ -694,6 +713,7 @@ void levelChanged() {
 }
 
 void requestSpawnOrRefresh() { g_reqSpawn = true; }
+void lookListArrived() { retryLooksNow(); }
 void requestHideAll() { g_reqHide = true; }
 
 

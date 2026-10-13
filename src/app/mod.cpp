@@ -103,7 +103,6 @@ void monitorLoop() {
     DWORD levelSince = GetTickCount(), nextScanAt = 15000;
     int scans = 0;
     int echoTries = 0;
-    DWORD nextEchoAt = 20000;
 #if MECMP_DEBUG_KEYS
     // Developer hotkeys (not in release builds; see CMakeLists.txt).
     struct Key { int vk; bool down; void (*action)(); };
@@ -131,14 +130,20 @@ void monitorLoop() {
             nextScanAt = 15000;
             scans = 0;
             echoTries = 0;
-            nextEchoAt = 20000;
         }
         // The ghost look list (styles x colours) comes from the level's time-trial markers: look for it
-        // 20 s into a level, and again after 1 and 3 minutes if there was none yet.
-        if (world && echoTries < 3 && GetTickCount() - levelSince > nextEchoAt && game::models::echoes()->empty()) {
+        // 5, 10, 20 and 40 s into a level, then after 2 and 4 minutes if there was none yet (a scan that
+        // finds nothing reads the whole heap, so not more often). Ghosts waiting for it get their look
+        // right after.
+        static constexpr DWORD kEchoAt[] = {5000, 10000, 20000, 40000, 120000, 240000};
+        constexpr int kEchoTries = static_cast<int>(sizeof(kEchoAt) / sizeof(kEchoAt[0]));
+        if (world && echoTries < kEchoTries && GetTickCount() - levelSince > kEchoAt[echoTries] &&
+            game::models::echoes()->empty()) {
             ++echoTries;
-            if (game::models::findEchoes()) fixMyLook();
-            nextEchoAt = 20000 + 60000u * ((1u << echoTries) - 1);
+            if (game::models::findEchoes()) {
+                fixMyLook();
+                game::ghosts::lookListArrived();
+            }
         }
         // Loaded after the level was created (or the game re-used spawners we never saw being
         // made)? Look for them in memory: 15 s into the level, and if something is still missing

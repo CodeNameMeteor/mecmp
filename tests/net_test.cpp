@@ -54,7 +54,7 @@ static void testHelloName() {
     protocol::Header h{protocol::kMagic, protocol::kProtocol, protocol::kTypeHello, 7, 1};
     const std::string name = std::string(22, 'x') + "\xC3\xA9"; // 24 bytes: only 23 fit on the wire
     const size_t n = protocol::writeHello(buf, h, name.c_str());
-    CHECK(n == sizeof(protocol::Header) + protocol::kNameLen + sizeof(uint32_t) + 1); // name + look + flags
+    CHECK(n == sizeof(protocol::Header) + protocol::kNameLen + sizeof(uint32_t) + 2); // name + look + flags + wear
     const char* field = buf + sizeof(protocol::Header);
     CHECK(std::strlen(field) == 22); // the é is dropped whole, not cut in half
 }
@@ -195,7 +195,15 @@ static void testHelloLook() {
     uint8_t flags = 9;
     const size_t nh = protocol::writeHello(buf, h, "Host", 5, protocol::kHelloHost);
     CHECK(protocol::readHello(buf + sizeof(h), nh - sizeof(h), name, look, &flags) && flags == protocol::kHelloHost);
-    CHECK(protocol::readHello(buf + sizeof(h), nh - sizeof(h) - 1, name, look, &flags) && flags == 0); // older sender
+    CHECK(protocol::readHello(buf + sizeof(h), nh - sizeof(h) - 2, name, look, &flags) && flags == 0); // older sender
+    // Faith's outfit changes follow the flags; a sender without them (the line above) reads as none.
+    uint8_t wear = 9;
+    CHECK(protocol::readHello(buf + sizeof(h), nh - sizeof(h) - 1, name, look, &flags, &wear) && wear == 0);
+    const uint8_t worn = protocol::kWearPrologue | protocol::kWearGridLink;
+    const size_t no = protocol::writeHello(buf, h, "Host", 0, protocol::kHelloHost, worn);
+    CHECK(no == nh && protocol::readHello(buf + sizeof(h), no - sizeof(h), name, look, &flags, &wear) &&
+          flags == protocol::kHelloHost && wear == worn);
+    CHECK(protocol::readHello(buf + sizeof(h), no - sizeof(h) - 1, name, look, &flags, &wear) && flags == protocol::kHelloHost && wear == 0);
     protocol::writeHello(buf, h, "Meteor", 0x1234abcdu);
     // An older version's HELLO (name only): look 0 = Faith.
     CHECK(protocol::readHello(buf + sizeof(h), protocol::kNameLen, name, look) && look == 0 && name == "Meteor");

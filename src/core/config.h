@@ -52,6 +52,8 @@ struct Settings {
     // [player]
     std::string name = "Runner";
     std::string look = "faith";           // how you look to others: faith, or echo:<hash> (a ghost style + colour)
+    int outfit = 0;                       // with look = faith: what is changed about her outfit (net::protocol::kWear... bits)
+    bool lookSelf = true;                 // you look that way to yourself too, not only to the others
     std::string pingColor = "ffd23c";     // colour of your markers for everyone, RRGGBB
     std::string pingAccent = "ffffff";    // colour of the detail inside a marker (the diamond's inner diamond)
     std::array<Wheel, kWheels> wheels = defaultWheels();

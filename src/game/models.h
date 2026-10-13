@@ -38,7 +38,19 @@ bool applyEcho(void* ghost, uint32_t hash); // game thread
 uint32_t defaultEcho();
 bool echoRenders(uint32_t hash); // catalogue contains this look
 
-// Applies a model to a ghost (game thread). `wanted` = "faith" or part of a model name.
+// Applies a model to a ghost (game thread). `wanted` = "faith", "faith:<n>" (Faith with the outfit
+// changes n, net::protocol::kWear... bits: other pieces of hers that are loaded in free roam) or part
+// of a model name. False for an outfit whose pieces are not known yet: try again later.
 bool apply(void* ghost, const std::string& wanted, std::string* usedName = nullptr);
+
+// The LOCAL player's own look: with `enabled`, the player character is given the echo look `echoHash`
+// (0 = Faith with the outfit changes `outfit`), first-person pieces included, and it is put back after
+// a respawn or when the game changes the look itself. Off, or Faith with nothing changed: the game's
+// own look.
+void setOwnLook(uint32_t echoHash, uint8_t outfit, bool enabled); // any thread
+void tick();                                                       // server game thread, every tick
+// Mod thread: lists the look pieces loaded in this level once an outfit or the own look needs them
+// (reads the game's whole heap, a second or two). True if the list is known or nobody needs it.
+bool findPieces();
 
 } // namespace mecmp::game::models

@@ -51,6 +51,7 @@ void onTick(void* world, float dt) {
     game::ghosts::tick(n, n - g_levelStartTick);
     game::teleport::tick();
     game::ping::tick();
+    game::models::tick();
 }
 
 // Waits until the engine has built its type list, then checks that this is the game build the
@@ -94,7 +95,9 @@ void fixMyLook() {
     if (config::lookHash(config::get()->look) != 0xffffffffu) return;
     const uint32_t h = game::models::defaultEcho();
     if (!h) return;
-    net::setLook(h);
+    const auto cfg = config::get();
+    net::setLook(h, static_cast<uint8_t>(cfg->outfit));
+    game::models::setOwnLook(h, static_cast<uint8_t>(cfg->outfit), cfg->lookSelf);
     const std::string look = config::lookName(h);
     config::change([look](config::Settings& c) { c.look = look; });
 }
@@ -167,6 +170,8 @@ void monitorLoop() {
             if (scans == kMaxScansPerLevel && !game::level::complete())
                 MLOG("level: still missing spawners after %d scans; not scanning this level again", scans);
         }
+        // The list of loaded look pieces, once an outfit or your own look needs it (one scan per level).
+        if (world) game::models::findPieces();
         config::applyPending(); // menu and game changes, in order (and mecmp.ini)
         ui::gamepad::maintain();  // once the game has loaded XInput
 #if MECMP_DEBUG_KEYS
@@ -217,7 +222,8 @@ void run(HMODULE self) {
     });
     ui::install();
     const auto cfg = config::get();
-    net::setLook(config::lookHash(cfg->look));
+    net::setLook(config::lookHash(cfg->look), static_cast<uint8_t>(cfg->outfit));
+    game::models::setOwnLook(config::lookHash(cfg->look), static_cast<uint8_t>(cfg->outfit), cfg->lookSelf);
     const bool startNow = cfg->netEnabled && cfg->autoStart;
     if (!cfg->netEnabled) MLOG("net: disabled in mecmp.ini");
     else if (!cfg->autoStart) MLOG("net: offline until you host or join in the menu ([net] auto_start=1 starts at launch)");

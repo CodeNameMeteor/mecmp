@@ -280,10 +280,73 @@ ImVec4 swatch(const std::string& colour) {
     return ImVec4(0.6f, 0.6f, 0.65f, 1);
 }
 
+// The look goes to the other players and, if asked for, onto the player's own character.
+void publishMyLook(uint32_t hash, int outfit, bool self) {
+    net::setLook(hash, static_cast<uint8_t>(outfit));
+    game::models::setOwnLook(hash, static_cast<uint8_t>(outfit), self);
+}
+
 void setMyLook(uint32_t hash) {
-    net::setLook(hash);
+    const auto cfg = config::get();
+    publishMyLook(hash, cfg->outfit, cfg->lookSelf);
     const std::string look = config::lookName(hash);
     config::change([look](config::Settings& c) { c.look = look; });
+}
+
+// Under "Your look": Faith's outfit, and whether the look is yours in your own game as well.
+void myLookRows(const config::Settings& cfg, uint32_t mine) {
+    namespace wear = net::protocol;
+    const int worn = cfg.outfit;
+    if (!mine) { // Faith's outfit; a ghost has none
+        const bool self = cfg.lookSelf;
+        auto set = [self](int now) {
+            publishMyLook(0, now, self);
+            config::change([now](config::Settings& c) { c.outfit = now; });
+        };
+        {
+            const bool prologue = (worn & wear::kWearPrologue) != 0;
+            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 9);
+            if (ImGui::BeginCombo("Outfit", prologue ? "Prologue" : "As in your game")) {
+                // The prologue outfit as the game shows it: with the GridLink, without the MagRope and the
+                // tool bag. Each can be changed below.
+                const int kit = wear::kWearGridLink | wear::kWearNoMagRope | wear::kWearNoToolbag;
+                if (ImGui::Selectable("As in your game", !prologue)) set(worn & ~(wear::kWearPrologue | kit));
+                if (ImGui::Selectable("Prologue", prologue)) set(worn | wear::kWearPrologue | kit);
+                ImGui::EndCombo();
+            }
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("\"As in your game\": each player sees you in the outfit of their own story progress.");
+            if (!prologue) { // the prologue outfit has sleeves
+                const int tattoo = worn & wear::kWearTattoo ? 1 : worn & wear::kWearNoTattoo ? 2 : 0;
+                static const char* const kTattoo[] = {"As in your game", "Tattoo", "No tattoo"};
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(ImGui::GetFontSize() * 9);
+                if (ImGui::BeginCombo("Arms", kTattoo[tattoo])) {
+                    for (int i = 0; i < 3; ++i)
+                        if (ImGui::Selectable(kTattoo[i], i == tattoo))
+                            set((worn & ~(wear::kWearTattoo | wear::kWearNoTattoo)) | (i == 1 ? wear::kWearTattoo : i == 2 ? wear::kWearNoTattoo : 0));
+                    ImGui::EndCombo();
+                }
+            }
+        }
+        bool magRope = !(worn & wear::kWearNoMagRope), toolbag = !(worn & wear::kWearNoToolbag);
+        if (ImGui::Checkbox("MagRope", &magRope)) set(magRope ? worn & ~wear::kWearNoMagRope : worn | wear::kWearNoMagRope);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Off: without the MagRope on your arm (you can still use it).\nOn: the one you have in your game, if you have it yet.");
+        ImGui::SameLine();
+        if (ImGui::Checkbox("Tool bag", &toolbag)) set(toolbag ? worn & ~wear::kWearNoToolbag : worn | wear::kWearNoToolbag);
+        ImGui::SameLine();
+        bool gridLink = (worn & wear::kWearGridLink) != 0;
+        if (ImGui::Checkbox("GridLink", &gridLink)) set(gridLink ? worn | wear::kWearGridLink : worn & ~wear::kWearGridLink);
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("On: with the GridLink on your hand, even where your story has none");
+    }
+    bool self = cfg.lookSelf;
+    if (ImGui::Checkbox("Look like this in my own game too", &self)) {
+        publishMyLook(mine, cfg.outfit, self);
+        config::change([self](config::Settings& c) { c.lookSelf = self; });
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("On: your own body (arms, legs, shadow) changes as well.\nOff: only the other players see the look.");
 }
 
 void myLookSection() {
@@ -300,6 +363,7 @@ void myLookSection() {
         else if (!mine) setMyLook(0xffffffffu); // chosen before the list is known: pick once it is
     }
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("How the other players see you");
+    myLookRows(*cfg, mine);
     if (!mine) return;
     if (echoes.empty()) {
         ImGui::TextDisabled("The ghost styles load in free roam.");

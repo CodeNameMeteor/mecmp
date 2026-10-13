@@ -289,7 +289,7 @@ bool applyGhostModel(void* character, const std::string& key, std::string* used)
     {
         std::lock_guard<std::mutex> lock(g_m);
         for (auto& ghost : g_ghosts) if (ghost.character == character) {
-            setGhostShader(ghost, key.rfind("echo:", 0) == 0 || applied != "faith");
+            setGhostShader(ghost, key.rfind("echo:", 0) == 0 || applied.rfind("faith", 0) != 0);
             break;
         }
     }
@@ -298,7 +298,10 @@ bool applyGhostModel(void* character, const std::string& key, std::string* used)
 }
 
 // The look a player's ghost should have: the one they chose (sent in HELLO).
-std::string desiredLook(uint32_t playerLook) { return config::lookName(playerLook); }
+std::string desiredLook(uint32_t playerLook, uint8_t outfit) {
+    if (playerLook || !outfit) return config::lookName(playerLook);
+    return "faith:" + std::to_string(outfit); // the outfit changes (net::protocol::kWear... bits)
+}
 
 // Applies a look key to a ghost. False when it could not be applied, and then the ghost keeps the look
 // it has: a look that is not known yet (an echo the catalogue has not loaded) is simply tried again
@@ -327,7 +330,7 @@ bool applyLook(void* ch, const std::string& key, std::string* used = nullptr) {
 // look list that just arrived (retryLooksNow) are tried at once.
 DWORD lookRetryMs(const std::string& key) { return key.rfind("echo:", 0) == 0 ? 15000 : 2000; }
 
-void* spawnGhost(uint32_t peer, const std::string& name, uint32_t look, const net::PlayerState& st) {
+void* spawnGhost(uint32_t peer, const std::string& name, uint32_t look, uint8_t outfit, const net::PlayerState& st) {
     void* spawner = level::ghostSpawner();
     if (!level::spawnerAlive(spawner)) return nullptr;
     const uintptr_t sd = mem::readOr<uintptr_t>(reinterpret_cast<uintptr_t>(spawner) + Spawner_Data);
@@ -379,9 +382,11 @@ void* spawnGhost(uint32_t peer, const std::string& name, uint32_t look, const ne
     }
     setTransform(ch, info.transform);
     std::string used;
-    const std::string key = desiredLook(look);
+    const std::string key = desiredLook(look, outfit);
     const bool done = applyLook(ch, key, &used);
-    if (!done) applyGhostModel(ch, "RunVis", &used); // visible at least; the wanted look is retried later
+    // Visible at least; the wanted look is retried later. An outfit whose pieces are not known yet is
+    // plain Faith meanwhile.
+    if (!done && !(key.rfind("faith:", 0) == 0 && applyGhostModel(ch, "faith", &used))) applyGhostModel(ch, "RunVis", &used);
     {
         std::lock_guard<std::mutex> lock(g_m);
         for (auto& g : g_ghosts)
@@ -534,7 +539,7 @@ void setEnabled(bool enabled) { g_enabled = enabled; }
 
 namespace {
 // A remote player that is present now (packets newer than kHideAfterMs).
-struct Present { uint32_t id; std::string name; uint32_t ageMs; uint32_t look; };
+struct Present { uint32_t id; std::string name; uint32_t ageMs; uint32_t look; uint8_t outfit; };
 
 bool isPresent(const std::vector<Present>& present, uint32_t id) {
     for (const auto& p : present)
@@ -595,7 +600,7 @@ void tick(uint64_t tick, uint64_t ticksInLevel) {
     handleRequests();
     std::vector<Present> players; // present now
     for (const auto& r : net::remotes(kHideAfterMs))
-        if (r.ageMs < kHideAfterMs) players.push_back({r.id, r.name, r.ageMs, r.look});
+        if (r.ageMs < kHideAfterMs) players.push_back({r.id, r.name, r.ageMs, r.look, r.outfit});
 
     // Forget ghosts the game destroyed. The city-ghost spawner sometimes takes a ghost back (to put
     // its own city ghost there); the ghost entity lives on and keeps working, so keep driving it.
@@ -650,7 +655,7 @@ void tick(uint64_t tick, uint64_t ticksInLevel) {
             uint32_t age = 0;
             if (!net::remoteState(p.id, st, age)) continue;
             g_lastSpawnAt = GetTickCount();
-            spawnGhost(p.id, p.name, p.look, st);
+            spawnGhost(p.id, p.name, p.look, p.outfit, st);
         }
     }
 
@@ -699,9 +704,10 @@ void tick(uint64_t tick, uint64_t ticksInLevel) {
         static DWORD lastLookApply = 0;
         if (present) {
             uint32_t look = 0;
+            uint8_t outfit = 0;
             for (const auto& p : players)
-                if (p.id == g.peer) look = p.look;
-            const std::string want = desiredLook(look);
+                if (p.id == g.peer) { look = p.look; outfit = p.outfit; }
+            const std::string want = desiredLook(look, outfit);
             const DWORD nowTick = GetTickCount();
             const bool due = want != g.lookWanted || nowTick - g.lookTriedAt > lookRetryMs(want);
             if (want != g.lookKey && due && nowTick != lastLookApply) {

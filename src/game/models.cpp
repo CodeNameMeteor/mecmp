@@ -70,10 +70,13 @@ void visualsOf(uintptr_t ccd, std::vector<uintptr_t>& out) {
 uintptr_t makeCustomization(const std::vector<uintptr_t>& visuals, uintptr_t vtable, uintptr_t unlockArray, uintptr_t preset) {
     if (!vtable) return 0; // never hand the game a data object without a vtable
     auto block = [](size_t n) { return static_cast<uint8_t*>(calloc(1, n)); };
-    uint8_t* ccd = block(0x70);
+    uint8_t* ccd = block(PamCustomizeCharacterData_Size);
     if (!ccd) return 0;
     // Pam presets carry material and animation parameters beyond the base customization.
-    if (preset && vtable == rva(0x141c883e0) && !mem::read(preset, ccd, 0x70)) { free(ccd); return 0; }
+    if (preset && vtable == rva(Vtbl_PamCustomizeCharacterData) && !mem::read(preset, ccd, PamCustomizeCharacterData_Size)) {
+        free(ccd);
+        return 0;
+    }
     uint8_t* groups = block(8 + visuals.size() * 8);
     uint8_t* unlocks = block(16);
     if (!ccd || !groups || !unlocks) return 0;

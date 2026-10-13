@@ -16,7 +16,12 @@ namespace mecmp::game {
 using mem::rva;
 
 // --- Globals -------------------------------------------------------------------------------------
-constexpr uintptr_t Fn_UIPauseConsumer = 0x143b16ae0; // (const UIPauseController*, Client*)
+// Game menus pause the simulation through PamUISystem's per-frame update (vtable slot below,
+// PamUISystem::vf40 0x143b16c50), whose only call to UIPauseController_applyToClient (0x143b16ae0)
+// passes the controller at UISystem+0x8c8; its pause requests are the ints at +0x08 / +0x0c.
+constexpr uintptr_t Slot_PamUISystemUpdate = 0x141cb64f0;
+constexpr uintptr_t Fn_PamUISystemUpdate = 0x143b16c50;
+constexpr size_t UISystem_PauseController = 0x8c8;
 constexpr uintptr_t kTypeInfoListHead = 0x14215d028;
 constexpr uintptr_t kServerGameWorld = 0x1425469e0; // ServerGameWorld* (null between levels)
 // Camera: ClientCameraViewManagers list (ClientCameraViewManagers_postSimUpdateAll, ..._postSimUpdate)
@@ -51,6 +56,13 @@ constexpr uintptr_t Fn_ClientReplayPlayerFactory = 0x143949050;
 constexpr uintptr_t Vtbl_ClientReplayUpdater = 0x141c49190;
 constexpr size_t Vtbl_ClientReplayUpdateAll = 0x10;
 constexpr uintptr_t Fn_ClientReplayUpdateAll = 0x14394da40;
+// PamCustomizeCharacterData's vtable: a real preset of this class is copied whole (0x70 bytes: its
+// material and animation fields too) before our pieces go in.
+constexpr uintptr_t Vtbl_PamCustomizeCharacterData = 0x141c883e0;
+constexpr size_t PamCustomizeCharacterData_Size = 0x70;
+// PamClientCharacterEntity keeps its own copy of the data's PamUseRunnersGhostShader (read at
+// creation): set per ghost, so the shared character data is never changed.
+constexpr size_t ClientChar_GhostShader = 0x334;
 constexpr uintptr_t Slot_ClientCharacterFactory = 0x141c3cd80;
 constexpr uintptr_t Fn_ClientCharacterFactory = 0x143910d20;
 constexpr uintptr_t Slot_ServerWorldPostUpdate = 0x141b42d28; // ServerGameWorld vtable +0x28

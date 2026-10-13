@@ -274,9 +274,9 @@ void setGhostShader(Ghost& ghost, bool enabled) {
     uint8_t current = 0;
     if (!client || mem::readOr<uintptr_t>(client) != rva(Vtbl_PamClientCharacterEntity) ||
         mem::readOr<uintptr_t>(client + Character_Data) != g_ghostCharData.load() ||
-        !mem::read(client + 0x334, current) || current == static_cast<uint8_t>(enabled)) return;
+        !mem::read(client + ClientChar_GhostShader, current) || current == static_cast<uint8_t>(enabled)) return;
     // Character creation caches the definition's shader flag in each client entity.
-    poke<uint8_t>(client + 0x334, enabled ? 1 : 0);
+    poke<uint8_t>(client + ClientChar_GhostShader, enabled ? 1 : 0);
 }
 bool applyGhostModel(void* character, const std::string& key, std::string* used) {
     std::string applied;

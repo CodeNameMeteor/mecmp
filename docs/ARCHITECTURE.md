@@ -35,6 +35,7 @@ worlds in one process; the mod uses both.
 | Client replay player factory | claim our ghosts' client components; others give the reference bone setup |
 | Client character factory | claim our ghosts' client characters (to make them visible) |
 | `ServerGameWorld::postUpdate` | the per-tick update |
+| `PamUISystem` update (vtable slot `0x141cb64f0`, `0x143b16c50`) | in a session, menus do not pause the game (below) |
 
 ## Local player (`game/local_player.cpp`)
 
@@ -102,18 +103,21 @@ per piece, the source's unlocks, ClearVisualState = 1) and applies it with `char
   An echo look's colour is an unlock (an ObjectVariation on the projection shader), so the unlocks are
   carried over. The hash is the game's own id for the look.
 - **Models**: any CustomizeCharacterData from a spawner template in the level (Faith variants, RunVis).
-- `PamUseRunnersGhostShader` (character data +0xe8) is turned off while a normal look is built
-  (with the ghost shader on, normal meshes are invisible) and back on 3 s later, because the game's own
-  time-trial ghosts share that data. Echo looks keep it on.
+- An echo look is applied from a full copy of its `PamCustomizeCharacterData` preset (vtable
+  `0x141c883e0`, 0x70 bytes), not just its pieces, so the projection mesh and its colour variation come
+  along.
+- The ghost shader is set per ghost on its client character (`PamClientCharacterEntity` +0x334): on for
+  echo looks, off for Faith and models (with it on, normal meshes are invisible). The shared character
+  data flag (+0xe8, `PamUseRunnersGhostShader`) is no longer touched, so the game's own time-trial
+  ghosts are unaffected.
 - Built customizations are cached per (pieces, unlocks) and the cache and the echo list are emptied on
   level change (level data).
 
-**Only RunVis renders in free roam.** Every other style's piece is a `MeshAndVariationPair`: a separate
-projection body mesh (`female_runner_projection_01_fullbody`) plus an ObjectVariation that swaps in
-`FX_SS_Projection_<Style>` with MainColor/SecondaryColor. Applied in free roam the ghost shows nothing
-(every style tested, ghost shader on and off): those assets are not loaded there. The menu therefore
-offers Faith and the RunVis ghost; a received style that cannot render shows as RunVis
-(`models::echoRenders`). Loading them is open research.
+Every style other than RunVis is a `MeshAndVariationPair`: a separate projection body mesh
+(`female_runner_projection_01_fullbody`) plus an ObjectVariation that swaps in
+`FX_SS_Projection_<Style>` with MainColor/SecondaryColor. Built from pieces alone these showed nothing
+in free roam; with the full preset copy and the per-ghost shader the menu offers every catalogued style
+again (`models::echoRenders`: the look is in the catalogue).
 
 Each player picks their own look (menu *Your look*: Faith, or a ghost style and colour; `[player]
 look=` in mecmp.ini: `faith` or `echo:<hash>`) and sends it with their name. Every ghost shows its
@@ -131,10 +135,20 @@ CHAT packets (type 3: u32 message id, u8 length, UTF-8 text of at most 120 bytes
 relayed by the host like the others. UDP may drop one, so each message goes out in 3 consecutive send
 cycles; receivers keep the last 16 ids per player and show a message once. Text is cleaned on both
 sides (`protocol::cleanChatText`: no control characters, cut at a UTF-8 boundary). At most 5 messages
-per player per 5 s are shown. The overlay opens the input line with `[ui] chat_key` (T): key presses
+per player per 5 s are shown. The overlay opens the input line with `[ui] chat_key` (Enter by default; the key press that opens the line is not typed into it): key presses
 then go to ImGui, while key releases, raw key releases and the mouse still reach the game (a key held
 when the chat opened is released). Escape cancels, Enter sends. The last 8 lines show bottom-left
 for 12 s, then fade (`[ui] show_chat`). The solo test does not echo your own message twice.
+
+## Menus do not pause a session (`game/hooks.cpp`)
+
+The game pauses through a counter object at `PamUISystem` +0x8c8: ints at +0x08 (pause requests) and
++0x0c (full pause requests), changed by +1/-1 in `UIPauseController_request` (`0x143b16210`) from the
+UI pause entities. `PamUISystem`'s update (`0x143b16c50`) is the only caller of
+`UIPauseController_applyToClient` (`0x143b16ae0`), which pauses or resumes the client from those counts.
+In a session (hosting or connected) the hook sets both counts to 0 for the call to the original update and
+afterwards adds the saved counts back, so requests made during the update are kept and the counts stay
+right when the session ends: the game then pauses as normal.
 
 ## Go to a player (`game/teleport.cpp`)
 

@@ -5,7 +5,6 @@
 #include "game/ghosts.h"
 #include "game/level.h"
 #include "net/net.h"
-#include "MinHook.h"
 
 #include <atomic>
 #include <vector>
@@ -117,52 +116,48 @@ void undoPatches(const std::vector<Patch>& undo) {
 using PostUpdateFn = void (*)(void* world, void* updateInfo);
 PostUpdateFn g_origPostUpdate = nullptr;
 TickFn g_onTick = nullptr;
-using PauseConsumerFn = void (*)(const void* controller, void* client);
-PauseConsumerFn g_origPauseConsumer = nullptr;
+// Game menus keep the simulation running while a multiplayer session is on (everyone else keeps
+// running too). PamUISystem's per-frame update ends with the call that pauses or resumes the client
+// from its pause controller's request counts (+0x08 requests, +0x0c full requests). Those counts are
+// plain counters (UIPauseController_request, 0x143b16210: +1 / -1, no clamping), so during the update
+// they are set to 0 and afterwards put back plus whatever changed meanwhile: the pause call sees no
+// request, every menu opening or closing is kept, and with no session the menus pause as usual.
+using UISystemUpdateFn = void (*)(void* uiSystem);
+UISystemUpdateFn g_origUISystemUpdate = nullptr;
 
-void pauseConsumer(const void* controller, void* client) {
-    if (controller && net::running() && (net::hosting() || net::connectedToHost())) {
-        struct ControllerView { uintptr_t vtable; int32_t requests, fullRequests; } view{};
-        static_assert(sizeof(ControllerView) == 0x10, "UI pause consumer read layout");
-        if (mem::read(reinterpret_cast<uintptr_t>(controller), view.vtable)) {
-            // The native consumer reads only these counts; retain native references for offline resume.
-            g_origPauseConsumer(&view, client);
-            return;
-        }
+void uiSystemUpdate(void* uiSystem) {
+    uintptr_t controller = 0;
+    int32_t saved[2] = {};
+    const bool session = net::running() && (net::hosting() || net::connectedToHost());
+    if (!session || !mem::read(reinterpret_cast<uintptr_t>(uiSystem) + UISystem_PauseController, controller) || !controller ||
+        !mem::read(controller + 8, saved, sizeof(saved))) {
+        g_origUISystemUpdate(uiSystem);
+        return;
     }
-    g_origPauseConsumer(controller, client);
+    int32_t* counts = reinterpret_cast<int32_t*>(controller + 8);
+    counts[0] = 0;
+    counts[1] = 0;
+    g_origUISystemUpdate(uiSystem);
+    counts[0] += saved[0]; // what changed during the update stays
+    counts[1] += saved[1];
 }
 
-void installPauseConsumer() {
-    const uintptr_t target = rva(Fn_UIPauseConsumer);
-    uint8_t bytes[9]{};
-    const uint8_t expected[] = {0x48, 0x85, 0xd2, 0x0f, 0x84, 0x43, 0x01, 0x00, 0x00};
-    if (!mem::read(target, bytes, sizeof(bytes)) || std::memcmp(bytes, expected, sizeof(bytes)) != 0) {
-        MLOG("hook UI pause: unexpected native consumer; not hooking");
+void installUIPauseHook(std::vector<Patch>& undo) {
+    const uintptr_t slot = rva(Slot_PamUISystemUpdate);
+    uintptr_t current = 0;
+    if (!mem::read(slot, current) || current != rva(Fn_PamUISystemUpdate)) {
+        MLOG("hook UI pause: slot holds %p, expected %p; menus pause the game as usual", reinterpret_cast<void*>(current),
+             reinterpret_cast<void*>(rva(Fn_PamUISystemUpdate)));
         return;
     }
-    MH_STATUS status = MH_Initialize();
-    if (status != MH_OK && status != MH_ERROR_ALREADY_INITIALIZED) {
-        MLOG("hook UI pause: initialize failed (%s)", MH_StatusToString(status));
+    if (!mem::patchPointer(slot, reinterpret_cast<uintptr_t>(&uiSystemUpdate), nullptr)) {
+        MLOG("hook UI pause: VirtualProtect failed (%lu)", GetLastError());
         return;
     }
-    status = MH_CreateHook(reinterpret_cast<void*>(target), reinterpret_cast<void*>(&pauseConsumer),
-                           reinterpret_cast<void**>(&g_origPauseConsumer));
-    if (status != MH_OK) {
-        MLOG("hook UI pause: create failed (%s)", MH_StatusToString(status));
-        return;
-    }
-    status = MH_EnableHook(reinterpret_cast<void*>(target));
-    if (status != MH_OK) {
-        MH_RemoveHook(reinterpret_cast<void*>(target));
-        g_origPauseConsumer = nullptr;
-        MLOG("hook UI pause: enable failed (%s)", MH_StatusToString(status));
-        return;
-    }
-    MLOG("hook UI pause: installed (native unpaused state while multiplayer is active)");
+    g_origUISystemUpdate = reinterpret_cast<UISystemUpdateFn>(current);
+    undo.push_back({slot, current});
+    VLOG("hook UI pause: installed");
 }
-
-
 
 void postUpdate(void* world, void* updateInfo) {
     g_origPostUpdate(world, updateInfo);
@@ -198,6 +193,7 @@ bool install(TickFn onTick, Installed* out) {
     const bool replay = installFactory(kClientReplay, Slot_ClientReplayPlayerFactory, Fn_ClientReplayPlayerFactory, &clientReplayFactory, undo);
     const bool chars = installFactory(kClientCharacter, Slot_ClientCharacterFactory, Fn_ClientCharacterFactory, &clientCharacterFactory, undo);
     got.ghostClients = replay && chars;
+    installUIPauseHook(undo);
     // The tick hook goes in last: nothing reaches the mod's code before every other hook is in, and
     // if it fails, the factory hooks above are taken out again.
     if (!mem::patchPointer(slot, reinterpret_cast<uintptr_t>(&postUpdate), nullptr)) {
@@ -206,7 +202,6 @@ bool install(TickFn onTick, Installed* out) {
         return false;
     }
     got.tick = true;
-    installPauseConsumer();
     hookUpdaters(); // the vtable is in the game image, so this does not wait for a component
     if (out) *out = got;
     if (got.spawners && got.ghostClients) MLOG("hooks: all installed");

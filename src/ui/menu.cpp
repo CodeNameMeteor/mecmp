@@ -12,6 +12,7 @@
 
 #include "app/mod.h"
 #include "core/config.h"
+#include "game/mumble_link.h"
 #include "game/ghosts.h"
 #include "game/teleport.h"
 #include "game/models.h"
@@ -283,6 +284,29 @@ void markersSection() {
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("The marker blinks and rings spread from it for a moment when it is placed or moves");
 }
 
+// One line under the Mumble checkbox: what is missing, or that positions go out.
+void voiceStatus() {
+    const game::mumble::Status s = game::mumble::status();
+    if (!s.enabled) return;
+    const ImVec4 warn(1.f, 0.75f, 0.3f, 1.f), ok(0.5f, 0.9f, 0.5f, 1.f);
+    ImGui::Indent();
+    if (!s.mumbleFound) {
+        ImGui::TextColored(warn, "Mumble is not running");
+    } else if (!s.sending) {
+        ImGui::TextColored(warn, "Mumble found; positions start once you are in a level");
+    } else if (!s.inSession) {
+        ImGui::TextColored(warn, "Sending to Mumble; host or join a session to hear the others");
+    } else {
+        ImGui::TextColored(ok, "Sending to Mumble (%s)", s.context);
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("In Mumble: Settings > Plugins: enable Link and \"Link to Game and Transmit Position\";\n"
+                          "Settings > Audio Output: enable Positional Audio. When Mumble picks the game up its\n"
+                          "log shows a \"linked\" line. Everyone must be on the same Mumble server; players in\n"
+                          "the same MECMP session hear each other from where they are.");
+    ImGui::Unindent();
+}
+
 void lookSection() {
     ImGui::SeparatorText("Other players");
     bool showNames = config::get()->showNames;
@@ -301,6 +325,7 @@ void lookSection() {
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("With Mumble running (Positional Audio and the Link plugin on, everyone on the same\n"
                           "Mumble server), players in this session hear each other from where they are.");
+    voiceStatus();
     markersSection();
     if (ImGui::Button("Show ghosts")) game::ghosts::requestSpawnOrRefresh();
     ImGui::SameLine();

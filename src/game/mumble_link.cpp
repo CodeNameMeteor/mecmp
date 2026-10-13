@@ -1,6 +1,7 @@
 #include "game/mumble_link.h"
 
 #include <windows.h>
+#include <tlhelp32.h>
 
 #include <cmath>
 #include <cstdint>
@@ -37,10 +38,27 @@ HANDLE g_map = nullptr;
 LinkedMem* g_lm = nullptr;
 uint32_t g_key = 0;      // session written last
 std::string g_name;      // player name written last
+bool g_openedExisting = false; // Mumble (its Link plugin) had made the memory before us
+DWORD g_lastSent = 0;
+bool g_loggedSending = false;
+char g_context[32] = {};
+
+bool mumbleProcessRunning() {
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap == INVALID_HANDLE_VALUE) return false;
+    PROCESSENTRY32W pe{};
+    pe.dwSize = sizeof(pe);
+    bool found = false;
+    for (BOOL ok = Process32FirstW(snap, &pe); ok && !found; ok = Process32NextW(snap, &pe))
+        found = _wcsicmp(pe.szExeFile, L"mumble.exe") == 0;
+    CloseHandle(snap);
+    return found;
+}
 
 bool openLink() {
     if (g_lm) return true;
     g_map = OpenFileMappingW(FILE_MAP_ALL_ACCESS, FALSE, L"MumbleLink");
+    g_openedExisting = g_map != nullptr;
     if (!g_map) g_map = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE, 0, sizeof(LinkedMem), L"MumbleLink");
     if (!g_map) return false;
     g_lm = static_cast<LinkedMem*>(MapViewOfFile(g_map, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(LinkedMem)));
@@ -51,7 +69,8 @@ bool openLink() {
     }
     g_key = 0;
     g_name.clear();
-    MLOG("voice: Mumble link ready (positional voice works while Mumble runs with its Link plugin on)");
+    MLOG("voice: Mumble link ready (%s)", g_openedExisting ? "Mumble's Link plugin is running"
+                                                             : "Mumble not seen yet; it picks the game up when it starts");
     return true;
 }
 
@@ -62,6 +81,8 @@ void closeLink() {
     CloseHandle(g_map);
     g_lm = nullptr;
     g_map = nullptr;
+    g_lastSent = 0;
+    g_loggedSending = false;
     MLOG("voice: Mumble link off");
 }
 
@@ -115,6 +136,7 @@ void update() {
         const int n = key ? snprintf(ctx, sizeof(ctx), "MECMP-%08x", key) : 0;
         memset(g_lm->context, 0, sizeof(g_lm->context));
         memcpy(g_lm->context, ctx, static_cast<size_t>(n > 0 ? n : 0));
+        memcpy(g_context, ctx, sizeof(g_context));
         g_lm->context_len = static_cast<uint32_t>(n > 0 ? n : 0);
         MLOG("voice: Mumble context %s", key ? ctx : "(none: not in a session yet)");
     }
@@ -123,6 +145,28 @@ void update() {
         writeWide(g_lm->identity, 256, name);
     }
     ++g_lm->uiTick;
+    g_lastSent = GetTickCount();
+    if (!g_loggedSending) {
+        g_loggedSending = true;
+        MLOG("voice: sending your position to Mumble (context %s)", g_context[0] ? g_context : "none: not in a session");
+    }
+}
+
+Status status() {
+    Status s;
+    s.enabled = config::get()->mumbleLink;
+    static DWORD checkedAt = 0;
+    static bool running = false;
+    const DWORD now = GetTickCount();
+    if (!checkedAt || now - checkedAt > 3000) {
+        checkedAt = now;
+        running = mumbleProcessRunning();
+    }
+    s.mumbleFound = running || (g_lm && g_openedExisting);
+    s.sending = g_lm && g_lastSent && now - g_lastSent < 1000;
+    s.inSession = g_context[0] != 0;
+    memcpy(s.context, g_context, sizeof(s.context));
+    return s;
 }
 
 } // namespace mecmp::game::mumble

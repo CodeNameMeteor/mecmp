@@ -175,6 +175,10 @@ negating z, and increments `uiTick`. The context is `MECMP-<host session id>`, t
 in a session: the HELLO packet carries a host flag (u8 after the look; older builds omit it) so
 joiners learn the host's session id even though relayed packets all arrive from the host's address.
 Identity = the player's name. Turning it off writes `uiVersion = 0` and unmaps.
+The menu's status line (`mumble::status()`): a `mumble.exe` process (Toolhelp snapshot, at most every 3 s,
+only while the menu draws it) or a `MumbleLink` mapping that existed before we opened it counts as
+Mumble found; "sending" means positions went out in the last second. Mumble writes nothing back, so
+a real link cannot be confirmed from the game. The log says once when positions start going out.
 
 ## Network (`net/`)
 

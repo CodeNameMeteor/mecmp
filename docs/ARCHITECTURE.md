@@ -51,6 +51,9 @@ Per remote player:
 1. **Spawn** a ProjectionCharacter from the level's city-ghost spawner (`spawner->vtbl[0xd0]`),
    at the player's position. Give its server replay component a pose buffer with the bone setup
    real ghosts use (copied from any live ghost client component).
+   Not before the player's own character has existed for 3 s: a ghost spawned right after it appears
+   is deleted by the game ~0.6 s later on every level load (the spawner drops it; cause not found).
+   A ghost the game deletes is logged with what was found (`ghost: ... is gone`) and spawned again.
 2. **Drive** (every tick): stop the server replay playback, copy the player's pose into the
    component, put the trajectory bone (setup index 1, the world anchor) at the player's position,
    mark the component dirty (bits 2|4). The engine replicates it to the client like a real replay.
@@ -109,7 +112,9 @@ per piece, the source's unlocks, ClearVisualState = 1) and applies it with `char
 - The ghost shader is set per ghost on its client character (`PamClientCharacterEntity` +0x334): on for
   echo looks, off for Faith and models (with it on, normal meshes are invisible). The shared character
   data flag (+0xe8, `PamUseRunnersGhostShader`) is no longer touched, so the game's own time-trial
-  ghosts are unaffected.
+  ghosts are unaffected. The client character copies the definition's flag while it is set up, which can be after it
+  was claimed, so the tick puts it back to what the look needs (otherwise a Faith ghost showed only
+  its hair).
 - Built customizations are cached per (pieces, unlocks) and the cache and the echo list are emptied on
   level change (level data).
 

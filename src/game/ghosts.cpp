@@ -23,6 +23,7 @@ constexpr uint32_t kHideAfterMs = 5000; // hide a ghost whose player stopped sen
 constexpr DWORD kSpawnGapMs = 2000;     // at most one spawn per this interval (client-side matching)
 constexpr DWORD kClaimWindowMs = 1500;  // client objects created this soon after our spawn are ours
 constexpr uint64_t kSettleTicks = 90;   // ~3 s after a level starts before spawning
+constexpr uint64_t kPlayerSettleTicks = 90; // ~3 s after the player's character appears
 // Ghost entities are never destroyed by the mod (no known safe despawn call): a ghost whose player
 // left is hidden and handed to the next player that needs one. So the level holds at most as many
 // ghosts as players were ever there at the same time, and never more than this.
@@ -391,8 +392,38 @@ void* spawnGhost(uint32_t peer, const std::string& name, uint32_t look, const ne
             }
     }
     if (used.empty()) MLOG("ghost: no look could be applied (the ghost may be invisible)");
-    MLOG("ghost: spawned for player %08x as '%s'", peer, used.c_str());
+    uintptr_t list[2] = {};
+    mem::read(reinterpret_cast<uintptr_t>(spawner) + Spawner_Spawned, list, sizeof(list));
+    MLOG("ghost: spawned for player %08x as '%s' (character %p, spawner %p holds %llu, count %d)", peer, used.c_str(), ch,
+         spawner, static_cast<unsigned long long>(list[1] >= list[0] ? (list[1] - list[0]) / 8 : 0),
+         mem::readOr<int32_t>(reinterpret_cast<uintptr_t>(spawner) + 0xf4));
     return ch;
+}
+
+// Whether `ch` is still in its spawner's list of spawned characters (+0x148/+0x150).
+const char* inSpawnerList(void* spawner, void* ch) {
+    uintptr_t list[2] = {};
+    if (!spawner || !mem::read(reinterpret_cast<uintptr_t>(spawner) + Spawner_Spawned, list, sizeof(list)) ||
+        list[1] < list[0] || (list[1] - list[0]) / 8 > 256)
+        return "spawner list unreadable";
+    for (uintptr_t it = list[0]; it < list[1]; it += 8)
+        if (mem::readOr<uintptr_t>(it) == reinterpret_cast<uintptr_t>(ch)) return "still in its spawner's list";
+    return "not in its spawner's list";
+}
+
+// Diagnostic: why a ghost counts as gone (it is then spawned again).
+void logLostGhost(const Ghost& g, uintptr_t expectedData) {
+    const uintptr_t ch = reinterpret_cast<uintptr_t>(g.character);
+    uintptr_t vt = 0, data = 0;
+    const bool readable = mem::read(ch, vt);
+    if (readable) mem::read(ch + Character_Data, data);
+    const char* what = !readable                                     ? "memory unreadable"
+                       : vt == rva(Vtbl_PamServerCharacterEntity) ? "character data changed"
+                       : inImage(vt)                              ? "now another object"
+                                                                  : "destroyed";
+    MLOG("ghost: ghost of player %08x is gone %.1f s after spawning (%s: vtable %p, data %p, expected %p; %s)", g.peer,
+         (GetTickCount() - g.spawnedAt) / 1000.0, what, reinterpret_cast<void*>(vt), reinterpret_cast<void*>(data),
+         reinterpret_cast<void*>(expectedData), inSpawnerList(g.spawner, g.character));
 }
 
 // Forget every ghost's applied look: the tick applies the right one again.
@@ -573,14 +604,27 @@ void tick(uint64_t tick, uint64_t ticksInLevel) {
         const uintptr_t data = g_ghostCharData.load();
         for (size_t i = 0; i < g_ghosts.size();) {
             if (!g_ghosts[i].character || level::characterExists(g_ghosts[i].character, data)) { ++i; continue; }
-            VLOG("ghost: ghost of player %08x is gone", g_ghosts[i].peer);
+            logLostGhost(g_ghosts[i], data);
             g_ghosts.erase(g_ghosts.begin() + static_cast<long>(i));
         }
     }
 
+    // The game deletes a ghost spawned in the first moments after the player's own character appears
+    // (seen 0.6 s after it, every level load; the next spawn stays). Wait a little after that.
+    static void* lastPlayer = nullptr;
+    static uint64_t playerSince = 0;
+    void* const playerChar = level::playerCharacter();
+    if (playerChar != lastPlayer) {
+        VLOG("level: player character %p -> %p (%llu ticks into the level)", lastPlayer, playerChar,
+             static_cast<unsigned long long>(ticksInLevel));
+        lastPlayer = playerChar;
+        playerSince = ticksInLevel;
+    }
+    const bool playerSettled = playerChar && ticksInLevel - playerSince >= kPlayerSettleTicks;
+
     // Every present player needs a ghost: hand them a free one, else spawn (one per kSpawnGapMs).
     const bool canSpawn = g_enabled && !g_paused && config::get()->autoSpawn && ticksInLevel >= kSettleTicks &&
-                          level::spawnerAlive(level::ghostSpawner()) && level::playerCharacter();
+                          level::spawnerAlive(level::ghostSpawner()) && playerSettled;
     if (canSpawn) {
         level::BoneSetup ref;
         for (const auto& p : players) {
@@ -677,6 +721,10 @@ void tick(uint64_t tick, uint64_t ticksInLevel) {
                 std::lock_guard<std::mutex> lock(g_motionM);
                 g_motion[g.peer].add(st);
             }
+            // The client character copies the definition's ghost-shader flag while it is being set up,
+            // which can be after we claimed it (and after the look set it): keep it on what the look
+            // needs. Otherwise a Faith ghost keeps the ghost shader and only its hair shows.
+            if (g.clientChar) setGhostShader(g, g.ghostShader);
             drive(g, st);
             fixClient(g, st);
             memcpy(g.lastPos, st.pos, sizeof(g.lastPos));

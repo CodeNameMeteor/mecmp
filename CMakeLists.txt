@@ -38,6 +38,7 @@ add_library(mecmp SHARED
   src/game/mumble_link.cpp
   src/game/teleport.cpp
   src/game/local_player.cpp
+  src/game/ping_point.cpp
   src/net/net.cpp
   src/net/protocol.cpp
   src/net/upnp.cpp
@@ -48,6 +49,7 @@ add_library(mecmp SHARED
   src/ui/nametags.cpp
   src/ui/notices.cpp
   src/ui/chat.cpp
+  src/ui/markers.cpp
   third_party/imgui/imgui.cpp
   third_party/imgui/imgui_draw.cpp
   third_party/imgui/imgui_tables.cpp

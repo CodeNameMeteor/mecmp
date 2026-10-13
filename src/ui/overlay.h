@@ -21,5 +21,8 @@ struct MenuKey { const char* name; int vk; int imguiKey; };
 const MenuKey* menuKeys(int& count);
 void setMenuKey(const std::string& name);  // takes effect at once
 void setKeyCapture(bool on);               // while the menu waits for a new key, the old one does not close it
+// A key from mecmp.ini that is not the menu key (chat_key, ping_key): a letter A..Z, ENTER, or a menu
+// key name. 0 for anything else (including empty = no key).
+int actionKeyFromName(const std::string& name);
 
 } // namespace mecmp::ui

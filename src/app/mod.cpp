@@ -17,6 +17,7 @@
 #include "game/level.h"
 #include "game/local_player.h"
 #include "game/models.h"
+#include "game/ping_point.h"
 #include "game/motion_stats.h"
 #include "net/net.h"
 #include "ui/gamepad.h"
@@ -48,6 +49,7 @@ void onTick(void* world, float dt) {
     }
     game::ghosts::tick(n, n - g_levelStartTick);
     game::teleport::tick();
+    game::ping::tick();
 }
 
 // Waits until the engine has built its type list, then checks that this is the game build the

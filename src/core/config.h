@@ -22,12 +22,17 @@ struct Settings {
     // [player]
     std::string name = "Runner";
     std::string look = "faith";           // how you look to others: faith, or echo:<hash> (a ghost style + colour)
+    std::string pingColor = "ffd23c";     // colour of your marker for everyone, RRGGBB
     // [ghost]
     bool autoSpawn = true;
     // [ui]
     std::string menuKey = "INSERT";       // INSERT, HOME, END, DELETE, PAGEUP, PAGEDOWN, PAUSE or F1..F12
     std::string menuPad = "LS+RS";        // gamepad buttons held together, e.g. LS+RS or BACK+Y; empty = none
     bool showNames = true;                // names above other players' ghosts
+    bool showPings = true;                // markers placed by players (experimental)
+    bool showArrows = true;               // arrows on the screen's edge to players who are off screen
+    std::string pingKey = "G";            // places your marker: a letter, ENTER, or a menu key name; empty = none
+    std::string pingPad;                  // gamepad buttons that place it (as menu_pad); empty = none
     // [voice]
     bool mumbleLink = true;               // positional voice through Mumble's Link plugin
     bool showNotices = true;              // "<name> joined / left" at the top of the screen

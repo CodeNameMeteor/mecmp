@@ -28,6 +28,7 @@ char g_name[net::protocol::kMaxNameBytes + 1] = {}; // what fits on the wire
 char g_code[64] = {};
 bool g_inited = false;
 bool g_keyCapture = false; // waiting for a new menu key
+gamepad::Action g_padCapture = gamepad::Action::Count; // which gamepad binding is being recorded (Count = none)
 DWORD g_hintUntil = 0;
 
 void copyToClipboard(const std::string& text) {
@@ -256,6 +257,34 @@ void myLookSection() {
     ImGui::NewLine();
 }
 
+// Markers ("pings") and the arrows on the screen's edge (experimental).
+void markersSection() {
+    const auto cfg = config::get();
+    bool showPings = cfg->showPings;
+    if (ImGui::Checkbox("Markers (experimental)", &showPings))
+        config::change([showPings](config::Settings& c) { c.showPings = showPings; });
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Each player can place one marker where they stand (%s%s). It lasts 30 s;\n"
+                          "off screen it shows as an arrow on the screen's edge.",
+                          cfg->pingKey.empty() ? "no key set" : cfg->pingKey.c_str(),
+                          gamepad::parse(cfg->pingPad) ? (" or " + gamepad::format(gamepad::parse(cfg->pingPad))).c_str() : "");
+    ImGui::SameLine();
+    uint8_t rgb[3] = {255, 210, 60};
+    net::protocol::parseRgb(cfg->pingColor, rgb);
+    float col[3] = {rgb[0] / 255.f, rgb[1] / 255.f, rgb[2] / 255.f};
+    if (ImGui::ColorEdit3("##pingcolour", col, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel)) {
+        for (int i = 0; i < 3; ++i) rgb[i] = static_cast<uint8_t>(col[i] < 0 ? 0 : (col[i] > 1 ? 255 : col[i] * 255.f + 0.5f));
+        const std::string hex = net::protocol::formatRgb(rgb);
+        config::change([hex](config::Settings& c) { c.pingColor = hex; });
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Your marker's colour, as everyone sees it");
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Clear my marker")) net::clearPing();
+    bool showArrows = cfg->showArrows;
+    if (ImGui::Checkbox("Arrows to players off screen (experimental)", &showArrows))
+        config::change([showArrows](config::Settings& c) { c.showArrows = showArrows; });
+}
+
 void lookSection() {
     ImGui::SeparatorText("Other players");
     bool showNames = config::get()->showNames;
@@ -274,9 +303,52 @@ void lookSection() {
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("With Mumble running (Positional Audio and the Link plugin on, everyone on the same\n"
                           "Mumble server), players in this session hear each other from where they are.");
+    markersSection();
     if (ImGui::Button("Show ghosts")) game::ghosts::requestSpawnOrRefresh();
     ImGui::SameLine();
     if (ImGui::Button("Hide ghosts")) game::ghosts::requestHideAll();
+}
+
+// One gamepad binding: its buttons, Change (hold the buttons, let go) and Clear.
+void padRow(const char* label, gamepad::Action action, const std::string& current, std::string config::Settings::*field) {
+    ImGui::PushID(static_cast<int>(action));
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted(label);
+    ImGui::SameLine();
+    uint16_t got = 0;
+    if (gamepad::capturing() && g_padCapture == action) {
+        if (gamepad::captureDone(got)) {
+            const std::string combo = gamepad::format(got);
+            gamepad::setBinding(got, action);
+            config::change([combo, field](config::Settings& c) { c.*field = combo; });
+            g_padCapture = gamepad::Action::Count;
+        } else {
+            ImGui::TextColored(ImVec4(1.f, 0.85f, 0.3f, 1.f), "hold the buttons together, then let go");
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Cancel")) {
+                gamepad::cancelCapture();
+                g_padCapture = gamepad::Action::Count;
+            }
+        }
+    } else {
+        const uint16_t bits = gamepad::parse(current);
+        ImGui::Text("%s", bits ? gamepad::format(bits).c_str() : "none");
+        ImGui::SameLine();
+        ImGui::BeginDisabled(gamepad::capturing()); // one binding is recorded at a time
+        if (ImGui::SmallButton("Change")) {
+            g_padCapture = action;
+            gamepad::beginCapture();
+        }
+        ImGui::EndDisabled();
+        if (bits) {
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Clear")) {
+                gamepad::setBinding(0, action);
+                config::change([field](config::Settings& c) { (c.*field).clear(); });
+            }
+        }
+    }
+    ImGui::PopID();
 }
 
 void controlsSection() {
@@ -312,34 +384,13 @@ void controlsSection() {
         }
     }
     // Gamepad buttons that open it.
+    padRow("Gamepad:", gamepad::Action::Menu, cfg->menuPad, &config::Settings::menuPad);
+    // The marker: its key is set in mecmp.ini ([ui] ping_key), its gamepad buttons here.
     ImGui::AlignTextToFramePadding();
-    ImGui::Text("Gamepad:");
-    ImGui::SameLine();
-    uint16_t got = 0;
-    if (gamepad::capturing()) {
-        if (gamepad::captureDone(got)) {
-            const std::string combo = gamepad::format(got);
-            gamepad::setBinding(got);
-            config::change([combo](config::Settings& c) { c.menuPad = combo; });
-        } else {
-            ImGui::TextColored(ImVec4(1.f, 0.85f, 0.3f, 1.f), "hold the buttons together, then let go");
-            ImGui::SameLine();
-            if (ImGui::SmallButton("Cancel##pad")) gamepad::cancelCapture();
-        }
-    } else {
-        const uint16_t bits = gamepad::parse(cfg->menuPad);
-        ImGui::Text("%s", bits ? gamepad::format(bits).c_str() : "none");
-        ImGui::SameLine();
-        if (ImGui::SmallButton("Change##pad")) gamepad::beginCapture();
-        if (bits) {
-            ImGui::SameLine();
-            if (ImGui::SmallButton("Clear##pad")) {
-                gamepad::setBinding(0);
-                config::change([](config::Settings& c) { c.menuPad.clear(); });
-            }
-        }
-        if (!gamepad::active()) ImGui::TextDisabled("No gamepad seen yet.");
-    }
+    ImGui::Text("Marker key: %s", cfg->pingKey.empty() ? "none" : cfg->pingKey.c_str());
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("[ui] ping_key in mecmp.ini (read when the game starts)");
+    padRow("Marker gamepad:", gamepad::Action::Ping, cfg->pingPad, &config::Settings::pingPad);
+    if (!gamepad::active()) ImGui::TextDisabled("No gamepad seen yet.");
 }
 
 // "INSERT or LS+RS"

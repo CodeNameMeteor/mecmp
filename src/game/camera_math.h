@@ -42,6 +42,18 @@ inline float distanceFade(float depth) {
     return 1.f - (depth - kFadeFullUntil) / (kFadeGoneAt - kFadeFullUntil);
 }
 
+// The marker wheel: which of `n` equal wedges the offset (dx, dy) from its centre points at, in screen
+// pixels with y down. Wedge 0 is centred straight up, the others follow clockwise. -1 inside the dead
+// zone (nothing chosen), and for a NaN or n <= 0.
+inline int radialSlot(float dx, float dy, float deadZone, int n) {
+    if (n <= 0 || !(dx * dx + dy * dy > deadZone * deadZone)) return -1;
+    const float twoPi = 6.28318531f;
+    float a = std::atan2(dx, -dy); // 0 = up, increasing clockwise
+    if (a < 0.f) a += twoPi;
+    const int i = static_cast<int>(a / (twoPi / static_cast<float>(n)) + 0.5f);
+    return i % n;
+}
+
 // The flash a marker makes when it arrives, so a new or moved one is noticed: the marker blinks
 // white twice and swells and settles, while rings spread from it and fade. One pass of kPulseMs,
 // then it stays at rest.

@@ -69,6 +69,8 @@ add_library(mecmp SHARED
   src/ui/notices.cpp
   src/ui/chat.cpp
   src/ui/markers.cpp
+  src/ui/glyph.cpp
+  src/ui/radial.cpp
   third_party/imgui/imgui.cpp
   third_party/imgui/imgui_draw.cpp
   third_party/imgui/imgui_tables.cpp

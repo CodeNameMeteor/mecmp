@@ -22,7 +22,7 @@ constexpr uint32_t kGoneMs = 5000; // same as the ghosts: silent this long = lef
 struct Notice { std::string text; DWORD at; };
 std::deque<Notice> g_notices;
 std::unordered_map<uint32_t, std::string> g_present; // id -> name, players announced as here
-std::unordered_map<uint32_t, uint32_t> g_pingAge;    // owner -> age of their marker when last looked at
+std::unordered_map<uint64_t, uint32_t> g_pingAge;    // owner and cell -> age of that marker when last looked at
 } // namespace
 
 void push(std::string text) {
@@ -43,17 +43,21 @@ void draw() {
         if (!now.count(kv.first) && on) push(kv.second + " left");
     g_present.swap(now);
 
-    // Other players' markers. A marker counts as new when its owner had none (and it is fresh: not
+    // Other players' markers. A marker counts as new when its cell was empty (and it is fresh: not
     // one that was already there when we joined), or when its age went back (a replacement starts
-    // again at 0). Tracked while notices are off too, like joins above.
+    // again at 0; the same marker placed again right away does not). Tracked while notices are off
+    // too, like joins above.
     constexpr uint32_t kFreshMs = 3000;
-    std::unordered_map<uint32_t, uint32_t> pingAge;
+    std::unordered_map<uint64_t, uint32_t> pingAge;
     for (const auto& p : net::pings()) {
         if (p.own) continue;
-        pingAge[p.owner] = p.ageMs;
-        const auto was = g_pingAge.find(p.owner);
+        const uint64_t cell = (static_cast<uint64_t>(p.owner) << 8) | p.index;
+        pingAge[cell] = p.ageMs;
+        const auto was = g_pingAge.find(cell);
         const bool isNew = was == g_pingAge.end() ? p.ageMs < kFreshMs : p.ageMs < was->second;
-        if (on && isNew) push((p.name.empty() ? std::string("Someone") : p.name) + " placed a marker");
+        if (on && isNew)
+            push((p.name.empty() ? std::string("Someone") : p.name) + " placed a marker" +
+                 (p.label.empty() ? std::string() : ": " + p.label));
     }
     g_pingAge.swap(pingAge);
 

@@ -45,6 +45,15 @@ double nowMs() {
 }
 
 struct Snap { PlayerState s; double t = 0; }; // t = sender's capture time
+// One of a player's marker cells (see PING in protocol.h).
+struct PingCell {
+    bool have = false;
+    proto::Ping ping;
+    DWORD arrivedAt = 0; // when this marker appeared: the flash and the notice go by it
+    DWORD setAt = 0;     // when it was last placed: its lifetime counts from here
+    uint64_t order = 0;  // ours only: grows with every placement
+    bool live(DWORD now) const { return have && now - setAt < proto::pingLifeMs(ping.life); }
+};
 struct Remote {
     uint32_t id = 0;
     sockaddr_in addr{};
@@ -68,11 +77,9 @@ struct Remote {
     proto::RecentIds<16> chatSeen; // message ids already shown (repeats are dropped)
     DWORD chatBurstAt = 0;       // flood limit
     int chatBurst = 0;
-    // Their world marker (at most one; see PING in protocol.h).
-    proto::RecentIds<8> pingSeen;
-    proto::Ping ping;
-    bool havePing = false;
-    DWORD pingAt = 0;      // when it arrived
+    // Their world markers.
+    proto::RecentIds<16> pingSeen;
+    PingCell pings[proto::kPingCells];
     DWORD pingBurstAt = 0; // flood limit
     int pingBurst = 0;
     Snap snaps[kSnapCount];
@@ -308,9 +315,35 @@ void sendPendingChat() {
 struct OutBurst { uint16_t type; std::vector<char> payload; int left; };
 std::vector<OutBurst> g_outBurst; // guarded by g_m
 uint32_t g_burstId = 0;           // guarded by g_m
-constexpr int kPingBurst = 5;     // at most this many marker changes from one player per kChatBurstMs
-struct MyPing { bool have = false; proto::Ping ping; DWORD at = 0; };
-MyPing g_myPing; // guarded by g_m
+// At most this many marker changes from one player per kChatBurstMs. A player may place one every
+// 0.3 s (game/ping_point.cpp), which is 17 in that time.
+constexpr int kPingBurst = 20;
+// The same marker placed again on the same spot this soon after it appeared is the same event: it
+// moves and lasts longer, but does not flash or get announced again.
+constexpr DWORD kPingRepeatMs = 2000;
+PingCell g_myPings[proto::kPingCells]; // guarded by g_m
+uint64_t g_pingOrder = 0;              // guarded by g_m
+
+proto::PingCellView pingView(const PingCell& c, DWORD now) {
+    proto::PingCellView v;
+    v.live = c.live(now);
+    v.glyph = proto::pingGlyph(c.ping.flags);
+    v.label = c.ping.label;
+    memcpy(v.pos, c.ping.pos, sizeof(v.pos));
+    v.order = c.order;
+    return v;
+}
+
+void putPing(PingCell& c, const proto::Ping& p, DWORD now, uint64_t order) {
+    // The same marker on exactly the same spot is its owner giving it more time (renewPing): not new either.
+    const bool again = proto::samePingMarker(pingView(c, now), proto::pingGlyph(p.flags), p.label, p.pos) &&
+                       (now - c.arrivedAt < kPingRepeatMs || memcmp(c.ping.pos, p.pos, sizeof(p.pos)) == 0);
+    c.have = true;
+    c.ping = p;
+    c.setAt = now;
+    c.order = order;
+    if (!again) c.arrivedAt = now;
+}
 
 uint32_t nextBurstId() { // caller holds g_m
     uint32_t id = (g_session << 16) ^ ++g_burstId;
@@ -357,9 +390,12 @@ void receivePing(Remote& r, bool own, const char* payload, size_t len) { // call
         if (r.pingBurst == kPingBurst + 1 && peerLogAllowed()) MLOG("net: player %08x places markers too fast; dropping some", r.id);
         return;
     }
-    r.havePing = !(p.flags & proto::kPingClear);
-    r.ping = p;
-    r.pingAt = now;
+    if (p.flags & proto::kPingClear) {
+        for (int i = 0; i < proto::kPingCells; ++i)
+            if (p.index == proto::kPingAllCells || p.index == i) r.pings[i].have = false;
+        return;
+    }
+    putPing(r.pings[p.index], p, now, 0);
 }
 
 void handlePacket(const char* buf, int n, const sockaddr_in& from) {
@@ -718,7 +754,7 @@ bool start(uint16_t port, const std::string& join, float loopbackOffset, const s
         g_lanCode.clear();
         g_name = name;
         g_outBurst.clear();
-        g_myPing = MyPing{};
+        for (PingCell& c : g_myPings) c = PingCell{};
     }
     g_stunIp = 0;
     {
@@ -813,46 +849,134 @@ bool localState(PlayerState& out) {
     return true;
 }
 
-void sendPing(const float pos[3], const uint8_t rgb[3]) {
+void sendPing(const float pos[3], const PingStyle& style, int limit) {
     if (!proto::sanePosition(pos)) return;
     std::lock_guard<std::mutex> lock(g_m);
+    const DWORD now = GetTickCount();
     proto::Ping p;
     p.id = nextBurstId();
     memcpy(p.pos, pos, sizeof(p.pos));
-    memcpy(p.rgb, rgb, sizeof(p.rgb));
-    g_myPing = {true, p, GetTickCount()};
+    memcpy(p.rgb, style.rgb, sizeof(p.rgb));
+    memcpy(p.accent, style.accent, sizeof(p.accent));
+    p.flags = proto::withPingGlyph(0, style.glyph);
+    p.label = proto::cleanPingLabel(style.label);
+    p.life = proto::pingLifeUnits(style.seconds);
+    proto::PingCellView cells[proto::kPingCells];
+    for (int i = 0; i < proto::kPingCells; ++i) cells[i] = pingView(g_myPings[i], now);
+    p.index = static_cast<uint8_t>(proto::choosePingCell(cells, limit, proto::pingGlyph(p.flags), p.label, p.pos));
+    putPing(g_myPings[p.index], p, now, ++g_pingOrder);
     if (g_run) queuePing(p);
 }
 
-void clearPing() {
+bool clearPing() {
     std::lock_guard<std::mutex> lock(g_m);
-    if (!g_myPing.have) return;
-    g_myPing.have = false;
-    proto::Ping p = g_myPing.ping;
+    const DWORD now = GetTickCount();
+    bool any = false, live = false;
+    for (PingCell& c : g_myPings) {
+        any = any || c.have;
+        live = live || c.live(now);
+        c.have = false;
+    }
+    if (!any) return false;
+    proto::Ping p;
     p.id = nextBurstId();
     p.flags = proto::kPingClear;
+    p.index = proto::kPingAllCells;
     if (g_run) queuePing(p);
+    return live;
+}
+
+namespace {
+// Empties one of our cells and tells everyone. Caller holds g_m.
+void removeMyPing(int index) {
+    g_myPings[index].have = false;
+    proto::Ping p;
+    p.id = nextBurstId();
+    p.flags = proto::kPingClear;
+    p.index = static_cast<uint8_t>(index);
+    if (g_run) queuePing(p);
+}
+
+// Sends one of our cells again after `edit` changed it; its time starts again. `fresh` = it counts
+// as a new marker (it flashes). Caller holds g_m.
+template <class Edit> bool resendMyPing(uint8_t index, Edit edit, bool fresh = true) {
+    const DWORD now = GetTickCount();
+    if (index >= proto::kPingCells || !g_myPings[index].live(now)) return false;
+    PingCell& c = g_myPings[index];
+    edit(c.ping);
+    c.ping.id = nextBurstId();
+    c.setAt = now;
+    if (fresh) c.arrivedAt = now;
+    c.order = ++g_pingOrder;
+    if (g_run) queuePing(c.ping);
+    return true;
+}
+} // namespace
+
+void removePing(uint8_t index) {
+    std::lock_guard<std::mutex> lock(g_m);
+    if (index < proto::kPingCells && g_myPings[index].live(GetTickCount())) removeMyPing(index);
+}
+
+bool movePing(uint8_t index, const float pos[3]) {
+    if (!proto::sanePosition(pos)) return false;
+    std::lock_guard<std::mutex> lock(g_m);
+    return resendMyPing(index, [pos](proto::Ping& p) { memcpy(p.pos, pos, sizeof(p.pos)); });
+}
+
+bool renamePing(uint8_t index, const std::string& label) {
+    const std::string clean = proto::cleanPingLabel(label);
+    std::lock_guard<std::mutex> lock(g_m);
+    return resendMyPing(index, [&clean](proto::Ping& p) { p.label = clean; });
+}
+
+bool renewPing(uint8_t index) {
+    std::lock_guard<std::mutex> lock(g_m);
+    return resendMyPing(index, [](proto::Ping&) {}, false);
+}
+
+void trimPings(int limit) {
+    std::lock_guard<std::mutex> lock(g_m);
+    const DWORD now = GetTickCount();
+    for (;;) {
+        int live = 0, oldest = -1;
+        for (int i = 0; i < proto::kPingCells; ++i) {
+            if (!g_myPings[i].live(now)) continue;
+            ++live;
+            if (oldest < 0 || g_myPings[i].order < g_myPings[oldest].order) oldest = i;
+        }
+        if (live <= (limit < 1 ? 1 : limit) || oldest < 0) return;
+        removeMyPing(oldest);
+    }
 }
 
 std::vector<PingInfo> pings() {
     std::vector<PingInfo> v;
     const DWORD now = GetTickCount();
     std::lock_guard<std::mutex> lock(g_m);
-    auto add = [&](uint32_t owner, const std::string& name, const proto::Ping& p, DWORD at, bool own) {
-        PingInfo i;
-        i.owner = owner;
-        i.name = name.empty() ? std::string("Runner") : name;
-        memcpy(i.pos, p.pos, sizeof(i.pos));
-        memcpy(i.rgb, p.rgb, sizeof(i.rgb));
-        i.ageMs = now - at;
-        i.own = own;
-        v.push_back(i);
+    auto add = [&](uint32_t owner, const std::string& name, const PingCell* cells, bool own) {
+        for (int k = 0; k < proto::kPingCells; ++k) {
+            const PingCell& c = cells[k];
+            if (!c.live(now)) continue;
+            const proto::Ping& p = c.ping;
+            PingInfo i;
+            i.owner = owner;
+            i.index = static_cast<uint8_t>(k);
+            i.name = name.empty() ? std::string("Runner") : name;
+            memcpy(i.pos, p.pos, sizeof(i.pos));
+            memcpy(i.rgb, p.rgb, sizeof(i.rgb));
+            memcpy(i.accent, p.accent, sizeof(i.accent));
+            i.glyph = proto::pingGlyph(p.flags);
+            i.label = p.label;
+            i.ageMs = now - c.arrivedAt;
+            i.lifeMs = proto::pingLifeMs(p.life);
+            i.leftMs = i.lifeMs - (now - c.setAt);
+            i.own = own;
+            v.push_back(i);
+        }
     };
-    if (g_myPing.have && now - g_myPing.at < proto::kPingLifeMs) add(g_session, g_name, g_myPing.ping, g_myPing.at, true);
-    for (const auto& kv : g_remotes) {
-        const Remote& r = kv.second;
-        if (r.havePing && now - r.pingAt < proto::kPingLifeMs) add(r.id, r.name, r.ping, r.pingAt, false);
-    }
+    add(g_session, g_name, g_myPings, true);
+    for (const auto& kv : g_remotes) add(kv.second.id, kv.second.name, kv.second.pings, false);
     return v;
 }
 

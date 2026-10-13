@@ -192,7 +192,6 @@ void run(HMODULE self) {
         }
         MLOG("startup: build check failed but ignore_build_check=1: continuing");
     }
-    Beep(1000, 100); // audible "mod active"
     game::hooks::Installed hooks;
     if (!game::hooks::install(&onTick, &hooks)) {
         MLOG("startup: could not hook the game tick; staying inactive");

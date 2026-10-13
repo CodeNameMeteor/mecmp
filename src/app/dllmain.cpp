@@ -17,7 +17,6 @@ DWORD WINAPI modThread(LPVOID) {
         OutputDebugStringW(L"[MECMP] already active in this process; this copy stays idle\n");
         return 0;
     }
-    Beep(750, 100); // audible "DLL loaded"
     mecmp::app::run(g_self);
     return 0;
 }

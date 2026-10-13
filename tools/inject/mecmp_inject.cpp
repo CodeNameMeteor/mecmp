@@ -119,7 +119,7 @@ int wmain(int argc, wchar_t** argv) {
                 L"(missing dependency, blocked file, or wrong architecture).\n");
         return 1;
     }
-    wprintf(L"OK: mecmp.dll is loaded. You should hear a short beep; the log path is\n"
+    wprintf(L"OK: mecmp.dll is loaded. The game shows the MECMP menu with INSERT; the log is in\n"
             L"the folder of mecmp.dll, else the game folder, else %%LOCALAPPDATA%%\\MECMP.\n");
     return 0;
 }

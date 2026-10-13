@@ -98,7 +98,7 @@ per piece, the source's unlocks, ClearVisualState = 1) and applies it with `char
 - **Faith**: the local player's current outfit (first-person `_1p` pieces dropped).
 - **Echo looks** (the game's runner-ghost styles x colours): the catalogue comes from a time-trial
   marker's `PamServerCustomizeProjectionCharacterEntity` (vtable `0x141c7ea80`), found by a short memory
-  scan 20 s into a level: entity `+0x28` data, data `+0x20` `PamEchoCustomizationDefinitionsMeta`,
+  scan 5, 10, 20 and 40 s into a level (then 2 and 4 min if none yet): entity `+0x28` data, data `+0x20` `PamEchoCustomizationDefinitionsMeta`,
   meta `+0x18` array of `{NameSid, DescriptionSid, TextureId, CustomizationData*, u32 CustomizationHash}`.
   An echo look's colour is an unlock (an ObjectVariation on the projection shader), so the unlocks are
   carried over. The hash is the game's own id for the look.
@@ -121,9 +121,10 @@ again (`models::echoRenders`: the look is in the catalogue).
 
 Each player picks their own look (menu *Your look*: Faith, or a ghost style and colour; `[player]
 look=` in mecmp.ini: `faith` or `echo:<hash>`) and sends it with their name. Every ghost shows its
-player's look; there is no override on the receiving side. A look the catalogue does not know yet leaves
-the ghost as it is (a new ghost starts as the default red RunVis) and is retried every 15 s, not every
-tick: each attempt rebuilds the ghost's mesh. Faith and other looks are retried every 2 s. Some echo customizations carry no body
+player's look; there is no override on the receiving side. A newly chosen look is applied on the next tick.
+One the catalogue does not know yet leaves the ghost as it is (a new ghost starts as the default red
+RunVis) and is retried every 15 s, not every tick: each attempt rebuilds the ghost's mesh. Faith and
+other looks are retried every 2 s. When the catalogue is found, waiting looks are tried at once. Some echo customizations carry no body
 piece of their own (only colour unlocks): with ClearVisualState those left the ghost without a mesh, so
 they are built on the RunVis body pieces. New picks default to red RunVis (easy to see). At most one look is applied per tick.
 The look catalogue is published as an immutable list (`models::echoes()` returns a shared pointer), so the

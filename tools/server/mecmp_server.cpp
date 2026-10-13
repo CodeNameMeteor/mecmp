@@ -15,6 +15,7 @@
 #include <ws2tcpip.h>
 #else
 #include <arpa/inet.h>
+#include <netdb.h>
 #include <netinet/in.h>
 #include <sys/select.h>
 #include <sys/socket.h>
@@ -37,6 +38,7 @@
 #include <vector>
 
 #include "net/protocol.h"
+#include "net/joincode.h"
 #include "server/relay.h"
 
 namespace {
@@ -117,6 +119,87 @@ void usage() {
 }
 
 void onSignal(int) { g_quit = true; }
+
+// --- This server's address, for the log ---------------------------------------------------------
+std::string ipString(uint32_t ip) {
+    const std::string s = mecmp::server::toString({ip, 0});
+    return s.substr(0, s.rfind(':'));
+}
+
+// The address this machine uses on its network (no packet is sent: a UDP connect only picks a route).
+uint32_t localIp() {
+    Socket s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (s == kNoSocket) return 0;
+    sockaddr_in to{};
+    to.sin_family = AF_INET;
+    to.sin_port = htons(53);
+    to.sin_addr.s_addr = htonl(0x08080808);
+    uint32_t ip = 0;
+    if (connect(s, reinterpret_cast<sockaddr*>(&to), sizeof(to)) == 0) {
+        sockaddr_in me{};
+#ifdef _WIN32
+        int len = sizeof(me);
+#else
+        socklen_t len = sizeof(me);
+#endif
+        if (getsockname(s, reinterpret_cast<sockaddr*>(&me), &len) == 0) ip = ntohl(me.sin_addr.s_addr);
+    }
+    closeSocket(s);
+    return ip;
+}
+
+// STUN (RFC 5389) binding request through the server socket: the reply says the public ip:port the
+// internet sees, which is what players outside this network join.
+constexpr uint32_t kStunCookie = 0x2112A442;
+unsigned char g_stunTx[12] = {};
+bool sendStun(Socket sock) {
+    addrinfo hints{};
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_DGRAM;
+    addrinfo* res = nullptr;
+    if (getaddrinfo("stun.l.google.com", "19302", &hints, &res) != 0 || !res) return false;
+    unsigned char req[20] = {0x00, 0x01, 0x00, 0x00, 0x21, 0x12, 0xA4, 0x42};
+    memcpy(req + 8, g_stunTx, sizeof(g_stunTx));
+    sendto(sock, reinterpret_cast<const char*>(req), sizeof(req), 0, res->ai_addr, static_cast<int>(res->ai_addrlen));
+    freeaddrinfo(res);
+    return true;
+}
+// True if `b` is our STUN answer (then ip/port are set, host byte order).
+bool readStun(const unsigned char* b, int n, uint32_t& ip, uint16_t& port) {
+    if (n < 20 || b[0] != 0x01 || b[1] != 0x01 || memcmp(b + 8, g_stunTx, sizeof(g_stunTx)) != 0) return false;
+    for (int p = 20; p + 4 <= n;) {
+        const int type = (b[p] << 8) | b[p + 1], len = (b[p + 2] << 8) | b[p + 3];
+        if (type == 0x0020 && len >= 8 && p + 4 + len <= n && b[p + 5] == 0x01) { // XOR-MAPPED-ADDRESS, IPv4
+            port = static_cast<uint16_t>(((b[p + 6] << 8) | b[p + 7]) ^ (kStunCookie >> 16));
+            ip = ((static_cast<uint32_t>(b[p + 8]) << 24) | (static_cast<uint32_t>(b[p + 9]) << 16) |
+                  (static_cast<uint32_t>(b[p + 10]) << 8) | b[p + 11]) ^ kStunCookie;
+            return true;
+        }
+        p += 4 + ((len + 3) & ~3);
+    }
+    return false;
+}
+
+void logAddresses(uint16_t port, uint32_t publicIp, uint16_t publicPort) {
+    const uint32_t lan = localIp();
+    const std::string p = std::to_string(port);
+    if (publicIp && publicIp == lan) { // a machine with a public address (a VPS)
+        logLine("players join with " + ipString(publicIp) + ":" + p + " (or the join code " +
+                mecmp::net::joincode::encode(publicIp, port) + ", or a domain name pointing here)");
+        return;
+    }
+    if (lan) logLine("same network: players join with " + ipString(lan) + ":" + p + " (on this PC: 127.0.0.1:" + p + ")");
+    if (publicIp) {
+        logLine("internet: players join with " + ipString(publicIp) + ":" + p + " (join code " +
+                mecmp::net::joincode::encode(publicIp, port) + "), once UDP port " + p + " is forwarded on your router to " +
+                (lan ? ipString(lan) : std::string("this PC")));
+        if (publicPort && publicPort != port)
+            logLine("note: your router changed the port to " + std::to_string(publicPort) + " on the way out; forward " + p +
+                    " by hand");
+    } else {
+        logLine("internet: the public address could not be found (no answer from the STUN server)");
+    }
+}
 
 // Console input on its own thread (blocking reads); commands are run by the main loop.
 std::mutex g_cmdM;
@@ -227,9 +310,14 @@ int main(int argc, char** argv) {
     std::snprintf(hexSession, sizeof(hexSession), "%08x", session);
     logLine("MECMP server '" + o.relay.name + "' on UDP " + std::to_string(o.port) + " (protocol " +
             std::to_string(mecmp::net::protocol::kProtocol) + ", up to " + std::to_string(o.relay.maxPlayers) +
-            " players, session " + hexSession + "). Players join with <this address>:" + std::to_string(o.port) +
-            ". Type 'help' for commands.");
+            " players, session " + hexSession + "). Type 'help' for commands.");
     if (o.relay.mirror) logLine("test mode (--mirror): every player also sees a copy of themselves 3 m away");
+
+    for (unsigned char& c : g_stunTx) c = static_cast<unsigned char>(rd());
+    int stunTries = 0;
+    uint32_t stunAt = nowMs();
+    bool addressShown = false;
+    if (sendStun(sock)) ++stunTries;
 
     char buf[mecmp::net::protocol::kMaxPacket + 64];
     uint32_t lastTick = 0;
@@ -249,7 +337,14 @@ int main(int argc, char** argv) {
 #endif
                 const int n = static_cast<int>(recvfrom(sock, buf, sizeof(buf), 0, reinterpret_cast<sockaddr*>(&from), &fromLen));
                 if (n <= 0) break;
-                relay.onPacket({ntohl(from.sin_addr.s_addr), ntohs(from.sin_port)}, buf, static_cast<size_t>(n), nowMs());
+                uint32_t pubIp = 0;
+                uint16_t pubPort = 0;
+                if (!addressShown && readStun(reinterpret_cast<const unsigned char*>(buf), n, pubIp, pubPort)) {
+                    addressShown = true;
+                    logAddresses(o.port, pubIp, pubPort);
+                } else {
+                    relay.onPacket({ntohl(from.sin_addr.s_addr), ntohs(from.sin_port)}, buf, static_cast<size_t>(n), nowMs());
+                }
                 fd_set more;
                 FD_ZERO(&more);
                 FD_SET(sock, &more);
@@ -258,6 +353,11 @@ int main(int argc, char** argv) {
             }
         }
         const uint32_t now = nowMs();
+        if (!addressShown && now - stunAt >= 2000) { // no answer yet: try twice more, then say so
+            stunAt = now;
+            if (stunTries < 3 && sendStun(sock)) ++stunTries;
+            else { addressShown = true; logAddresses(o.port, 0, 0); }
+        }
         if (now - lastTick >= 50) {
             lastTick = now;
             relay.tick(now);

@@ -47,6 +47,11 @@ Console commands (type them in the server's window):
 
 ## Join it
 
+A few seconds after it starts, the server logs the addresses to join: on this PC, on the same
+network, and from the internet (with a join code). On a home connection the internet address only
+works once the UDP port is forwarded on the router to the PC the log names. On a VPS the public
+address is the machine's own, and that is the only line.
+
 In the MECMP menu, type the server's address in the join field (`play.example.com` or
 `203.0.113.7`, with `:port` when it is not 47800) and press *Join*. Or set `join=play.example.com:47800`
 in `mecmp.ini`. The menu then shows *Server: <name>*.

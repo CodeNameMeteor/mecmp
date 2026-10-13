@@ -26,7 +26,7 @@ endif()
 
 # --- mecmp_server: dedicated server (Windows or Linux, no game needed) ---------------------------
 find_package(Threads REQUIRED)
-add_executable(mecmp_server tools/server/mecmp_server.cpp src/server/relay.cpp src/net/protocol.cpp)
+add_executable(mecmp_server tools/server/mecmp_server.cpp src/server/relay.cpp src/net/protocol.cpp src/net/joincode.cpp)
 target_include_directories(mecmp_server PRIVATE src)
 target_link_libraries(mecmp_server PRIVATE Threads::Threads)
 if(WIN32)

@@ -220,7 +220,12 @@ render or game thread.
 ## Menu input (`ui/overlay.cpp`, `ui/gamepad.cpp`)
 
 - Keyboard: the menu key (INSERT by default, changeable in the menu) toggles it in the window
-  procedure. While open, mouse and keyboard go to the menu (virtual cursor from raw input).
+  procedure. While open, mouse and key presses go to the menu (virtual cursor from raw input); key
+  releases (WM_KEYUP and raw-input releases) still reach the game, so a key held when the menu
+  opened does not stay held there.
+- The chat key and the marker key do nothing while one of the game's own menus is up (pause menu,
+  map; `hooks::gameMenuOpen`: the UI pause counts at `PamUISystem` +0x8c8 are above 0), so Enter
+  can pick a menu item there.
 - Gamepad: the game loads XInput itself and keeps `XInputGetState` in a data pointer
   (`0x14256d7e0`, written once by `0x1437ba6c0`). The mod swaps that pointer (the build check
   verifies the store instruction). Its function calls the real one, opens/closes the menu on the

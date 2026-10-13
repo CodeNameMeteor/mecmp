@@ -23,5 +23,9 @@ bool install(TickFn onTick, Installed* out = nullptr);
 // True once the client replay updater runs our pose writer (ghosts::beforeClientReplayUpdate) itself;
 // until then poses are written from the render thread (ghosts::renderFrame).
 bool clientUpdateHooked();
+// True while one of the game's own menus asks for the game to be paused (pause menu, map, ...): the
+// UI pause counts at PamUISystem +0x8c8 (+0x08 / +0x0c) are above 0. False before the UI system has
+// run once or if the UI pause hook is not in. Any thread.
+bool gameMenuOpen();
 
 } // namespace mecmp::game::hooks

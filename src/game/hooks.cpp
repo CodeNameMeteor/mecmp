@@ -125,7 +125,10 @@ TickFn g_onTick = nullptr;
 using UISystemUpdateFn = void (*)(void* uiSystem);
 UISystemUpdateFn g_origUISystemUpdate = nullptr;
 
+std::atomic<uintptr_t> g_uiSystem{0};
+
 void uiSystemUpdate(void* uiSystem) {
+    g_uiSystem = reinterpret_cast<uintptr_t>(uiSystem);
     uintptr_t controller = 0;
     int32_t saved[2] = {};
     const bool session = net::running() && (net::hosting() || net::connectedToHost());
@@ -208,6 +211,16 @@ bool install(TickFn onTick, Installed* out) {
     else MLOG("hooks: %s%s", got.spawners ? "" : "spawner hooks missing (spawners are found by a memory scan instead); ",
               got.ghostClients ? "" : "ghost client hooks missing: remote players cannot be shown");
     return true;
+}
+
+bool gameMenuOpen() {
+    const uintptr_t ui = g_uiSystem.load();
+    uintptr_t controller = 0;
+    int32_t counts[2] = {};
+    if (!ui || !mem::read(ui + UISystem_PauseController, controller) || !controller ||
+        !mem::read(controller + 8, counts, sizeof(counts)))
+        return false;
+    return counts[0] > 0 || counts[1] > 0;
 }
 
 } // namespace mecmp::game::hooks

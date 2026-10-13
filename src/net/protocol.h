@@ -27,7 +27,7 @@ constexpr uint16_t kProtocol = 6;
 constexpr uint16_t kTypeState = 1;
 constexpr uint16_t kTypeHello = 2;
 constexpr uint16_t kTypeChat = 3;
-constexpr uint16_t kTypePing = 4; // experimental: a world marker
+constexpr uint16_t kTypePing = 4; // a world marker
 // The packet types this version understands. Anything else is dropped before it can create state or
 // be forwarded, so a new type needs no protocol bump: older versions simply ignore it.
 constexpr bool knownType(uint16_t type) {
@@ -159,20 +159,75 @@ template <size_t N> struct RecentIds {
 // A world position a packet may carry: finite and within the level's range (as for STATE).
 bool sanePosition(const float pos[3]);
 
-// type 4 PING (experimental): u32 id | f32 pos[3] | u8 flags (bit 0: remove my marker) | u8 r, g, b.
-// Sent a few times like CHAT; each player has at most one marker, a new one replaces the old.
-// Older senders may stop after pos: flags = 0 and the default colour.
+// type 4 PING: u32 id | f32 pos[3] | u8 flags | u8 r, g, b | u8 labelLength | label | u8 life
+//   | u8 accent r, g, b | u8 index.
+// flags: bit 0 = remove, bits 1-6 = glyph (the shape drawn; values nobody draws yet show as glyph 0).
+// The label is the marker's title (UTF-8, at most kMaxPingLabelBytes, cleaned like chat text); it is the
+// sender's own wording, so receivers show it as it is. life = how long the marker stays, in units of
+// 5 s (1..60; 0 = the default 30 s). accent = the colour of the detail inside the glyph.
+// A player has kPingCells cells, each holding one marker: a PING puts its marker into cell `index`
+// (replacing what was there), or with the remove bit empties that cell (index kPingAllCells: all of
+// them). The sender decides which cell a new marker takes (choosePingCell); receivers only store.
+// Sent a few times like CHAT. Every field after pos is optional, so older senders may stop early:
+// after pos (flags = 0, the default colour), after the colour (no label), or after the label (30 s,
+// white accent, cell 0; a remove without an index empties all cells).
 constexpr uint8_t kPingClear = 1;
-constexpr uint32_t kPingLifeMs = 30000; // a marker is shown this long after it arrived
+constexpr uint8_t kPingGlyphShift = 1;
+constexpr uint8_t kPingGlyphs = 64; // bits 1-6
+constexpr size_t kMaxPingLabelBytes = 32;
+constexpr int kPingCells = 5;
+constexpr uint8_t kPingAllCells = 0xFF;
+constexpr uint32_t kPingLifeUnitMs = 5000;
+constexpr uint32_t kPingDefaultLifeMs = 30000;
+constexpr uint8_t kPingMaxLife = 60; // 5 minutes
+inline uint8_t pingGlyph(uint8_t flags) { return static_cast<uint8_t>((flags >> kPingGlyphShift) & (kPingGlyphs - 1)); }
+inline uint8_t withPingGlyph(uint8_t flags, uint8_t glyph) {
+    return static_cast<uint8_t>((flags & ~((kPingGlyphs - 1) << kPingGlyphShift)) |
+                                ((glyph & (kPingGlyphs - 1)) << kPingGlyphShift));
+}
+// The `life` byte -> milliseconds, clamped to what a marker may last (5 s .. 5 min).
+inline uint32_t pingLifeMs(uint8_t life) {
+    if (life == 0) return kPingDefaultLifeMs;
+    return (life > kPingMaxLife ? kPingMaxLife : life) * kPingLifeUnitMs;
+}
+// Seconds -> the `life` byte (rounded to 5 s, 1..kPingMaxLife).
+inline uint8_t pingLifeUnits(int seconds) {
+    const int u = (seconds + 2) / 5;
+    return static_cast<uint8_t>(u < 1 ? 1 : (u > kPingMaxLife ? kPingMaxLife : u));
+}
+// A marker title as it may go on the wire: like cleanChatText, but at most kMaxPingLabelBytes.
+std::string cleanPingLabel(const std::string& raw);
 struct Ping {
     uint32_t id = 0;
     float pos[3] = {0, 0, 0};
     uint8_t flags = 0;
     uint8_t rgb[3] = {255, 210, 60};
+    std::string label; // cleaned; empty = none
+    uint8_t life = 0;  // see pingLifeMs
+    uint8_t accent[3] = {255, 255, 255};
+    uint8_t index = 0; // the cell: 0..kPingCells-1, or kPingAllCells (remove only)
 };
 size_t writePing(char* buf, const Header& h, const Ping& p);
-// False for a short packet or a position outside the sane range.
+// False for a short packet or a position outside the sane range. `out.index` is always a valid cell
+// (or kPingAllCells for a remove).
 bool readPing(const char* payload, size_t n, Ping& out);
+
+// Which of a player's cells a new marker goes into. "The same marker" = same glyph and title (what the
+// others see). In order: the nearest live cell holding the same marker within kPingMergeMetres (it
+// moves there, so pressing twice on one spot does not stack markers, while different markers may sit
+// side by side); else a free cell while fewer than `limit` are live; else the live cell set longest ago.
+constexpr float kPingMergeMetres = 1.5f;
+struct PingCellView {
+    bool live = false;
+    uint8_t glyph = 0;
+    std::string label;
+    float pos[3] = {0, 0, 0};
+    uint64_t order = 0; // grows with every placement: the smallest is the oldest
+};
+int choosePingCell(const PingCellView cells[kPingCells], int limit, uint8_t glyph, const std::string& label,
+                   const float pos[3]);
+// True when a marker at `pos` is the one in `cell` again (same glyph and title, within kPingMergeMetres).
+bool samePingMarker(const PingCellView& cell, uint8_t glyph, const std::string& label, const float pos[3]);
 // "ffd23c" or "#ffd23c" -> r, g, b. False (rgb untouched) for anything else.
 bool parseRgb(const std::string& hex, uint8_t rgb[3]);
 std::string formatRgb(const uint8_t rgb[3]);

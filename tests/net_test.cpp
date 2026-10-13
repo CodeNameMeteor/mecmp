@@ -248,7 +248,7 @@ static void testPing() {
     in.pos[0] = 12.5f; in.pos[1] = -3.25f; in.pos[2] = 900.f;
     in.rgb[0] = 10; in.rgb[1] = 200; in.rgb[2] = 30;
     const size_t n = protocol::writePing(buf, h, in);
-    CHECK(n == sizeof(h) + 4 + 12 + 1 + 3);
+    CHECK(n == sizeof(h) + 4 + 12 + 1 + 3 + 1 + 1 + 3 + 1); // + the label length (0), life, accent, index
     protocol::Ping out;
     CHECK(protocol::readPing(buf + sizeof(h), n - sizeof(h), out));
     CHECK(out.id == in.id && out.pos[0] == 12.5f && out.pos[1] == -3.25f && out.pos[2] == 900.f && out.flags == 0);
@@ -279,11 +279,157 @@ static void testPing() {
     // Random bytes never crash the reader, and what it accepts is always a sane position.
     std::mt19937 rng(1234);
     for (int i = 0; i < 2000; ++i) {
-        char junk[32];
+        char junk[64];
         for (char& ch : junk) ch = static_cast<char>(rng());
+        if (i % 4 == 0) junk[20] = static_cast<char>(rng() % 12); // a short label, so the fields after it are read too
         protocol::Ping j;
-        if (protocol::readPing(junk, rng() % (sizeof(junk) + 1), j)) CHECK(protocol::sanePosition(j.pos));
+        if (protocol::readPing(junk, rng() % (sizeof(junk) + 1), j)) {
+            CHECK(protocol::sanePosition(j.pos));
+            CHECK(j.label.size() <= protocol::kMaxPingLabelBytes && j.label == protocol::cleanPingLabel(j.label));
+            CHECK(j.index < protocol::kPingCells || (j.index == protocol::kPingAllCells && (j.flags & protocol::kPingClear)));
+        }
     }
+}
+
+// The marker's glyph (flags bits 1-6) and its title (after the colour).
+static void testPingLabel() {
+    char buf[protocol::kMaxPacket];
+    protocol::Header h{protocol::kMagic, protocol::kProtocol, protocol::kTypePing, 7, 1};
+    protocol::Ping in, out;
+    in.id = 5;
+    in.pos[0] = 1.f;
+    // Glyph and title survive the wire; the clear bit is separate from the glyph bits.
+    in.flags = protocol::withPingGlyph(0, 5);
+    in.label = "Climb here";
+    size_t n = protocol::writePing(buf, h, in);
+    CHECK(protocol::readPing(buf + sizeof(h), n - sizeof(h), out));
+    CHECK(protocol::pingGlyph(out.flags) == 5 && !(out.flags & protocol::kPingClear) && out.label == "Climb here");
+    in.flags = static_cast<uint8_t>(protocol::withPingGlyph(protocol::kPingClear, 7));
+    n = protocol::writePing(buf, h, in);
+    CHECK(protocol::readPing(buf + sizeof(h), n - sizeof(h), out));
+    CHECK((out.flags & protocol::kPingClear) && protocol::pingGlyph(out.flags) == 7);
+    CHECK(protocol::withPingGlyph(protocol::kPingClear, 0) == protocol::kPingClear);
+    for (uint8_t g = 0; g < 64; ++g) {
+        CHECK(protocol::pingGlyph(protocol::withPingGlyph(0x81, g)) == g);
+        CHECK((protocol::withPingGlyph(0x81, g) & 0x81) == 0x81); // the other bits stay
+    }
+    CHECK(protocol::pingGlyph(protocol::withPingGlyph(0, 63)) == 63);
+    CHECK(protocol::pingGlyph(protocol::withPingGlyph(0, 65)) == 1); // only 6 bits: 65 -> 1, no bleed into the others
+    CHECK((protocol::withPingGlyph(0, 65) & ~0x7E) == 0);
+    // No title: the empty string, and the packet is the marker's old size plus the length byte.
+    in.label.clear();
+    n = protocol::writePing(buf, h, in);
+    CHECK(protocol::readPing(buf + sizeof(h), n - sizeof(h), out) && out.label.empty());
+    // A sender from before titles stops after the colour: still a marker, no title.
+    in.label = "Danger";
+    n = protocol::writePing(buf, h, in);
+    CHECK(protocol::readPing(buf + sizeof(h), 4 + 12 + 1 + 3, out) && out.label.empty());
+    // A length that promises more than is there, or more than allowed: the title is dropped, not the marker.
+    CHECK(protocol::readPing(buf + sizeof(h), n - sizeof(h) - 5 - 2, out) && out.label.empty());
+    buf[sizeof(h) + 4 + 12 + 1 + 3] = static_cast<char>(protocol::kMaxPingLabelBytes + 1);
+    CHECK(protocol::readPing(buf + sizeof(h), n - sizeof(h), out) && out.label.empty() && out.pos[0] == 1.f);
+    // Cleaning: control characters out, blanks trimmed, cut at the limit without splitting a character.
+    CHECK(protocol::cleanPingLabel("  Go\x01 this\n way  ") == "Go this way");
+    CHECK(protocol::cleanPingLabel("    ").empty());
+    const std::string cyr(40, 'x');
+    CHECK(protocol::cleanPingLabel(cyr).size() == protocol::kMaxPingLabelBytes && protocol::kMaxPingLabelBytes == 32);
+    std::string two; // 20 two-byte letters = 40 bytes: 16 whole letters fit
+    for (int i = 0; i < 20; ++i) two += "\xD0\x96";
+    const std::string cut = protocol::cleanPingLabel(two);
+    CHECK(cut.size() == protocol::kMaxPingLabelBytes && cut.size() % 2 == 0);
+    // What goes out is cleaned too, even if the caller forgot.
+    in.label = std::string("A\x07") + two;
+    n = protocol::writePing(buf, h, in);
+    CHECK(protocol::readPing(buf + sizeof(h), n - sizeof(h), out) && out.label.size() <= protocol::kMaxPingLabelBytes &&
+          out.label.find('\x07') == std::string::npos);
+}
+
+// What follows the title: how long the marker stays, its accent colour and the cell it goes into.
+static void testPingTail() {
+    char buf[protocol::kMaxPacket];
+    protocol::Header h{protocol::kMagic, protocol::kProtocol, protocol::kTypePing, 7, 1};
+    protocol::Ping in, out;
+    in.id = 9;
+    in.pos[2] = 4.f;
+    in.label = "Roof";
+    in.life = 12;
+    in.accent[0] = 1; in.accent[1] = 2; in.accent[2] = 3;
+    in.index = 4;
+    size_t n = protocol::writePing(buf, h, in);
+    CHECK(protocol::readPing(buf + sizeof(h), n - sizeof(h), out));
+    CHECK(out.label == "Roof" && out.life == 12 && out.accent[0] == 1 && out.accent[1] == 2 && out.accent[2] == 3 && out.index == 4);
+    // A sender that stops after the title: the default time, a white accent, cell 0.
+    const size_t upToLabel = 4 + 12 + 1 + 3 + 1 + in.label.size();
+    CHECK(protocol::readPing(buf + sizeof(h), upToLabel, out));
+    CHECK(out.label == "Roof" && out.life == 0 && out.accent[0] == 255 && out.accent[2] == 255 && out.index == 0);
+    // Cut inside the accent: the accent stays white (not half of one), and so does the cell.
+    CHECK(protocol::readPing(buf + sizeof(h), upToLabel + 1 + 2, out) && out.life == 12 && out.accent[0] == 255 && out.index == 0);
+    // No index byte: cell 0 for a marker, all cells for a remove.
+    CHECK(protocol::readPing(buf + sizeof(h), upToLabel + 1 + 3, out) && out.accent[1] == 2 && out.index == 0);
+    in.flags = protocol::kPingClear;
+    n = protocol::writePing(buf, h, in);
+    CHECK(protocol::readPing(buf + sizeof(h), n - sizeof(h), out) && out.index == 4);     // remove one cell
+    CHECK(protocol::readPing(buf + sizeof(h), n - sizeof(h) - 1, out) && out.index == protocol::kPingAllCells);
+    CHECK(protocol::readPing(buf + sizeof(h), 4 + 12 + 1 + 3, out) && out.index == protocol::kPingAllCells); // the first version's remove
+    in.index = protocol::kPingAllCells;
+    n = protocol::writePing(buf, h, in);
+    CHECK(protocol::readPing(buf + sizeof(h), n - sizeof(h), out) && out.index == protocol::kPingAllCells);
+    // A cell that does not exist: cell 0 for a marker, all cells for a remove.
+    in.index = 5;
+    n = protocol::writePing(buf, h, in);
+    CHECK(protocol::readPing(buf + sizeof(h), n - sizeof(h), out) && out.index == protocol::kPingAllCells);
+    in.flags = 0;
+    in.index = 200;
+    n = protocol::writePing(buf, h, in);
+    CHECK(protocol::readPing(buf + sizeof(h), n - sizeof(h), out) && out.index == 0);
+    // The time: 5 s steps, 0 = 30 s, never more than 5 minutes.
+    CHECK(protocol::pingLifeMs(0) == 30000 && protocol::pingLifeMs(1) == 5000 && protocol::pingLifeMs(60) == 300000);
+    CHECK(protocol::pingLifeMs(61) == 300000 && protocol::pingLifeMs(255) == 300000);
+    CHECK(protocol::pingLifeUnits(5) == 1 && protocol::pingLifeUnits(30) == 6 && protocol::pingLifeUnits(300) == 60);
+    CHECK(protocol::pingLifeUnits(0) == 1 && protocol::pingLifeUnits(-7) == 1 && protocol::pingLifeUnits(100000) == 60);
+    CHECK(protocol::pingLifeUnits(12) == 2 && protocol::pingLifeUnits(13) == 3); // rounded to the nearest step
+}
+
+// Which cell a new marker takes: the same marker nearby moves, a different one sits beside it, and
+// over the limit the oldest goes.
+static void testPingCells() {
+    protocol::PingCellView c[protocol::kPingCells];
+    const float here[3] = {10.f, 0.f, 10.f}, near[3] = {11.f, 0.f, 10.f}, far[3] = {20.f, 0.f, 10.f};
+    auto put = [&](int i, uint8_t glyph, const char* label, const float* pos, uint64_t order) {
+        c[i].live = true;
+        c[i].glyph = glyph;
+        c[i].label = label;
+        for (int k = 0; k < 3; ++k) c[i].pos[k] = pos[k];
+        c[i].order = order;
+    };
+    CHECK(protocol::choosePingCell(c, 3, 0, "Here", here) == 0); // nothing yet: the first cell
+    put(0, 0, "Here", here, 1);
+    CHECK(protocol::choosePingCell(c, 3, 0, "Here", near) == 0);  // the same marker 1 m away: it moves
+    CHECK(protocol::choosePingCell(c, 3, 0, "Here", far) == 1);   // further: a second one
+    CHECK(protocol::choosePingCell(c, 3, 4, "Here", here) == 1);  // another icon on the same spot: beside it
+    CHECK(protocol::choosePingCell(c, 3, 0, "Wait", here) == 1);  // another title too
+    CHECK(protocol::samePingMarker(c[0], 0, "Here", near) && !protocol::samePingMarker(c[0], 0, "Here", far));
+    const float edge[3] = {11.5f, 0.f, 10.f}, past[3] = {11.6f, 0.f, 10.f};
+    CHECK(protocol::samePingMarker(c[0], 0, "Here", edge) && !protocol::samePingMarker(c[0], 0, "Here", past));
+    // Two of the same marker in reach: the nearer one moves.
+    put(1, 0, "Here", near, 2);
+    const float nearer[3] = {10.9f, 0.f, 10.f};
+    CHECK(protocol::choosePingCell(c, 3, 0, "Here", nearer) == 1);
+    // At the limit a different marker takes the cell set longest ago; a free cell is not used.
+    put(2, 2, "Danger", far, 3);
+    CHECK(protocol::choosePingCell(c, 3, 5, "Race start", far) == 0);
+    c[0].order = 9; // cell 0 was placed again: now cell 1 is the oldest
+    CHECK(protocol::choosePingCell(c, 3, 5, "Race start", far) == 1);
+    CHECK(protocol::choosePingCell(c, 4, 5, "Race start", far) == 3); // room for one more
+    // A cell whose marker is gone is free again, and is not "the same marker".
+    c[1].live = false;
+    CHECK(protocol::choosePingCell(c, 3, 0, "Here", near) == 0);
+    CHECK(protocol::choosePingCell(c, 3, 5, "Race start", far) == 1);
+    // The limit is kept inside 1..kPingCells.
+    CHECK(protocol::choosePingCell(c, 0, 5, "Race start", far) == 2);   // limit 1: the oldest of the live ones
+    CHECK(protocol::choosePingCell(c, 99, 5, "Race start", far) == 1);
+    for (int i = 0; i < protocol::kPingCells; ++i) put(i, 1, "x", far, 10 + static_cast<uint64_t>(i));
+    CHECK(protocol::choosePingCell(c, 99, 5, "Race start", here) == 0); // all five in use: the oldest
 }
 
 static void testRgb() {
@@ -300,6 +446,9 @@ int main() {
     testKnownTypes();
     testRecentIds();
     testPing();
+    testPingLabel();
+    testPingTail();
+    testPingCells();
     testRgb();
     testChat();
     testLossWindow();

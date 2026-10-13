@@ -73,6 +73,13 @@ size_t writePing(char* buf, const Header& h, const Ping& pg) {
     put(p, pg.pos);
     put(p, pg.flags);
     put(p, pg.rgb);
+    const std::string label = cleanPingLabel(pg.label);
+    put(p, static_cast<uint8_t>(label.size()));
+    memcpy(p, label.data(), label.size());
+    p += label.size();
+    put(p, pg.life);
+    put(p, pg.accent);
+    put(p, pg.index);
     return static_cast<size_t>(p - buf);
 }
 
@@ -81,9 +88,55 @@ bool readPing(const char* payload, size_t n, Ping& out) {
     const char* end = payload + n;
     Ping pg;
     if (!get(p, end, pg.id) || !get(p, end, pg.pos) || !sanePosition(pg.pos)) return false;
-    if (get(p, end, pg.flags)) get(p, end, pg.rgb); // optional tail; the defaults stay otherwise
+    // Optional tail (older senders stop early); the defaults stay otherwise. A damaged label is dropped
+    // with everything after it (where that starts is not known then); the marker itself is still good.
+    bool haveIndex = false;
+    if (get(p, end, pg.flags) && get(p, end, pg.rgb)) {
+        uint8_t len = 0;
+        if (get(p, end, len) && len <= kMaxPingLabelBytes && static_cast<size_t>(end - p) >= len) {
+            pg.label = cleanPingLabel(std::string(p, len));
+            p += len;
+            uint8_t accent[3];
+            if (get(p, end, pg.life) && get(p, end, accent)) {
+                memcpy(pg.accent, accent, sizeof(accent));
+                haveIndex = get(p, end, pg.index);
+            }
+        }
+    }
+    const bool clear = (pg.flags & kPingClear) != 0;
+    if (!haveIndex || pg.index >= kPingCells) pg.index = clear ? kPingAllCells : 0;
     out = pg;
     return true;
+}
+
+bool samePingMarker(const PingCellView& cell, uint8_t glyph, const std::string& label, const float pos[3]) {
+    if (!cell.live || cell.glyph != glyph || cell.label != label) return false;
+    float d2 = 0.f;
+    for (int i = 0; i < 3; ++i) d2 += (cell.pos[i] - pos[i]) * (cell.pos[i] - pos[i]);
+    return d2 <= kPingMergeMetres * kPingMergeMetres;
+}
+
+int choosePingCell(const PingCellView cells[kPingCells], int limit, uint8_t glyph, const std::string& label,
+                   const float pos[3]) {
+    limit = limit < 1 ? 1 : (limit > kPingCells ? kPingCells : limit);
+    int same = -1, free = -1, oldest = -1, live = 0;
+    float sameD2 = 0.f;
+    for (int i = 0; i < kPingCells; ++i) {
+        const PingCellView& c = cells[i];
+        if (!c.live) {
+            if (free < 0) free = i;
+            continue;
+        }
+        ++live;
+        if (oldest < 0 || c.order < cells[oldest].order) oldest = i;
+        if (!samePingMarker(c, glyph, label, pos)) continue;
+        float d2 = 0.f;
+        for (int k = 0; k < 3; ++k) d2 += (c.pos[k] - pos[k]) * (c.pos[k] - pos[k]);
+        if (same < 0 || d2 < sameD2) { same = i; sameD2 = d2; }
+    }
+    if (same >= 0) return same;
+    if (live < limit && free >= 0) return free;
+    return oldest >= 0 ? oldest : 0;
 }
 
 bool parseRgb(const std::string& hex, uint8_t rgb[3]) {
@@ -164,16 +217,22 @@ size_t utf8PrefixLength(const std::string& s, size_t maxBytes) {
     return n;
 }
 
-std::string cleanChatText(const std::string& raw) {
+namespace {
+// No control characters, no leading/trailing spaces, cut at `maxBytes` without splitting a character.
+std::string cleanText(const std::string& raw, size_t maxBytes) {
     std::string s;
     for (unsigned char c : raw)
         if (c >= 0x20 && c != 0x7f) s.push_back(static_cast<char>(c));
     const size_t a = s.find_first_not_of(' ');
     if (a == std::string::npos) return std::string();
     s = s.substr(a, s.find_last_not_of(' ') - a + 1);
-    s.resize(utf8PrefixLength(s, kMaxChatBytes));
+    s.resize(utf8PrefixLength(s, maxBytes));
     return s;
 }
+} // namespace
+
+std::string cleanChatText(const std::string& raw) { return cleanText(raw, kMaxChatBytes); }
+std::string cleanPingLabel(const std::string& raw) { return cleanText(raw, kMaxPingLabelBytes); }
 
 size_t writeChat(char* buf, const Header& h, uint32_t id, const std::string& text) {
     const std::string t = cleanChatText(text);

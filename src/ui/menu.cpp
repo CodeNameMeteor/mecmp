@@ -5,6 +5,8 @@
 
 #include "ui/menu.h"
 
+#include <cfloat>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <string>
@@ -14,12 +16,14 @@
 #include "core/config.h"
 #include "game/mumble_link.h"
 #include "game/ghosts.h"
+#include "game/ping_point.h"
 #include "game/teleport.h"
 #include "game/models.h"
 #include "imgui.h"
 #include "net/net.h"
 #include "net/protocol.h"
 #include "ui/gamepad.h"
+#include "ui/glyph.h"
 #include "ui/overlay.h"
 
 namespace mecmp::ui::menu {
@@ -27,10 +31,11 @@ namespace {
 
 char g_name[net::protocol::kMaxNameBytes + 1] = {}; // what fits on the wire
 char g_code[64] = {};
+char g_label[config::kWheels][config::kPingSlots][net::protocol::kMaxPingLabelBytes + 1] = {}; // the marker wheels' titles
 bool g_inited = false;
 bool g_keyCapture = false; // waiting for a new menu key
-bool g_pingKeyCapture = false; // waiting for a new marker key
-std::string g_pingKeyNote;     // why the last marker key was refused (empty = nothing to say)
+int g_bindCapture = -1;        // which key of the Markers section is being recorded (see kKeyBinds; -1 = none)
+std::string g_bindNote[2];     // why the last key was refused (empty = nothing to say)
 gamepad::Action g_padCapture = gamepad::Action::Count; // which gamepad binding is being recorded (Count = none)
 DWORD g_hintUntil = 0;
 
@@ -255,38 +260,6 @@ void myLookSection() {
     ImGui::NewLine();
 }
 
-// Markers ("pings") and the arrows on the screen's edge (experimental).
-void markersSection() {
-    const auto cfg = config::get();
-    bool showPings = cfg->showPings;
-    if (ImGui::Checkbox("Markers (experimental)", &showPings))
-        config::change([showPings](config::Settings& c) { c.showPings = showPings; });
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Each player can place one marker where they stand (%s%s). It lasts 30 s;\n"
-                          "off screen it shows as an arrow on the screen's edge.",
-                          cfg->pingKey.empty() ? "no key set" : cfg->pingKey.c_str(),
-                          gamepad::parse(cfg->pingPad) ? (" or " + gamepad::format(gamepad::parse(cfg->pingPad))).c_str() : "");
-    ImGui::SameLine();
-    uint8_t rgb[3] = {255, 210, 60};
-    net::protocol::parseRgb(cfg->pingColor, rgb);
-    float col[3] = {rgb[0] / 255.f, rgb[1] / 255.f, rgb[2] / 255.f};
-    if (ImGui::ColorEdit3("##pingcolour", col, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel)) {
-        for (int i = 0; i < 3; ++i) rgb[i] = static_cast<uint8_t>(col[i] < 0 ? 0 : (col[i] > 1 ? 255 : col[i] * 255.f + 0.5f));
-        const std::string hex = net::protocol::formatRgb(rgb);
-        config::change([hex](config::Settings& c) { c.pingColor = hex; });
-    }
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Your marker's colour, as everyone sees it");
-    ImGui::SameLine();
-    if (ImGui::SmallButton("Clear my marker")) net::clearPing();
-    bool showArrows = cfg->showArrows;
-    if (ImGui::Checkbox("Arrows to players off screen (experimental)", &showArrows))
-        config::change([showArrows](config::Settings& c) { c.showArrows = showArrows; });
-    bool pingPulse = cfg->pingPulse;
-    if (ImGui::Checkbox("Flash a marker when it arrives", &pingPulse))
-        config::change([pingPulse](config::Settings& c) { c.pingPulse = pingPulse; });
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("The marker blinks and rings spread from it for a moment when it is placed or moves");
-}
-
 // One line under the Mumble checkbox: what is missing, or that positions go out.
 void voiceStatus() {
     const game::mumble::Status s = game::mumble::status();
@@ -329,7 +302,6 @@ void lookSection() {
         ImGui::SetTooltip("With Mumble running (Positional Audio and the Link plugin on, everyone on the same\n"
                           "Mumble server), players in this session hear each other from where they are.");
     voiceStatus();
-    markersSection();
     if (ImGui::Button("Show ghosts")) game::ghosts::requestSpawnOrRefresh();
     ImGui::SameLine();
     if (ImGui::Button("Hide ghosts")) game::ghosts::requestHideAll();
@@ -357,10 +329,13 @@ bool pressedActionKey(std::string& name) {
 }
 
 // One gamepad binding: its buttons, Change (hold the buttons, let go) and Clear.
-void padRow(const char* label, gamepad::Action action, const std::string& current, std::string config::Settings::*field) {
+void padRow(const char* label, gamepad::Action action, const std::string& current, std::string config::Settings::*field,
+            const char* tip = nullptr) {
+    ImGui::PushID("pad"); // key rows and gamepad rows share a section: keep their buttons' ids apart
     ImGui::PushID(static_cast<int>(action));
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted(label);
+    if (tip && ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
     ImGui::SameLine();
     uint16_t got = 0;
     if (gamepad::capturing() && g_padCapture == action) {
@@ -381,7 +356,8 @@ void padRow(const char* label, gamepad::Action action, const std::string& curren
         const uint16_t bits = gamepad::parse(current);
         ImGui::Text("%s", bits ? gamepad::format(bits).c_str() : "none");
         ImGui::SameLine();
-        ImGui::BeginDisabled(gamepad::capturing()); // one binding is recorded at a time
+        // One binding is recorded at a time, and only a gamepad can press its buttons.
+        ImGui::BeginDisabled(gamepad::capturing() || !gamepad::active());
         if (ImGui::SmallButton("Change")) {
             g_padCapture = action;
             gamepad::beginCapture();
@@ -394,8 +370,535 @@ void padRow(const char* label, gamepad::Action action, const std::string& curren
                 config::change([field](config::Settings& c) { (c.*field).clear(); });
             }
         }
+        if (!gamepad::active()) {
+            ImGui::SameLine();
+            ImGui::TextDisabled("no gamepad connected");
+        }
     }
     ImGui::PopID();
+    ImGui::PopID();
+}
+
+// --- Markers --------------------------------------------------------------------------------------
+
+// A slider that is saved when it is let go, not on every step of the drag. `value` is what it shows
+// from the first change until the setting has caught up.
+struct SliderEdit { int value = 0; bool editing = false; };
+SliderEdit g_lifeEdit, g_maxEdit;
+
+// True once, when the slider was let go after a change: the caller saves `edit.value`.
+bool settingSlider(const char* label, SliderEdit& edit, int current, int lo, int hi, const char* format, ImGuiSliderFlags flags) {
+    int v = edit.editing ? edit.value : current;
+    if (ImGui::SliderInt(label, &v, lo, hi, format, flags | ImGuiSliderFlags_AlwaysClamp)) {
+        edit.value = v;
+        edit.editing = true;
+    }
+    const bool done = ImGui::IsItemDeactivatedAfterEdit();
+    if (edit.editing && !done && !ImGui::IsItemActive() && current == edit.value) edit.editing = false;
+    return done;
+}
+
+// One of the two marker colors: a swatch that opens a picker.
+void markerColor(const char* id, const std::string& current, std::string config::Settings::*field, const char* tip, uint8_t fallback) {
+    uint8_t rgb[3] = {fallback, fallback, fallback};
+    net::protocol::parseRgb(current, rgb);
+    float col[3] = {rgb[0] / 255.f, rgb[1] / 255.f, rgb[2] / 255.f};
+    if (ImGui::ColorEdit3(id, col, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_NoTooltip)) {
+        for (int i = 0; i < 3; ++i) rgb[i] = static_cast<uint8_t>(col[i] < 0 ? 0 : (col[i] > 1 ? 255 : col[i] * 255.f + 0.5f));
+        const std::string hex = net::protocol::formatRgb(rgb);
+        config::change([hex, field](config::Settings& c) { c.*field = hex; });
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
+}
+
+// "Wheel 1: Nice!"
+std::string slotName(const config::Settings& cfg, int wheel, int slot) {
+    const std::string& label = cfg.wheels[wheel][slot].label;
+    return "Wheel " + std::to_string(wheel + 1) + ": " + (label.empty() ? "slot " + std::to_string(slot + 1) : label);
+}
+
+// The keys of the Markers section: a letter, Enter or one of the menu keys (and for some a mouse
+// button). Change = press the new one; Clear = none.
+struct KeyBind {
+    const char* tip;
+    std::string config::Settings::*field;
+    bool (*set)(const std::string&);
+    bool mouse; // mouse buttons 3..5 may be bound too
+};
+const KeyBind kKeyBinds[2] = {
+    {"Tap to place a marker. Hold to open the marker wheel.", &config::Settings::pingKey, &ui::setPingKey, false},
+    {"Hold for a moment to remove all your markers.", &config::Settings::pingClearKey, &ui::setPingClearKey, true},
+};
+
+void keyRow(const config::Settings& cfg, int which) {
+    const KeyBind& bind = kKeyBinds[which];
+    const auto field = bind.field;
+    const std::string& current = cfg.*field;
+    ImGui::PushID("key");
+    ImGui::PushID(which);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("Key:");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", bind.tip);
+    ImGui::SameLine();
+    if (g_bindCapture == which) {
+        ImGui::TextColored(ImVec4(1.f, 0.85f, 0.3f, 1.f), bind.mouse ? "press a key or a mouse button (Esc cancels)" : "press a key (Esc cancels)");
+        std::string name;
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+            g_bindCapture = -1;
+        } else {
+            bool got = pressedActionKey(name);
+            for (int m = 2; m <= 4 && !got && bind.mouse; ++m)
+                if (ImGui::IsMouseClicked(m)) {
+                    name = "MOUSE" + std::to_string(m + 1);
+                    got = true;
+                }
+            if (got) {
+                if (bind.set(name)) {
+                    config::change([name, field](config::Settings& c) { c.*field = name; });
+                    g_bindNote[which].clear();
+                } else {
+                    g_bindNote[which] = ui::keyLabel(name) + " is already in use";
+                }
+                g_bindCapture = -1;
+            }
+        }
+        if (g_bindCapture < 0) ui::setKeyCapture(false);
+    } else {
+        ImGui::Text("%s", current.empty() ? "none" : ui::keyLabel(current).c_str());
+        ImGui::SameLine();
+        ImGui::BeginDisabled(g_keyCapture || g_bindCapture >= 0 || gamepad::capturing());
+        if (ImGui::SmallButton("Change")) {
+            g_bindCapture = which;
+            g_bindNote[which].clear();
+            ui::setKeyCapture(true);
+        }
+        ImGui::EndDisabled();
+        if (!current.empty()) {
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Clear")) {
+                bind.set("");
+                config::change([field](config::Settings& c) { (c.*field).clear(); });
+            }
+        }
+        if (!g_bindNote[which].empty()) {
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(1.f, 0.45f, 0.4f, 1.f), "%s", g_bindNote[which].c_str());
+        }
+    }
+    ImGui::PopID();
+    ImGui::PopID();
+}
+
+// What a short press of the marker key places.
+void tapModeRows(const config::Settings& cfg) {
+    ImGui::Text("Pressing %s:", cfg.pingKey.empty() ? "the marker key" : cfg.pingKey.c_str());
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("What a quick tap of the marker key places");
+    if (ImGui::RadioButton("places the last marker you picked", cfg.pingTap == 0))
+        config::change([](config::Settings& c) { c.pingTap = 0; });
+    if (ImGui::RadioButton("always places:", cfg.pingTap != 0)) config::change([](config::Settings& c) { c.pingTap = 1; });
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 13);
+    const int fixedWheel = cfg.pingFixedWheel < cfg.wheelCount ? cfg.pingFixedWheel : 0;
+    if (ImGui::BeginCombo("##pingtap", slotName(cfg, fixedWheel, cfg.pingFixedSlot).c_str())) {
+        for (int w = 0; w < cfg.wheelCount; ++w)
+            for (int i = 0; i < config::kPingSlots; ++i) {
+                const std::string id = slotName(cfg, w, i) + "##" + std::to_string(w * config::kPingSlots + i);
+                if (ImGui::Selectable(id.c_str(), w == fixedWheel && i == cfg.pingFixedSlot))
+                    config::change([w, i](config::Settings& c) {
+                        c.pingTap = 1;
+                        c.pingFixedWheel = w;
+                        c.pingFixedSlot = i;
+                    });
+            }
+        ImGui::EndCombo();
+    }
+}
+
+// A square button showing icon `glyph`. True when clicked.
+bool iconButton(const char* id, uint8_t glyph, float size, ImU32 fill, ImU32 accent, bool selected) {
+    ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(selected ? ImGuiCol_Header : ImGuiCol_FrameBg));
+    const bool clicked = ImGui::Button(id, ImVec2(size, size));
+    ImGui::PopStyleColor();
+    const ImVec2 a = ImGui::GetItemRectMin();
+    drawGlyph(ImGui::GetWindowDrawList(), glyph, ImVec2(a.x + size * 0.5f, a.y + size * 0.5f), size * 0.33f, fill, 1.f, accent);
+    return clicked;
+}
+
+void loadLabels(int w, const config::Wheel& wheel) {
+    for (int i = 0; i < config::kPingSlots; ++i) snprintf(g_label[w][i], sizeof(g_label[w][i]), "%s", wheel[i].label.c_str());
+}
+
+// Removes wheel `w` (one the player added): the wheels after it move down one place.
+void removeWheel(const config::Settings& cfg, int w) {
+    for (int k = w; k + 1 < cfg.wheelCount; ++k) loadLabels(k, cfg.wheels[k + 1]);
+    loadLabels(cfg.wheelCount - 1, config::defaultWheel(cfg.wheelCount - 1));
+    config::change([w](config::Settings& c) {
+        if (w < config::kDefaultWheels || w >= c.wheelCount) return;
+        for (int k = w; k + 1 < c.wheelCount; ++k) c.wheels[k] = c.wheels[k + 1];
+        --c.wheelCount;
+        c.wheels[c.wheelCount] = config::defaultWheel(c.wheelCount);
+        // What pointed at the removed wheel goes back to the first marker; what came after it follows its wheel.
+        auto fix = [w](int& wheel, int* slot) {
+            if (wheel == w) {
+                wheel = 0;
+                if (slot) *slot = 0;
+            } else if (wheel > w) {
+                --wheel;
+            }
+        };
+        fix(c.pingWheel, nullptr);
+        fix(c.pingLastWheel, &c.pingLastSlot);
+        fix(c.pingFixedWheel, &c.pingFixedSlot);
+    });
+}
+
+// One wheel's nine slots: the icon (click for the list of icons) and the title, which is what the others read.
+void wheelEditor(const config::Settings& cfg, int w) {
+    uint8_t rgb[3] = {255, 210, 60}, acc[3] = {255, 255, 255};
+    net::protocol::parseRgb(cfg.pingColor, rgb);
+    net::protocol::parseRgb(cfg.pingAccent, acc);
+    const ImU32 fill = IM_COL32(rgb[0], rgb[1], rgb[2], 255), accent = IM_COL32(acc[0], acc[1], acc[2], 255);
+    const float h = ImGui::GetFrameHeight();
+    for (int i = 0; i < config::kPingSlots; ++i) {
+        ImGui::PushID(i);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextDisabled("%d", i + 1);
+        ImGui::SameLine();
+        if (iconButton("##icon", cfg.wheels[w][i].glyph, h, fill, accent, false)) ImGui::OpenPopup("icons");
+        if (ImGui::BeginPopup("icons")) {
+            for (int g = 0; g < kGlyphCount; ++g) {
+                ImGui::PushID(g);
+                if (g % 8) ImGui::SameLine();
+                if (iconButton("##pick", static_cast<uint8_t>(g), h * 1.4f, fill, accent, g == cfg.wheels[w][i].glyph)) {
+                    config::change([w, i, g](config::Settings& c) { c.wheels[w][i].glyph = static_cast<uint8_t>(g); });
+                    ImGui::CloseCurrentPopup();
+                }
+                ImGui::PopID();
+            }
+            ImGui::EndPopup();
+        }
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 14);
+        if (ImGui::InputTextWithHint("##label", "(no title)", g_label[w][i], sizeof(g_label[w][i]))) {
+            const std::string text = net::protocol::cleanPingLabel(g_label[w][i]);
+            config::change([w, i, text](config::Settings& c) { c.wheels[w][i].label = text; });
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("The text others see above this marker. Up to %d bytes (about %d Latin or %d Cyrillic\n"
+                              "letters). Leave empty for an icon only.",
+                              static_cast<int>(net::protocol::kMaxPingLabelBytes), static_cast<int>(net::protocol::kMaxPingLabelBytes),
+                              static_cast<int>(net::protocol::kMaxPingLabelBytes / 2));
+        ImGui::PopID();
+    }
+    const bool own = w >= config::kDefaultWheels; // a wheel the player added
+    if (ImGui::SmallButton("Reset this wheel")) {
+        loadLabels(w, config::defaultWheel(w));
+        config::change([w](config::Settings& c) { c.wheels[w] = config::defaultWheel(w); });
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip(own ? "Clears every slot of this wheel" : "Back to the default icons and titles");
+    if (own) {
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Remove this wheel")) removeWheel(cfg, w);
+    }
+}
+
+// --- The lists at the top of the Markers section: my markers, my bookmarks, the others' markers ----
+
+// The title being edited in one of the lists (one at a time).
+enum class Renaming { None, Placed, Bookmark };
+Renaming g_renaming = Renaming::None;
+int g_renameIndex = -1;
+char g_renameText[net::protocol::kMaxPingLabelBytes + 1] = {};
+bool g_renameFocus = false;
+
+void beginRename(Renaming what, int index, const std::string& current) {
+    g_renaming = what;
+    g_renameIndex = index;
+    snprintf(g_renameText, sizeof(g_renameText), "%s", current.c_str());
+    g_renameFocus = true;
+}
+
+// The edit line of the title being renamed. True, with the new title in `out`, when it was confirmed.
+bool renameField(std::string& out) {
+    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 11);
+    if (g_renameFocus) {
+        ImGui::SetKeyboardFocusHere();
+        g_renameFocus = false;
+    }
+    bool ok = ImGui::InputTextWithHint("##rename", "(no title)", g_renameText, sizeof(g_renameText), ImGuiInputTextFlags_EnterReturnsTrue);
+    ImGui::SameLine();
+    ok = ImGui::SmallButton("OK") || ok;
+    ImGui::SameLine();
+    const bool cancel = ImGui::SmallButton("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape, false);
+    if (ok) out = net::protocol::cleanPingLabel(g_renameText);
+    if (ok || cancel) g_renaming = Renaming::None;
+    return ok;
+}
+
+// An icon at the start of a list row, as tall as the row.
+void rowIcon(uint8_t glyph, const uint8_t rgb[3], const uint8_t accent[3]) {
+    const float h = ImGui::GetFrameHeight();
+    const ImVec2 a = ImGui::GetCursorScreenPos();
+    drawGlyph(ImGui::GetWindowDrawList(), glyph, ImVec2(a.x + h * 0.5f, a.y + h * 0.5f), h * 0.33f, IM_COL32(rgb[0], rgb[1], rgb[2], 255),
+              1.f, IM_COL32(accent[0], accent[1], accent[2], 255));
+    ImGui::Dummy(ImVec2(h, h));
+    ImGui::SameLine();
+}
+
+// "42 m, 0:25 left": how far a marker is from me and how long it still stays (only the time while I am
+// not in a level).
+std::string distanceText(const float pos[3], const float* me);
+std::string whereAndLeft(const net::PingInfo& p, const float* me) {
+    const std::string away = distanceText(p.pos, me);
+    const unsigned left = (p.leftMs + 999) / 1000;
+    char b[48];
+    snprintf(b, sizeof(b), "%s%s%u:%02u left", away.c_str(), away.empty() ? "" : ", ", left / 60, left % 60);
+    return b;
+}
+
+// "42 m" from me to `pos`; empty while I am not in a level.
+std::string distanceText(const float pos[3], const float* me) {
+    if (!me) return std::string();
+    float d2 = 0.f;
+    for (int i = 0; i < 3; ++i) d2 += (pos[i] - me[i]) * (pos[i] - me[i]);
+    char b[24];
+    snprintf(b, sizeof(b), "%.0f m", std::sqrt(d2));
+    return b;
+}
+
+const char* titleOr(const std::string& label) { return label.empty() ? "(no title)" : label.c_str(); }
+
+void addBookmark(const std::string& label, uint8_t glyph, const float pos[3]) {
+    config::Bookmark b;
+    b.label = label;
+    b.glyph = glyph;
+    memcpy(b.pos, pos, sizeof(b.pos));
+    config::change([b](config::Settings& c) {
+        if (c.bookmarks.size() < config::kMaxBookmarks) c.bookmarks.push_back(b);
+    });
+}
+
+// "Bookmark" for a marker of mine or of someone else.
+void bookmarkButton(const config::Settings& cfg, const net::PingInfo& p) {
+    const bool full = cfg.bookmarks.size() >= config::kMaxBookmarks;
+    ImGui::BeginDisabled(full);
+    if (ImGui::SmallButton("Bookmark")) addBookmark(p.label, p.glyph, p.pos);
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip(full ? "You have %d bookmarks already: delete one first" : "Saves this spot, icon and title to your bookmarks",
+                          static_cast<int>(config::kMaxBookmarks));
+}
+
+void placedList(const config::Settings& cfg, const std::vector<net::PingInfo>& pings, const float* me) {
+    int count = 0;
+    for (const auto& p : pings) count += p.own ? 1 : 0;
+    char head[48];
+    snprintf(head, sizeof(head), "Placed markers (%d)###placed", count);
+    if (!ImGui::TreeNode(head)) return;
+    if (!count) ImGui::TextDisabled("You have no markers placed.");
+    for (const auto& p : pings) {
+        if (!p.own) continue;
+        ImGui::PushID(p.index);
+        rowIcon(p.glyph, p.rgb, p.accent);
+        ImGui::AlignTextToFramePadding();
+        if (g_renaming == Renaming::Placed && g_renameIndex == p.index) {
+            std::string title;
+            if (renameField(title)) net::renamePing(p.index, title);
+        } else {
+            ImGui::TextUnformatted(titleOr(p.label));
+            ImGui::SameLine();
+            ImGui::TextDisabled("%s", whereAndLeft(p, me).c_str());
+            ImGui::Indent(ImGui::GetFrameHeight() + ImGui::GetStyle().ItemSpacing.x);
+            if (ImGui::SmallButton("Move")) game::ping::requestMove(p.index);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Moves this marker to where a new one would go now");
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Renew")) net::renewPing(p.index);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Starts this marker's time again");
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Rename")) beginRename(Renaming::Placed, p.index, p.label);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Changes the title of this marker only");
+            ImGui::SameLine();
+            bookmarkButton(cfg, p);
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Delete")) net::removePing(p.index);
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Removes this marker for everyone");
+            ImGui::Unindent(ImGui::GetFrameHeight() + ImGui::GetStyle().ItemSpacing.x);
+        }
+        ImGui::PopID();
+    }
+    ImGui::TreePop();
+}
+
+void bookmarkList(const config::Settings& cfg, const float* me) {
+    char head[48];
+    snprintf(head, sizeof(head), "Bookmarks (%d)###bookmarks", static_cast<int>(cfg.bookmarks.size()));
+    if (!ImGui::TreeNode(head)) return;
+    if (cfg.bookmarks.empty()) ImGui::TextDisabled("Nothing saved yet. \"Bookmark\" on a marker saves its spot.");
+    uint8_t rgb[3] = {255, 210, 60}, accent[3] = {255, 255, 255};
+    net::protocol::parseRgb(cfg.pingColor, rgb);
+    net::protocol::parseRgb(cfg.pingAccent, accent);
+    for (int i = 0; i < static_cast<int>(cfg.bookmarks.size()); ++i) {
+        const config::Bookmark& b = cfg.bookmarks[static_cast<size_t>(i)];
+        ImGui::PushID(i);
+        rowIcon(b.glyph, rgb, accent);
+        ImGui::AlignTextToFramePadding();
+        if (g_renaming == Renaming::Bookmark && g_renameIndex == i) {
+            std::string title;
+            if (renameField(title))
+                config::change([i, title](config::Settings& c) {
+                    if (i < static_cast<int>(c.bookmarks.size())) c.bookmarks[static_cast<size_t>(i)].label = title;
+                });
+        } else {
+            ImGui::TextUnformatted(titleOr(b.label));
+            ImGui::SameLine();
+            ImGui::TextDisabled("%s", distanceText(b.pos, me).c_str());
+            ImGui::Indent(ImGui::GetFrameHeight() + ImGui::GetStyle().ItemSpacing.x);
+            if (ImGui::SmallButton("Place")) {
+                net::PingStyle style;
+                memcpy(style.rgb, rgb, sizeof(rgb));
+                memcpy(style.accent, accent, sizeof(accent));
+                style.glyph = b.glyph;
+                style.label = b.label;
+                style.seconds = cfg.pingSeconds;
+                net::sendPing(b.pos, style, cfg.pingMax);
+            }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Places a marker here for everyone to see");
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Rename")) beginRename(Renaming::Bookmark, i, b.label);
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Delete")) {
+                g_renaming = Renaming::None; // the rows below move up
+                config::change([i](config::Settings& c) {
+                    if (i < static_cast<int>(c.bookmarks.size())) c.bookmarks.erase(c.bookmarks.begin() + i);
+                });
+            }
+            ImGui::Unindent(ImGui::GetFrameHeight() + ImGui::GetStyle().ItemSpacing.x);
+        }
+        ImGui::PopID();
+    }
+    ImGui::TreePop();
+}
+
+void othersList(const config::Settings& cfg, const std::vector<net::PingInfo>& pings, const float* me) {
+    int count = 0;
+    for (const auto& p : pings) count += p.own ? 0 : 1;
+    char head[56];
+    snprintf(head, sizeof(head), "Other placed markers (%d)###others", count);
+    if (!ImGui::TreeNode(head)) return;
+    if (!count) ImGui::TextDisabled("Nobody else has a marker placed.");
+    for (const auto& p : pings) {
+        if (p.own) continue;
+        ImGui::PushID(static_cast<int>(p.owner));
+        ImGui::PushID(p.index);
+        rowIcon(p.glyph, p.rgb, p.accent);
+        ImGui::AlignTextToFramePadding();
+        ImGui::Text("%s: %s", p.name.c_str(), titleOr(p.label));
+        ImGui::SameLine();
+        ImGui::TextDisabled("%s", whereAndLeft(p, me).c_str());
+        ImGui::SameLine();
+        bookmarkButton(cfg, p);
+        ImGui::PopID();
+        ImGui::PopID();
+    }
+    ImGui::TreePop();
+}
+
+void markerLists(const config::Settings& cfg) {
+    static net::PlayerState local; // large; render thread only
+    const float* me = net::localState(local) ? local.pos : nullptr;
+    const auto pings = net::pings();
+    placedList(cfg, pings, me);
+    bookmarkList(cfg, me);
+    othersList(cfg, pings, me);
+}
+
+void markersSection() {
+    ImGui::SeparatorText("Markers");
+    const auto cfgPtr = config::get();
+    const config::Settings& cfg = *cfgPtr;
+    markerLists(cfg);
+    bool showPings = cfg.showPings;
+    if (ImGui::Checkbox("Show markers", &showPings)) config::change([showPings](config::Settings& c) { c.showPings = showPings; });
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Shows your markers and everyone else's. A marker that is off screen becomes an arrow\n"
+                          "on the edge of the screen.");
+    ImGui::SameLine();
+    markerColor("##pingcolor", cfg.pingColor, &config::Settings::pingColor, "Your marker's color", 255);
+    ImGui::SameLine();
+    markerColor("##pingaccent", cfg.pingAccent, &config::Settings::pingAccent, "Your secondary marker's color", 255);
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Clear my markers")) net::clearPing();
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Removes all your markers for everyone");
+    bool showArrows = cfg.showArrows;
+    if (ImGui::Checkbox("Player arrows", &showArrows)) config::change([showArrows](config::Settings& c) { c.showArrows = showArrows; });
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Shows an arrow on the edge of the screen towards each player you cannot see");
+    bool pingPulse = cfg.pingPulse;
+    if (ImGui::Checkbox("Flash markers when placed", &pingPulse))
+        config::change([pingPulse](config::Settings& c) { c.pingPulse = pingPulse; });
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("New and moved markers blink for a split second so they are easier to spot");
+
+    // How long a marker stays (the wire carries it in steps of 5 s).
+    const int shown = g_lifeEdit.editing ? g_lifeEdit.value : cfg.pingSeconds;
+    char life[32];
+    if (shown < 60) snprintf(life, sizeof(life), "%d s", shown);
+    else if (shown % 60) snprintf(life, sizeof(life), "%d min %d s", shown / 60, shown % 60);
+    else snprintf(life, sizeof(life), "%d min", shown / 60);
+    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 10);
+    if (settingSlider("Marker lifetime", g_lifeEdit, cfg.pingSeconds, 5, 300, life, ImGuiSliderFlags_Logarithmic)) {
+        const int seconds = net::protocol::pingLifeUnits(g_lifeEdit.value) * 5;
+        g_lifeEdit.value = seconds;
+        config::change([seconds](config::Settings& c) { c.pingSeconds = seconds; });
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("How long your markers last: 5 seconds to 5 minutes");
+    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 10);
+    if (settingSlider("Markers at once", g_maxEdit, cfg.pingMax, 1, net::protocol::kPingCells, "%d", 0)) {
+        const int n = g_maxEdit.value;
+        config::change([n](config::Settings& c) { c.pingMax = n; });
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("How many markers you can have at the same time. Your oldest one is removed when you go\n"
+                          "over the limit. Placing the same marker within 1.5 m of one of yours moves it instead.");
+
+    if (ImGui::TreeNode("Marker binds")) {
+        ImGui::TextUnformatted("Place a marker / open the wheel");
+        ImGui::Indent();
+        keyRow(cfg, 0);
+        padRow("Gamepad:", gamepad::Action::Ping, cfg.pingPad, &config::Settings::pingPad,
+               "The same on a gamepad: tap to place and hold for the wheel. The right stick chooses.");
+        ImGui::Unindent();
+        ImGui::TextUnformatted("Clear markers");
+        ImGui::Indent();
+        keyRow(cfg, 1);
+        padRow("Gamepad:", gamepad::Action::PingClear, cfg.pingClearPad, &config::Settings::pingClearPad,
+               "While you hold the marker button: removes all your markers.");
+        ImGui::Unindent();
+        tapModeRows(cfg);
+        ImGui::TreePop();
+    }
+    if (ImGui::TreeNode("Marker wheels")) {
+        if (ImGui::BeginTabBar("wheels")) {
+            for (int w = 0; w < cfg.wheelCount; ++w) {
+                const std::string tab = "Wheel " + std::to_string(w + 1);
+                if (ImGui::BeginTabItem(tab.c_str())) {
+                    wheelEditor(cfg, w);
+                    ImGui::EndTabItem();
+                }
+            }
+            if (cfg.wheelCount < config::kWheels) {
+                if (ImGui::TabItemButton("+", ImGuiTabItemFlags_Trailing | ImGuiTabItemFlags_NoTooltip)) {
+                    loadLabels(cfg.wheelCount, config::defaultWheel(cfg.wheelCount));
+                    config::change([](config::Settings& c) {
+                        if (c.wheelCount >= config::kWheels) return;
+                        c.wheels[c.wheelCount] = config::defaultWheel(c.wheelCount);
+                        ++c.wheelCount;
+                    });
+                }
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Add a wheel (up to %d)", config::kWheels);
+            }
+            ImGui::EndTabBar();
+        }
+        ImGui::TreePop();
+    }
 }
 
 void controlsSection() {
@@ -425,7 +928,7 @@ void controlsSection() {
     } else {
         ImGui::Text("%s", cfg->menuKey.c_str());
         ImGui::SameLine();
-        ImGui::BeginDisabled(g_pingKeyCapture); // one key is recorded at a time
+        ImGui::BeginDisabled(g_bindCapture >= 0); // one key is recorded at a time
         if (ImGui::SmallButton("Change##key")) {
             g_keyCapture = true;
             ui::setKeyCapture(true);
@@ -434,49 +937,6 @@ void controlsSection() {
     }
     // Gamepad buttons that open it.
     padRow("Gamepad:", gamepad::Action::Menu, cfg->menuPad, &config::Settings::menuPad);
-    // The marker key: a letter, Enter or one of the menu keys. Change = press the new key; Clear = none.
-    ImGui::AlignTextToFramePadding();
-    ImGui::Text("Marker key:");
-    ImGui::SameLine();
-    if (g_pingKeyCapture) {
-        ImGui::TextColored(ImVec4(1.f, 0.85f, 0.3f, 1.f), "press a key (Esc cancels)");
-        std::string name;
-        if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
-            g_pingKeyCapture = false;
-        } else if (pressedActionKey(name)) {
-            if (ui::setPingKey(name)) {
-                config::change([name](config::Settings& c) { c.pingKey = name; });
-                g_pingKeyNote.clear();
-            } else {
-                g_pingKeyNote = name + " is the menu or chat key";
-            }
-            g_pingKeyCapture = false;
-        }
-        if (!g_pingKeyCapture) ui::setKeyCapture(false);
-    } else {
-        ImGui::Text("%s", cfg->pingKey.empty() ? "none" : cfg->pingKey.c_str());
-        ImGui::SameLine();
-        ImGui::BeginDisabled(g_keyCapture || gamepad::capturing());
-        if (ImGui::SmallButton("Change##pingkey")) {
-            g_pingKeyCapture = true;
-            g_pingKeyNote.clear();
-            ui::setKeyCapture(true);
-        }
-        ImGui::EndDisabled();
-        if (!cfg->pingKey.empty()) {
-            ImGui::SameLine();
-            if (ImGui::SmallButton("Clear##pingkey")) {
-                ui::setPingKey("");
-                config::change([](config::Settings& c) { c.pingKey.clear(); });
-            }
-        }
-        if (!g_pingKeyNote.empty()) {
-            ImGui::SameLine();
-            ImGui::TextColored(ImVec4(1.f, 0.45f, 0.4f, 1.f), "%s", g_pingKeyNote.c_str());
-        }
-    }
-    padRow("Marker gamepad:", gamepad::Action::Ping, cfg->pingPad, &config::Settings::pingPad);
-    if (!gamepad::active()) ImGui::TextDisabled("No gamepad seen yet.");
 }
 
 // "INSERT or LS+RS"
@@ -510,6 +970,7 @@ void draw(bool open) {
         g_inited = true;
         snprintf(g_name, sizeof(g_name), "%s", config::get()->name.c_str());
         snprintf(g_code, sizeof(g_code), "%s", config::get()->join.c_str());
+        for (int w = 0; w < config::kWheels; ++w) loadLabels(w, config::get()->wheels[w]);
         g_hintUntil = GetTickCount() + 10000;
     }
     if (!open) {
@@ -528,6 +989,8 @@ void draw(bool open) {
     ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + vp->WorkSize.y * 0.5f),
                             ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
     ImGui::SetNextWindowSize(ImVec2(ImGui::GetFontSize() * 30, 0), ImGuiCond_FirstUseEver);
+    // Never taller than the screen: the rest scrolls.
+    ImGui::SetNextWindowSizeConstraints(ImVec2(0, 0), ImVec2(FLT_MAX, vp->WorkSize.y * 0.94f));
     char title[64];
     snprintf(title, sizeof(title), "MECMP %s###mecmp", app::kVersion);
     ImGui::Begin(title, nullptr, ImGuiWindowFlags_NoCollapse);
@@ -535,6 +998,7 @@ void draw(bool open) {
     playersSection();
     myLookSection();
     lookSection();
+    markersSection();
     controlsSection();
     ImGui::Spacing();
     ImGui::TextDisabled("%s closes this menu", openKeys(*config::get()).c_str());

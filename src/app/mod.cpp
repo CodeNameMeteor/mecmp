@@ -103,7 +103,9 @@ void monitorLoop() {
     uintptr_t lastWorld = 0;
     DWORD levelSince = GetTickCount(), nextScanAt = 15000;
     int scans = 0;
-    int echoTries = 0;
+    int echoScans = 0;
+    DWORD echoCheckedAt = 0;
+    int worldsSeen = 0;
 #if MECMP_DEBUG_KEYS
     // Developer hotkeys (not in release builds; see CMakeLists.txt).
     struct Key { int vk; bool down; void (*action)(); };
@@ -130,18 +132,25 @@ void monitorLoop() {
             levelSince = GetTickCount();
             nextScanAt = 15000;
             scans = 0;
-            echoTries = 0;
+            echoScans = 0;
+            if (world) ++worldsSeen;
         }
-        // The ghost look list (styles x colours) comes from the level's time-trial markers: look for it
-        // 5, 10, 20 and 40 s into a level, then after 2 and 4 minutes if there was none yet (a scan that
-        // finds nothing reads the whole heap, so not more often). Ghosts waiting for it get their look
-        // right after.
-        static constexpr DWORD kEchoAt[] = {5000, 10000, 20000, 40000, 120000, 240000};
-        constexpr int kEchoTries = static_cast<int>(sizeof(kEchoAt) / sizeof(kEchoAt[0]));
-        if (world && echoTries < kEchoTries && GetTickCount() - levelSince > kEchoAt[echoTries] &&
-            game::models::echoes()->empty()) {
-            ++echoTries;
-            if (game::models::findEchoes()) {
+        // Memory scans (each reads the game's whole heap, about a second) are a fallback, mainly for the
+        // level that was already running when the mod loaded; later levels are seen being built by
+        // the hooks (spawners, client objects, the look catalogue's time-trial markers), so they get
+        // at most one scan, 60 s in, and only if something is still missing in a level you play in.
+        const bool firstWorld = worldsSeen == 1;
+        const DWORD inLevel = GetTickCount() - levelSince;
+        const bool lateScanDue = !firstWorld && inLevel > 60000 && game::level::playerCharacter();
+        // The ghost look list (styles x colours) comes from the level's time-trial markers, noted as they
+        // are created: checked every second (cheap). Fallback memory scan 20 s and 60 s into the first
+        // level. Ghosts waiting for the list get their look right after.
+        if (world && GetTickCount() - echoCheckedAt >= 1000 && game::models::echoes()->empty()) {
+            echoCheckedAt = GetTickCount();
+            static constexpr DWORD kEchoScanAt[] = {20000, 60000};
+            const bool scanNow = firstWorld ? echoScans < 2 && inLevel > kEchoScanAt[echoScans] : echoScans < 1 && lateScanDue;
+            if (scanNow) ++echoScans;
+            if (game::models::findEchoes(scanNow)) {
                 fixMyLook();
                 game::ghosts::lookListArrived();
             }
@@ -150,7 +159,8 @@ void monitorLoop() {
         // made)? Look for them in memory: 15 s into the level, and if something is still missing
         // again after 1, 3 and 7 minutes. A full scan reads the whole private heap, so no more.
         constexpr int kMaxScansPerLevel = 4;
-        if (world && scans < kMaxScansPerLevel && GetTickCount() - levelSince > nextScanAt && !game::level::complete()) {
+        if (world && (firstWorld ? scans < kMaxScansPerLevel && inLevel > nextScanAt : scans < 1 && lateScanDue) &&
+            !game::level::complete()) {
             ++scans;
             game::level::scanForMissing();
             nextScanAt = 15000 + 60000u * ((1u << scans) - 1); // 75 s, 195 s, 435 s after the level started

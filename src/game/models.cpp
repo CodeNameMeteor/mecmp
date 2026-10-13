@@ -282,19 +282,36 @@ uint32_t defaultEcho() {
     return list.empty() ? 0 : list.front().hash;
 }
 
-// PamServerCustomizeProjectionCharacterEntity (time-trial markers; vtable 0x141c7ea80): +0x28 its data,
-// data +0x20 PamEchoCustomizationDefinitionsMeta, meta +0x18 Array<PamEchoCustomizationData> (0x28
-// each: +0x18 CustomizeCharacterData*, +0x20 u32 CustomizationHash). (See Ghidra: ..._vf4 0x143a83e70.)
-bool findEchoes() {
-    {
-        std::lock_guard<std::mutex> lock(g_m);
-        if (!g_echoes->empty()) return true;
+namespace {
+// Look-picker entities seen being created (factory hook). Never cleared: a stale entry fails the vtable
+// and data checks below, and the newest come first.
+std::mutex g_seenM;
+std::vector<uintptr_t> g_seen;
+
+// The catalogue of one look-picker entity: entity +0x28 data, data +0x20 meta, meta +0x18 array.
+bool readCatalogue(uintptr_t ent, std::vector<Echo>& found) {
+    if (mem::readOr<uintptr_t>(ent) != rva(Vtbl_PamServerCustomizeProjectionCharacterEntity)) return false;
+    const uintptr_t data = mem::readOr<uintptr_t>(ent + 0x28);
+    const uintptr_t meta = data ? mem::readOr<uintptr_t>(data + 0x20) : 0;
+    const uintptr_t arr = meta ? mem::readOr<uintptr_t>(meta + 0x18) : 0;
+    const uint32_t count = arr ? mem::readOr<uint32_t>(arr - 4) : 0;
+    if (!count || count > 512) return false;
+    for (uint32_t k = 0; k < count; ++k) {
+        const uintptr_t e = arr + k * 0x28;
+        Echo x;
+        x.ccd = mem::readOr<uintptr_t>(e + 0x18);
+        x.hash = mem::readOr<uint32_t>(e + 0x20);
+        if (!x.ccd || !x.hash || !mem::readCString(mem::readOr<uintptr_t>(x.ccd + Asset_Name), x.name)) continue;
+        splitEchoName(x.name, x.style, x.colour);
+        found.push_back(x);
     }
+    return !found.empty();
+}
+
+bool scanForCatalogue(std::vector<Echo>& found) {
     const uintptr_t vt = rva(Vtbl_PamServerCustomizeProjectionCharacterEntity);
     std::vector<uint8_t> buf(4 << 20);
-    std::vector<Echo> found;
     MEMORY_BASIC_INFORMATION mbi{};
-    const DWORD start = GetTickCount();
     for (uintptr_t addr = 0x10000; found.empty() && VirtualQuery(reinterpret_cast<void*>(addr), &mbi, sizeof(mbi)) == sizeof(mbi);
          addr = reinterpret_cast<uintptr_t>(mbi.BaseAddress) + mbi.RegionSize) {
         if (mbi.State != MEM_COMMIT || mbi.Type != MEM_PRIVATE || mbi.Protect != PAGE_READWRITE) continue;
@@ -303,34 +320,51 @@ bool findEchoes() {
             const size_t n = std::min(buf.size(), static_cast<size_t>(mbi.RegionSize - off));
             if (!mem::read(base + off, buf.data(), n)) continue;
             const auto* q = reinterpret_cast<const uintptr_t*>(buf.data());
-            for (size_t i = 0; found.empty() && i < n / 8; ++i) {
-                if (q[i] != vt) continue;
-                const uintptr_t ent = base + off + i * 8;
-                const uintptr_t data = mem::readOr<uintptr_t>(ent + 0x28);
-                const uintptr_t meta = data ? mem::readOr<uintptr_t>(data + 0x20) : 0;
-                const uintptr_t arr = meta ? mem::readOr<uintptr_t>(meta + 0x18) : 0;
-                const uint32_t count = arr ? mem::readOr<uint32_t>(arr - 4) : 0;
-                if (!count || count > 512) continue;
-                for (uint32_t k = 0; k < count; ++k) {
-                    const uintptr_t e = arr + k * 0x28;
-                    Echo x;
-                    x.ccd = mem::readOr<uintptr_t>(e + 0x18);
-                    x.hash = mem::readOr<uint32_t>(e + 0x20);
-                    if (!x.ccd || !x.hash || !mem::readCString(mem::readOr<uintptr_t>(x.ccd + Asset_Name), x.name)) continue;
-                    splitEchoName(x.name, x.style, x.colour);
-                    found.push_back(x);
-                }
-            }
+            for (size_t i = 0; found.empty() && i < n / 8; ++i)
+                if (q[i] == vt) readCatalogue(base + off + i * 8, found);
         }
     }
+    return !found.empty();
+}
+} // namespace
+
+void onCustomizeEntity(void* entity) {
+    if (!entity) return;
+    std::lock_guard<std::mutex> lock(g_seenM);
+    g_seen.insert(g_seen.begin(), reinterpret_cast<uintptr_t>(entity));
+    if (g_seen.size() > 32) g_seen.pop_back();
+}
+
+// PamServerCustomizeProjectionCharacterEntity (time-trial markers; vtable 0x141c7ea80): +0x28 its data,
+// data +0x20 PamEchoCustomizationDefinitionsMeta, meta +0x18 Array<PamEchoCustomizationData> (0x28
+// each: +0x18 CustomizeCharacterData*, +0x20 u32 CustomizationHash). (See Ghidra: ..._vf4 0x143a83e70.)
+bool findEchoes(bool allowScan) {
+    {
+        std::lock_guard<std::mutex> lock(g_m);
+        if (!g_echoes->empty()) return true;
+    }
+    std::vector<uintptr_t> seen;
+    {
+        std::lock_guard<std::mutex> lock(g_seenM);
+        seen = g_seen;
+    }
+    std::vector<Echo> found;
+    const DWORD start = GetTickCount();
+    const char* how = "from a time-trial marker";
+    for (uintptr_t ent : seen)
+        if (readCatalogue(ent, found)) break;
+    if (found.empty() && allowScan) {
+        how = "by memory scan";
+        scanForCatalogue(found);
+    }
     if (found.empty()) {
-        MLOG("model: no ghost look list found yet (%.1f s)", (GetTickCount() - start) / 1000.0);
+        if (allowScan) MLOG("model: no ghost look list found yet (%.1f s)", (GetTickCount() - start) / 1000.0);
         return false;
     }
     std::sort(found.begin(), found.end(), [](const Echo& a, const Echo& b) {
         return a.style != b.style ? a.style < b.style : a.colour < b.colour;
     });
-    MLOG("model: %llu ghost looks found (%.1f s), e.g. %s = %08x", static_cast<unsigned long long>(found.size()),
+    MLOG("model: %llu ghost looks found %s (%.1f s), e.g. %s = %08x", static_cast<unsigned long long>(found.size()), how,
          (GetTickCount() - start) / 1000.0, found.front().name.c_str(), found.front().hash);
     std::lock_guard<std::mutex> lock(g_m);
     g_echoes = std::make_shared<const std::vector<Echo>>(std::move(found));

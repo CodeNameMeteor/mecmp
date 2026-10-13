@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -29,6 +30,8 @@ struct Addr {
     bool operator!=(const Addr& o) const { return !(*this == o); }
 };
 std::string toString(const Addr& a);
+std::string ipToString(uint32_t ip);
+bool parseIp(const std::string& text, uint32_t& ip); // "1.2.3.4" -> host byte order
 
 struct Config {
     std::string name = "MECMP server";
@@ -42,6 +45,8 @@ struct Config {
     // Test mode: each player also gets their own packets back as a second player ("mirror", 3 m away
     // along world X), so one person can test a server alone. Chat is not mirrored.
     bool mirror = false;
+    std::string motd;             // chat line sent to each player when they join (empty: none)
+    size_t maxPerIp = 4;          // players from one IP address (a household, or one person flooding)
 };
 
 // The id a player's mirror uses in test mode.
@@ -76,6 +81,12 @@ public:
     // Console. `who` is a session id (hex, as `list` shows it) or a player name.
     bool kick(const std::string& who, uint32_t nowMs);
     void say(const std::string& text); // chat from the server (sent 3 times, like a player's)
+    // Bans are by IP address. `who`: a player's id or name (their address is banned) or an IP. Players
+    // on a banned address are dropped at once. Returns the banned IP (0 = no such player / address).
+    uint32_t ban(const std::string& who);
+    bool unban(const std::string& ip);
+    const std::set<uint32_t>& bans() const { return bans_; }
+    void setBans(std::set<uint32_t> ips); // e.g. bans.txt (re)loaded; drops players now banned
 
     const std::vector<Member>& members() const { return members_; }
     const Stats& stats() const { return stats_; }
@@ -88,6 +99,10 @@ private:
     bool blocked(const Addr& a, uint32_t nowMs);
     void drop(size_t index, const char* why);
     void sendHello();
+    void sendHelloTo(const Addr& to);
+    // A short chat line to an address that is not let in (full, banned): at most one per 15 s each.
+    void notify(const Addr& to, const std::string& text, uint32_t nowMs);
+    void queueChat(const std::string& text, const Addr* only);
 
     Config cfg_;
     uint32_t session_;
@@ -100,13 +115,16 @@ private:
     bool haveHello_ = false;
     struct Block { uint32_t ip; uint16_t port; uint32_t until; };
     std::vector<Block> blocks_;
-    struct OutChat { uint32_t id; std::string text; int left; };
+    struct OutChat { uint32_t id; std::string text; int left; bool targeted; Addr to; };
     std::deque<OutChat> chat_;
     uint32_t chatId_;
     uint32_t chatSeen_[32] = {};
     size_t chatSeenNext_ = 0;
     uint32_t fullWarnAt_ = 0;
     bool fullWarned_ = false;
+    std::set<uint32_t> bans_;
+    struct Notice { Addr to; uint32_t at; };
+    std::vector<Notice> notices_;
 };
 
 // Player names and chat as the clients clean them: no control characters.

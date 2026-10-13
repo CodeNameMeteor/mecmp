@@ -2,6 +2,7 @@
 //   g++ -std=c++17 -Isrc tests/server_test.cpp src/server/relay.cpp src/net/protocol.cpp -o server_test && ./server_test
 #include <cstdio>
 #include <cstring>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -277,7 +278,95 @@ static void testMirror() {
     CHECK(out.pos[0] == 13.f);
 }
 
+static int chatsTo(const Harness& t, const Addr& a, std::string* last = nullptr) {
+    int n = 0;
+    for (const auto& s : t.sent) {
+        proto::Header h;
+        memcpy(&h, s.data.data(), sizeof(h));
+        if (s.to != a || h.type != proto::kTypeChat) continue;
+        ++n;
+        uint32_t id = 0;
+        std::string text;
+        if (last && proto::readChat(s.data.data() + sizeof(h), s.data.size() - sizeof(h), id, text)) *last = text;
+    }
+    return n;
+}
+
+static void testBans() {
+    Harness t;
+    auto hA = hello(1, "alice"), hB = hello(2, "bob");
+    t.relay.onPacket(A, hA.data(), hA.size(), 0);
+    t.relay.onPacket(B, hB.data(), hB.size(), 0);
+    CHECK(t.relay.ban("alice") == A.ip);
+    CHECK(t.relay.members().size() == 1);
+    t.sent.clear();
+    t.relay.onPacket(A, hA.data(), hA.size(), 100); // refused, told why (HELLO + the line twice)
+    CHECK(t.relay.members().size() == 1);
+    std::string text;
+    CHECK(chatsTo(t, A, &text) == 2);
+    CHECK(text == "You are banned from this server.");
+    t.sent.clear();
+    t.relay.onPacket(A, hA.data(), hA.size(), 5000); // not told again so soon
+    CHECK(t.sent.empty());
+    const Addr A2{A.ip, 6000}; // another port, same address: still banned
+    t.relay.onPacket(A2, hA.data(), hA.size(), 5000);
+    CHECK(t.relay.members().size() == 1);
+    CHECK(t.relay.unban("10.0.0.1"));
+    CHECK(!t.relay.unban("10.0.0.1"));
+    t.relay.onPacket(A, hA.data(), hA.size(), 6000);
+    CHECK(t.relay.members().size() == 2);
+    CHECK(t.relay.ban("10.0.0.9") == 0x0a000009); // an IP nobody uses yet
+    CHECK(t.relay.ban("nobody") == 0);
+    std::set<uint32_t> list = {B.ip};
+    t.relay.setBans(list); // a reloaded bans.txt: bob goes, the 10.0.0.9 ban is gone
+    CHECK(t.relay.members().size() == 1 && t.relay.members()[0].addr == A);
+    CHECK(t.relay.bans().size() == 1);
+    uint32_t ip = 0;
+    CHECK(server::parseIp("192.168.1.20", ip) && ip == 0xc0a80114);
+    CHECK(!server::parseIp("192.168.1", ip) && !server::parseIp("1.2.3.4x", ip) && !server::parseIp("256.1.1.1", ip));
+}
+
+static void testFullNoticeAndPerIp() {
+    server::Config cfg;
+    cfg.maxPlayers = 1;
+    Harness t(cfg);
+    auto hA = hello(1, "a"), hB = hello(2, "b");
+    t.relay.onPacket(A, hA.data(), hA.size(), 0);
+    t.sent.clear();
+    t.relay.onPacket(B, hB.data(), hB.size(), 0);
+    std::string text;
+    CHECK(chatsTo(t, B, &text) == 2 && text == "This server is full (1/1). Try again later.");
+
+    server::Config cfg2;
+    cfg2.maxPerIp = 2;
+    Harness u(cfg2);
+    for (uint16_t port = 1; port <= 3; ++port) {
+        auto h = hello(100 + port, "x");
+        u.relay.onPacket({A.ip, port}, h.data(), h.size(), 0);
+    }
+    CHECK(u.relay.members().size() == 2);
+    CHECK(chatsTo(u, Addr{A.ip, 3}) == 2);
+}
+
+static void testMotd() {
+    server::Config cfg;
+    cfg.motd = "Welcome to Beat Link";
+    Harness t(cfg);
+    auto hA = hello(1, "alice"), hB = hello(2, "bob");
+    t.relay.onPacket(A, hA.data(), hA.size(), 0);
+    t.relay.onPacket(B, hB.data(), hB.size(), 0);
+    t.relay.onPacket(A, hA.data(), hA.size(), 10); // a second HELLO: no second welcome
+    t.sent.clear();
+    for (uint32_t ms = 50; ms <= 300; ms += 50) t.relay.tick(ms);
+    std::string text;
+    CHECK(chatsTo(t, A, &text) == 3 && text == "Welcome to Beat Link");
+    CHECK(chatsTo(t, B) == 3); // bob's own welcome, not alice's
+}
+
 int main() {
+    testBans();
+    testFullNoticeAndPerIp();
+    testMotd();
     testMirror();
     testForwardsToOthers();
     testHelloFlagsCleared();

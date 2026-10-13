@@ -106,6 +106,8 @@ constexpr const char* kDefaultIniTail =
     "show_arrows=1\r\n"
     "; 1 = a marker flashes for a moment when it arrives or moves (0 = no animation)\r\n"
     "ping_pulse=1\r\n"
+    "; 1 = a marker goes where you look (up to 300 m away), 0 = where you stand\r\n"
+    "ping_aim=1\r\n"
     "\r\n"
     "[bookmarks]\r\n"
     "; spots saved from markers in the menu: count, then b1.. = icon|x|y|z|title (x, y, z in centimetres)\r\n"
@@ -246,6 +248,7 @@ void load(const std::wstring& dir) {
     s.showPings = readInt(ini, L"ui", L"show_pings", 1) != 0;
     s.showArrows = readInt(ini, L"ui", L"show_arrows", 1) != 0;
     s.pingPulse = readInt(ini, L"ui", L"ping_pulse", 1) != 0;
+    s.pingAim = readInt(ini, L"ui", L"ping_aim", 1) != 0;
     s.pingColor = readString(ini, L"player", L"ping_color", "ffd23c");
     s.pingAccent = readString(ini, L"player", L"ping_accent", "ffffff");
     s.pingSeconds = clampInt(readInt(ini, L"player", L"ping_seconds", 30), 5, 300);
@@ -353,6 +356,7 @@ void applyPending() {
     put(L"ui", L"show_pings", snapshot->showPings ? "1" : "0");
     put(L"ui", L"show_arrows", snapshot->showArrows ? "1" : "0");
     put(L"ui", L"ping_pulse", snapshot->pingPulse ? "1" : "0");
+    put(L"ui", L"ping_aim", snapshot->pingAim ? "1" : "0");
     put(L"player", L"ping_color", snapshot->pingColor);
     put(L"player", L"ping_accent", snapshot->pingAccent);
     put(L"player", L"ping_seconds", std::to_string(snapshot->pingSeconds));

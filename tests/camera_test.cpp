@@ -45,6 +45,10 @@ int main() {
     using mecmp::game::distanceFade;
     CHECK(distanceFade(0) == 1.f && distanceFade(40) == 1.f && distanceFade(150) == 0.f && distanceFade(1000) == 0.f);
     CHECK(near(distanceFade(95), 0.5f, 0.01f));
+    using mecmp::game::kMarkerFadeFullUntil;
+    using mecmp::game::kMarkerFadeGoneAt;
+    CHECK(distanceFade(50, kMarkerFadeFullUntil, kMarkerFadeGoneAt) == 1.f && distanceFade(300, kMarkerFadeFullUntil, kMarkerFadeGoneAt) == 0.f);
+    CHECK(near(distanceFade(175, kMarkerFadeFullUntil, kMarkerFadeGoneAt), 0.5f, 0.01f));
 
     // --- Pointers on the screen's edge (markers, off-screen players) ---
     using mecmp::game::EdgeIndicator;

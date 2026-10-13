@@ -18,9 +18,10 @@ void request();                    // what a short press places (config: ping_ta
 void requestMove(int index);       // move my marker in that cell (net::PingInfo::index) to where a new one would go
 void tick();                       // server game thread, every tick
 
-// The point a new marker is placed at. v1: the local player's own position (their feet).
-// RESEARCH (v2): the point the camera looks at, from a ray cast into the world. That needs a game
-// call whose address is not known yet; when it is, only this function changes.
+// The point a new marker is placed at: what the camera looks at (a ray cast into the world,
+// game/raycast.h), or the local player's own position (their feet) when that is switched off
+// (config: ping_aim), nothing is in reach, or the ray cast is not available in this build.
+// Server game thread only.
 bool pickPoint(float out[3]);
 
 } // namespace mecmp::game::ping

@@ -17,6 +17,7 @@
 #include "game/mumble_link.h"
 #include "game/ghosts.h"
 #include "game/ping_point.h"
+#include "game/raycast.h"
 #include "game/teleport.h"
 #include "game/models.h"
 #include "imgui.h"
@@ -916,6 +917,16 @@ void markersSection() {
     if (ImGui::Checkbox("Flash markers when placed", &pingPulse))
         config::change([pingPulse](config::Settings& c) { c.pingPulse = pingPulse; });
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("New and moved markers blink for a split second so they are easier to spot");
+    const bool canAim = game::raycast::available();
+    bool pingAim = cfg.pingAim && canAim;
+    ImGui::BeginDisabled(!canAim);
+    if (ImGui::Checkbox("Place markers where I look", &pingAim))
+        config::change([pingAim](config::Settings& c) { c.pingAim = pingAim; });
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip(canAim ? "Markers land on what the center of your screen points at, up to 300 m away.\n"
+                                   "Off, or with nothing in reach: where you stand."
+                                 : "Not available in this version of the game: markers go where you stand");
 
     // How long a marker stays (the wire carries it in steps of 5 s).
     const int shown = g_lifeEdit.editing ? g_lifeEdit.value : cfg.pingSeconds;

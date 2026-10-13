@@ -98,7 +98,9 @@ void sessionSection() {
             if (ImGui::SmallButton("Copy##lan")) copyToClipboard(lan);
         }
     } else {
-        ImGui::Text("Joined %s", config::get()->join.c_str());
+        const std::string server = net::serverName();
+        if (!server.empty()) ImGui::Text("Server: %s (%s)", server.c_str(), config::get()->join.c_str());
+        else ImGui::Text("Joined %s", config::get()->join.c_str());
         ImGui::SameLine();
         if (net::connectedToHost()) ImGui::TextColored(ImVec4(0.4f, 1.f, 0.4f, 1.f), "connected");
         else ImGui::TextColored(ImVec4(1.f, 0.5f, 0.3f, 1.f), "waiting for the host...");
@@ -120,7 +122,7 @@ void sessionSection() {
     ImGui::TextDisabled("(friends join with your code)");
 
     ImGui::SetNextItemWidth(ImGui::GetFontSize() * 10);
-    ImGui::InputTextWithHint("##code", "join code", g_code, sizeof(g_code), ImGuiInputTextFlags_CharsUppercase);
+    ImGui::InputTextWithHint("##code", "join code or server address", g_code, sizeof(g_code));
     ImGui::SameLine();
     if (ImGui::Button("Paste")) snprintf(g_code, sizeof(g_code), "%s", fromClipboard().c_str());
     ImGui::SameLine();
@@ -128,7 +130,8 @@ void sessionSection() {
     ImGui::BeginDisabled(noCode);
     if (ImGui::Button("Join")) startSession(g_code);
     ImGui::EndDisabled();
-    if (noCode && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) ImGui::SetTooltip("Enter the host's join code first.");
+    if (noCode && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip("Enter the host's join code, or a server's address (name or ip, :port if not 47800).");
     if (ImGui::Button("Solo test (mirror me)")) startSession("127.0.0.1:" + std::to_string(config::get()->port));
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Test on your own PC: a ghost copies your moves 3 m away (it does not turn with you; look around for it).");
 }

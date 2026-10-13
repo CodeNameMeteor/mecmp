@@ -32,6 +32,10 @@ forwards everyone's movement to everyone, so friends need nothing opened on thei
 
 **Joining**: paste the host's code in the menu and press *Join* (or set `join=2HMAS-W9ENR`).
 
+**Servers**: a dedicated server (`mecmp_server`, runs without the game, for example on a VPS) is a
+session that is always there. Type its address in the same field (`play.example.com`, with `:port`
+when not 47800) and press *Join*; the menu shows *Server: <name>*. Running one: [docs/SERVER.md](docs/SERVER.md).
+
 If the host's router has UPnP turned off, forward UDP 47800 to the host's PC by hand. If the log
 says the address is not reachable (carrier-grade NAT, common on mobile internet), let another
 player host. Players on the same network can use the LAN code from the log.
@@ -95,7 +99,8 @@ cmake -B build -DCMAKE_SYSTEM_NAME=Windows -DCMAKE_CXX_COMPILER=x86_64-w64-mingw
 cmake --build build
 ```
 
-Outputs: `mecmp.dll` (the mod), `mecmp_inject.exe` (loader), `version.dll` (optional proxy loader).
+Outputs: `mecmp.dll` (the mod), `mecmp_inject.exe` (loader), `version.dll` (optional proxy loader),
+`mecmp_server.exe` (dedicated server). On Linux, the same CMake build makes only `mecmp_server`.
 
 ## Layout
 
@@ -104,9 +109,10 @@ src/app     startup, per-tick update, hotkeys, crash logging
 src/core    log, config (mecmp.ini), safe memory access, engine type list
 src/game    engine addresses, hooks, level state, ghosts, ghost models, local player capture
 src/net     UDP peer-to-peer link, wire protocol, UPnP, join codes
+src/server  dedicated server relay rules (portable, tested on Linux)
 src/ui      in-game overlay (Dear ImGui on the game's D3D11 swap chain) and the menu
 third_party Dear ImGui 1.91.9 (MIT)
-tools       injector and version.dll proxy
+tools       injector, version.dll proxy, dedicated server program
 docs        how it works and the roadmap
 ```
 

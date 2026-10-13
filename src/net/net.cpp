@@ -106,6 +106,7 @@ std::thread g_thread;
 SOCKET g_sock = INVALID_SOCKET;
 uint32_t g_session = 0;
 std::atomic<uint32_t> g_hostSession{0}; // JOIN: the host's session id, from its HELLO (0 until heard)
+std::string g_serverName;                // JOIN: the dedicated server's name (empty: a player hosts); under g_m
 float g_loopbackOffset = 3.0f;
 uint16_t g_port = 47800;
 // Router port mapping (host). Map and unmap calls are serialised, and an unmap is skipped when a
@@ -452,7 +453,16 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
         uint8_t flags = 0;
         proto::readHello(payload, len, raw, look, &flags);
         // Accepted only straight from the host (forwarded copies come from the host's address too, but have the flag cleared).
-        if ((flags & proto::kHelloHost) && !own && g_role == Role::Join && sameAddr(from, g_hostAddr)) g_hostSession = h.session;
+        if ((flags & proto::kHelloHost) && !own && g_role == Role::Join && sameAddr(from, g_hostAddr)) {
+            g_hostSession = h.session;
+            // A dedicated server: not a player (it sends no state, so it never gets a ghost or a list entry).
+            if (flags & proto::kHelloServer) {
+                const std::string serverName = cleanName(raw.data(), raw.size());
+                if (serverName != g_serverName) MLOG("net: the host is the dedicated server '%s'", serverName.c_str());
+                g_serverName = serverName;
+                return;
+            }
+        }
         if (look != r.look) {
             r.look = look;
             if (peerLogAllowed()) MLOG("net: player %08x looks like %s", r.id, look ? "a ghost look" : "Faith");
@@ -702,6 +712,7 @@ bool start(uint16_t port, const std::string& join, float loopbackOffset, const s
         g_members.clear();
         g_heardFromHost = false;
         g_hostSession = 0;
+        g_serverName.clear();
         g_joinCode.clear();
         g_lanCode.clear();
         g_name = name;
@@ -900,6 +911,10 @@ std::string joinCode() {
 }
 
 bool hosting() { return g_role == Role::Host; }
+std::string serverName() {
+    std::lock_guard<std::mutex> lock(g_m);
+    return g_role == Role::Join ? g_serverName : std::string();
+}
 uint32_t sessionKey() {
     if (!g_run) return 0;
     return g_role == Role::Host ? g_session : g_hostSession.load();

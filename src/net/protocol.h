@@ -178,9 +178,11 @@ bool parseRgb(const std::string& hex, uint8_t rgb[3]);
 std::string formatRgb(const uint8_t rgb[3]);
 
 size_t writeState(char* buf, const Header& h, const PlayerState& s, Encoder& enc);
-// HELLO: char name[24] | u32 look | u8 flags (bit 0: the sender hosts this session). Older senders stop
-// after the name or the look; missing fields read as 0.
+// HELLO: char name[24] | u32 look | u8 flags (bit 0: the sender hosts this session; bit 1: the sender is
+// a dedicated server, not a player: it sends no STATE and has no ghost). Older senders stop after the
+// name or the look; missing fields read as 0.
 constexpr uint8_t kHelloHost = 1;
+constexpr uint8_t kHelloServer = 2;
 constexpr size_t kHelloFlagsOffset = kNameLen + sizeof(uint32_t); // payload offset of the flags byte (after name and look)
 size_t writeHello(char* buf, const Header& h, const char* name, uint32_t look = 0, uint8_t flags = 0);
 // HELLO payload (after the header). `name` = the raw field (cleaned by the caller); `look` = 0 if absent.

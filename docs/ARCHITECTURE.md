@@ -124,6 +124,15 @@ Every style other than RunVis is a `MeshAndVariationPair`: a separate projection
 in free roam; with the full preset copy and the per-ghost shader the menu offers every catalogued style
 again (`models::echoRenders`: the look is in the catalogue).
 
+**Known limitation (tested 2026-10-13):** the per-ghost flag is the *runner's* ghost shader, which draws
+with the local player's own "Your Echo" style and colour. So every echo ghost shows in the viewer's own
+echo look, and changing "Your Echo" changes everyone's ghost; the look a player picks only decides that
+their ghost is an echo. With the flag off only RunVis renders (the other styles' assets are presumably
+not loaded in free roam; time trials load a rival's style before showing it). Showing each player's own
+style would need those assets loaded: open research. Also open: with the mod loaded, the game's own
+"Your Echo" preview can appear and vanish at once; the ghost spawner's list does not change when it does,
+so it is not the preview and our ghosts competing for that spawner. The cause is not known.
+
 Each player picks their own look (menu *Your look*: Faith, or a ghost style and colour; `[player]
 look=` in mecmp.ini: `faith` or `echo:<hash>`) and sends it with their name. Every ghost shows its
 player's look; there is no override on the receiving side. A newly chosen look is applied on the next tick.

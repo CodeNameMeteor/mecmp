@@ -114,6 +114,7 @@ void sessionSection() {
     ImGui::Spacing();
     ImGui::SetNextItemWidth(ImGui::GetFontSize() * 10);
     ImGui::InputText("Your name", g_name, sizeof(g_name));
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("The name other players see above your ghost");
     ImGui::SameLine();
     if (ImGui::Button("Set name")) {
         const std::string name = enteredName();
@@ -206,11 +207,13 @@ void myLookSection() {
     const auto echoesList = game::models::echoes();
     const auto& echoes = *echoesList;
     if (ImGui::RadioButton("Faith", mine == 0)) setMyLook(0);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("How the other players see you");
     ImGui::SameLine();
     if (ImGui::RadioButton("Ghost", mine != 0)) {
         if (!mine && !echoes.empty()) setMyLook(game::models::defaultEcho());
         else if (!mine) setMyLook(0xffffffffu); // chosen before the list is known: pick once it is
     }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("How the other players see you");
     if (!mine) return;
     if (echoes.empty()) {
         ImGui::TextDisabled("The ghost styles load in free roam.");
@@ -291,6 +294,8 @@ void lookSection() {
     bool showNotices = config::get()->showNotices;
     if (ImGui::Checkbox("Notices (join/leave, markers)", &showNotices))
         config::change([showNotices](config::Settings& c) { c.showNotices = showNotices; });
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Short messages at the top of the screen when someone joins, leaves or places a marker");
     bool showChat = config::get()->showChat;
     if (ImGui::Checkbox("Chat", &showChat)) config::change([showChat](config::Settings& c) { c.showChat = showChat; });
     ImGui::SameLine();
@@ -303,8 +308,10 @@ void lookSection() {
                           "Mumble server), players in this session hear each other from where they are.");
     voiceStatus();
     if (ImGui::Button("Show ghosts")) game::ghosts::requestSpawnOrRefresh();
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Brings the other players' ghosts back if they are missing");
     ImGui::SameLine();
     if (ImGui::Button("Hide ghosts")) game::ghosts::requestHideAll();
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Hides the other players' ghosts until you show them again");
 }
 
 // The action key pressed this frame (as ping_key names it: a letter, ENTER or a menu key), if any.
@@ -813,7 +820,6 @@ void markerLists(const config::Settings& cfg) {
 }
 
 void markersSection() {
-    ImGui::SeparatorText("Markers");
     const auto cfgPtr = config::get();
     const config::Settings& cfg = *cfgPtr;
     markerLists(cfg);
@@ -902,11 +908,11 @@ void markersSection() {
 }
 
 void controlsSection() {
-    ImGui::SeparatorText("Controls");
     const auto cfg = config::get();
     // Keyboard key that opens the menu.
     ImGui::AlignTextToFramePadding();
     ImGui::Text("Menu key:");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("The key that opens and closes this menu");
     ImGui::SameLine();
     if (g_keyCapture) {
         ImGui::TextColored(ImVec4(1.f, 0.85f, 0.3f, 1.f), "press a key (Esc cancels)");
@@ -936,7 +942,8 @@ void controlsSection() {
         ImGui::EndDisabled();
     }
     // Gamepad buttons that open it.
-    padRow("Gamepad:", gamepad::Action::Menu, cfg->menuPad, &config::Settings::menuPad);
+    padRow("Gamepad:", gamepad::Action::Menu, cfg->menuPad, &config::Settings::menuPad,
+           "Buttons held together to open and close this menu");
 }
 
 // "INSERT or LS+RS"
@@ -988,18 +995,33 @@ void draw(bool open) {
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + vp->WorkSize.y * 0.5f),
                             ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowSize(ImVec2(ImGui::GetFontSize() * 30, 0), ImGuiCond_FirstUseEver);
-    // Never taller than the screen: the rest scrolls.
+    // One size for all tabs (the longer ones scroll), never taller than the screen.
+    ImGui::SetNextWindowSize(ImVec2(ImGui::GetFontSize() * 30, vp->WorkSize.y * 0.7f), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSizeConstraints(ImVec2(0, 0), ImVec2(FLT_MAX, vp->WorkSize.y * 0.94f));
     char title[64];
     snprintf(title, sizeof(title), "MECMP %s###mecmp", app::kVersion);
     ImGui::Begin(title, nullptr, ImGuiWindowFlags_NoCollapse);
-    sessionSection();
-    playersSection();
-    myLookSection();
-    lookSection();
-    markersSection();
-    controlsSection();
+    if (ImGui::BeginTabBar("##tabs")) {
+        if (ImGui::BeginTabItem("Session")) {
+            sessionSection();
+            playersSection();
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Players")) {
+            myLookSection();
+            lookSection();
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Markers")) {
+            markersSection();
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Controls")) {
+            controlsSection();
+            ImGui::EndTabItem();
+        }
+        ImGui::EndTabBar();
+    }
     ImGui::Spacing();
     ImGui::TextDisabled("%s closes this menu", openKeys(*config::get()).c_str());
     ImGui::End();

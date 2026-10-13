@@ -347,6 +347,7 @@ void applyPending() {
     put(L"voice", L"mumble_link", snapshot->mumbleLink ? "1" : "0");
     put(L"ui", L"show_notices", snapshot->showNotices ? "1" : "0");
     put(L"ui", L"show_chat", snapshot->showChat ? "1" : "0");
+    put(L"ui", L"chat_key", snapshot->chatKey);
     put(L"ui", L"ping_key", snapshot->pingKey);
     put(L"ui", L"ping_pad", snapshot->pingPad);
     put(L"ui", L"show_pings", snapshot->showPings ? "1" : "0");

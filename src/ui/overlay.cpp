@@ -426,6 +426,17 @@ bool setPingClearKey(const std::string& name) {
     return true;
 }
 
+bool setChatKey(const std::string& name) {
+    if (name.empty()) {
+        g_chatKey = 0;
+        return true;
+    }
+    const int key = actionKeyFromName(name);
+    if (key == 0 || key == g_toggleKey.load() || key == g_pingKey.load() || key == g_pingClearKey.load()) return false;
+    g_chatKey = key;
+    return true;
+}
+
 int pingClearVk() { return g_pingClearKey.load(); }
 bool gameFocused() { return g_window && GetForegroundWindow() == g_window; }
 
@@ -449,8 +460,7 @@ int actionKeyFromName(const std::string& n) {
 
 bool install() {
     g_toggleKey = keyFromName(config::get()->menuKey);
-    const int chatKey = actionKeyFromName(config::get()->chatKey);
-    g_chatKey = chatKey ? chatKey : 'T';
+    g_chatKey = actionKeyFromName(config::get()->chatKey); // empty = no chat key
     // The marker key must not double as the menu or chat key (those win).
     const int pingKey = actionKeyFromName(config::get()->pingKey);
     g_pingKey = pingKey == g_toggleKey.load() || pingKey == g_chatKey.load() ? 0 : pingKey;

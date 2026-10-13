@@ -22,7 +22,7 @@ them off), and a short notice shows when someone joins or leaves (*Join/leave no
 list shows each player's connection: *good*, or the share of their updates that did not arrive. *Go to* next to a player
 takes you to them (a short fade, then you are where they are). Press **Enter** to
 chat (not while the game's own pause menu or map is up): type a line and press Enter (Escape cancels); messages show bottom-left for a while. The menu works with mouse, keyboard or gamepad; while it is open the game does not see the
-gamepad. Both menu buttons can be changed under *Controls*. Everything can also be set in
+gamepad. The *Controls* tab changes the keys and buttons for the menu, chat and markers. Everything can also be set in
 `mecmp.ini` (the menu saves to it).
 
 **Hosting** (the menu's *Host a session*, or `join=` empty in `mecmp.ini`): the mod asks your router to open UDP port 47800

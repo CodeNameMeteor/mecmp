@@ -47,6 +47,15 @@ std::atomic<bool> g_ownForget{false}; // level changed: what tick() remembers is
 std::atomic<unsigned> g_levelCount{0}; // goes up with every reset(): a piece scan across one is thrown away
 // The pieces the game itself gave the player (before our change), for the "faith" ghosts of the others.
 std::vector<uintptr_t> g_ownOriginal; // guarded by g_m
+// Pieces seen on the player character as the game dressed it: certainly the live assets (findPieces()
+// tells them from leftovers in memory by this). Guarded by g_m; level data.
+std::vector<uintptr_t> g_livePieces;
+void noteLivePieces(const std::vector<uintptr_t>& pieces) {
+    std::lock_guard<std::mutex> lock(g_m);
+    for (uintptr_t v : pieces)
+        if (std::find(g_livePieces.begin(), g_livePieces.end(), v) == g_livePieces.end() && g_livePieces.size() < 256)
+            g_livePieces.push_back(v);
+}
 
 std::string lower(std::string s) {
     for (auto& c : s) c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
@@ -160,6 +169,7 @@ void reset() {
     g_pieces.clear();
     g_piecesKnown = false;
     g_ownOriginal.clear();
+    g_livePieces.clear();
     g_ownForget = true;
     ++g_levelCount;
     g_echoes =std::make_shared<const std::vector<Echo>>(); // level data may go with the level: found again by findEchoes()
@@ -294,6 +304,7 @@ bool playerBasePieces(std::vector<uintptr_t>& out) {
     if (!out.empty()) return true;
     void* player = level::playerCharacter();
     if (!player || !readVisualSet(player, out)) return false;
+    noteLivePieces(out);
     if (!g_pieceVtable.load()) { // findPieces() needs it
         const uintptr_t vt = mem::readOr<uintptr_t>(out.front());
         if (inImage(vt)) g_pieceVtable = vt;
@@ -503,6 +514,7 @@ void tick() {
         original = now;
         setOriginal(original);
     }
+    noteLivePieces(original);
 
     const bool echo = static_cast<uint32_t>(wish) != 0;
     if (wish == g_own.key) {
@@ -567,10 +579,14 @@ bool findPieces() {
     if (!vt) return false; // no player character seen yet
     const unsigned level = g_levelCount.load();
     const DWORD start = GetTickCount();
-    std::map<std::string, uintptr_t> found;
+    // The heap can hold more than one object per name: what an earlier, torn down load of the level left
+    // behind looks just like the live asset, but its contents may be anything. So every candidate is
+    // collected, and the one to use is picked below.
+    std::map<std::string, std::vector<uintptr_t>> seen;
+    size_t objects = 0;
     std::vector<uint8_t> buf(4 << 20);
     MEMORY_BASIC_INFORMATION mbi{};
-    for (uintptr_t addr = 0x10000; found.size() < 4000 && VirtualQuery(reinterpret_cast<void*>(addr), &mbi, sizeof(mbi)) == sizeof(mbi);
+    for (uintptr_t addr = 0x10000; objects < 8000 && VirtualQuery(reinterpret_cast<void*>(addr), &mbi, sizeof(mbi)) == sizeof(mbi);
          addr = reinterpret_cast<uintptr_t>(mbi.BaseAddress) + mbi.RegionSize) {
         if (mbi.State != MEM_COMMIT || mbi.Type != MEM_PRIVATE || mbi.Protect != PAGE_READWRITE) continue;
         const uintptr_t base = reinterpret_cast<uintptr_t>(mbi.BaseAddress);
@@ -581,22 +597,62 @@ bool findPieces() {
             for (size_t i = 0; i < n / 8; ++i) {
                 if (q[i] != vt) continue;
                 const std::string name = lower(assetName(base + off + i * 8));
-                if (name.find("/unlock_") != std::string::npos) found.emplace(name, base + off + i * 8);
+                if (name.find("/unlock_") == std::string::npos) continue;
+                seen[name].push_back(base + off + i * 8);
+                ++objects;
             }
         }
     }
-    // RenderIn1p must be where it was found to be: set in every "..._1p" piece and in no other.
-    size_t firstPerson = 0, wrong = 0;
-    for (const auto& p : found) {
-        const bool is1p = isFirstPersonPiece(p.second);
-        firstPerson += is1p ? 1 : 0;
-        if (mem::readOr<uint8_t>(p.second + VisualUnlock_RenderIn1p, 0xff) != (is1p ? 1 : 0)) ++wrong;
+    // Pieces that are certainly the live ones: what the player wears, and what the looks seen in this
+    // level are made of.
+    std::vector<uintptr_t> live;
+    {
+        std::lock_guard<std::mutex> lock(g_m);
+        live = g_livePieces;
+        for (const auto& m : g_models) visualsOf(m.ccd, live);
+        for (const auto& e : *g_echoes) visualsOf(e.ccd, live);
     }
-    const bool twins = firstPerson >= 4 && wrong == 0;
+    auto isLive = [&live](uintptr_t v) { return std::find(live.begin(), live.end(), v) != live.end(); };
+    // A piece is what its name says: RenderIn1p set in a "..._1p" piece, clear in any other.
+    auto sane = [](uintptr_t v) {
+        return mem::readOr<uint8_t>(v + VisualUnlock_RenderIn1p, 0xff) == (isFirstPersonPiece(v) ? 1 : 0);
+    };
+    std::map<std::string, uintptr_t> found;
+    size_t doubles = 0, dropped = 0;
+    for (const auto& s : seen) {
+        if (s.second.size() > 1) ++doubles;
+        uintptr_t pick = 0;
+        for (uintptr_t v : s.second)
+            if (isLive(v)) { pick = v; break; }
+        for (size_t i = 0; !pick && i < s.second.size(); ++i)
+            if (sane(s.second[i])) pick = s.second[i];
+        if (!pick) {
+            ++dropped;
+            VLOG("look: piece '%s' left out (%llu in memory, none as its name says)", s.first.c_str(),
+                 static_cast<unsigned long long>(s.second.size()));
+            continue;
+        }
+        found.emplace(s.first, pick);
+    }
+    // First-person twins rely on RenderIn1p being where it was found to be: checked on the pieces the
+    // player wears (live for certain), which come in both kinds.
+    size_t firstPerson = 0, wrong = 0;
+    for (uintptr_t v : live) {
+        if (mem::readOr<uintptr_t>(v) != vt) continue;
+        if (isFirstPersonPiece(v)) ++firstPerson;
+        if (!sane(v)) {
+            ++wrong;
+            VLOG("look: piece '%s' has RenderIn1p %u, not as its name says", assetName(v).c_str(),
+                 mem::readOr<uint8_t>(v + VisualUnlock_RenderIn1p, 0xff));
+        }
+    }
+    const bool twins = firstPerson >= 3 && wrong == 0;
     std::lock_guard<std::mutex> lock(g_m);
     if (level != g_levelCount.load()) return false; // the level changed meanwhile: these are gone
-    MLOG("look: %llu look pieces are loaded (%.1f s)%s", static_cast<unsigned long long>(found.size()),
-         (GetTickCount() - start) / 1000.0, twins ? "" : "; first-person flag not as expected, echo looks stay third-person only");
+    MLOG("look: %llu look pieces are loaded (%.1f s; %llu objects, %llu names more than once, %llu left out)%s",
+         static_cast<unsigned long long>(found.size()), (GetTickCount() - start) / 1000.0, static_cast<unsigned long long>(objects),
+         static_cast<unsigned long long>(doubles), static_cast<unsigned long long>(dropped),
+         twins ? "" : "; first-person flag not as expected, echo looks stay third-person only");
     g_pieces = std::move(found);
     g_piecesKnown = true;
     g_twinsOk = twins;

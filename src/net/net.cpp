@@ -496,6 +496,7 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
                 const std::string serverName = cleanName(raw.data(), raw.size());
                 if (serverName != g_serverName) MLOG("net: the host is the dedicated server '%s'", serverName.c_str());
                 g_serverName = serverName;
+                r.name = serverName; // its chat lines (welcome, notices) show under its name
                 return;
             }
         }

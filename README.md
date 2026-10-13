@@ -34,7 +34,8 @@ forwards everyone's movement to everyone, so friends need nothing opened on thei
 
 **Servers**: a dedicated server (`mecmp_server`, runs without the game, for example on a VPS) is a
 session that is always there. Type its address in the same field (`play.example.com`, with `:port`
-when not 47800) and press *Join*; the menu shows *Server: <name>*. Running one: [docs/SERVER.md](docs/SERVER.md).
+when not 47800) and press *Join*; the menu shows *Server: <name>*. Or add it to the menu's *Servers*
+list, which shows each saved server's name, players and ping (`[net] servers=` in `mecmp.ini`). Running one: [docs/SERVER.md](docs/SERVER.md).
 
 If the host's router has UPnP turned off, forward UDP 47800 to the host's PC by hand. If the log
 says the address is not reachable (carrier-grade NAT, common on mobile internet), let another

@@ -36,6 +36,8 @@ constexpr const char* kDefaultIni =
     "; JOIN: paste the host's join code, e.g. join=8H3KQ-ZT1V4 (or the host's ip:port).\r\n"
     "; solo test: join=127.0.0.1:47800 (a ghost mirrors you)\r\n"
     "join=\r\n"
+    "; the menu's server list: dedicated servers' addresses, comma separated (the menu edits it)\r\n"
+    "servers=\r\n"
     "; solo test only: how far the mirrored ghost stands from you, along the world X axis (metres)\r\n"
     "loopback_offset=3.0\r\n"
     "\r\n"
@@ -114,10 +116,10 @@ constexpr const char* kDefaultIniTail =
     "verbose=0\r\n";
 
 std::string readString(const std::wstring& ini, const wchar_t* sec, const wchar_t* key, const char* def) {
-    wchar_t w[256] = {};
-    GetPrivateProfileStringW(sec, key, L"\x01", w, 256, ini.c_str());
+    wchar_t w[2048] = {};
+    GetPrivateProfileStringW(sec, key, L"\x01", w, 2048, ini.c_str());
     if (w[0] == 1) return def;
-    char buf[512] = {};
+    char buf[4096] = {};
     WideCharToMultiByte(CP_UTF8, 0, w, -1, buf, sizeof(buf), nullptr, nullptr);
     return buf;
 }
@@ -220,6 +222,7 @@ void load(const std::wstring& dir) {
     s.port = port >= 1 && port <= 65535 ? static_cast<uint16_t>(port) : 47800; // 0 and out-of-range ports are not usable
     s.join = readString(ini, L"net", L"join", "\x01");
     if (s.join == "\x01") s.join = readString(ini, L"net", L"peer", ""); // older mecmp.ini files (no join= line)
+    s.servers = readString(ini, L"net", L"servers", "");
     const float offset = static_cast<float>(atof(readString(ini, L"net", L"loopback_offset", "3.0").c_str()));
     s.loopbackOffset = std::isfinite(offset) ? offset : 3.0f; // "nan" or "inf" would poison the mirrored position
     s.name = readString(ini, L"player", L"name", "Runner");
@@ -330,12 +333,13 @@ void applyPending() {
     if (!persist) return;
     const std::wstring ini = g_dir + L"mecmp.ini";
     auto put = [&](const wchar_t* sec, const wchar_t* key, const std::string& v) {
-        wchar_t w[512] = {};
-        MultiByteToWideChar(CP_UTF8, 0, v.c_str(), -1, w, 512);
+        wchar_t w[2048] = {};
+        MultiByteToWideChar(CP_UTF8, 0, v.c_str(), -1, w, 2048);
         WritePrivateProfileStringW(sec, key, w, ini.c_str());
     };
     put(L"player", L"name", snapshot->name);
     put(L"net", L"join", snapshot->join);
+    put(L"net", L"servers", snapshot->servers);
     put(L"player", L"look", snapshot->look);
     put(L"ui", L"menu_key", snapshot->menuKey);
     put(L"ui", L"menu_pad", snapshot->menuPad);

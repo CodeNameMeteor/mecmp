@@ -47,6 +47,7 @@ struct Settings {
     uint16_t port = 47800;
     std::string join;                     // join code or ip:port of the host; empty = host a session
     float loopbackOffset = 3.0f;          // solo test: metres along world X the mirrored ghost stands
+    std::string servers;                  // the menu's server list: addresses, comma separated
     // [player]
     std::string name = "Runner";
     std::string look = "faith";           // how you look to others: faith, or echo:<hash> (a ghost style + colour)

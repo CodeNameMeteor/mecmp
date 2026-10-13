@@ -3,12 +3,13 @@
 // the menu's join field. See docs/SERVER.md.
 //
 //   mecmp_server [--port 47800] [--name "My server"] [--max-players 16] [--config mecmp_server.ini]
-//                [--log mecmp_server.log] [--mirror]
+//                [--log mecmp_server.log] [--bans bans.txt] [--mirror]
 //
 // --mirror (test mode): each player also sees their own moves as a second player 3 m away, so one
 // person can test a server alone.
 //
-// Console commands (stdin): list, kick <id|name>, say <text>, status, help, quit.
+// Console commands (stdin): list, kick <id|name>, ban <id|name|ip>, unban <ip>, bans, say <text>,
+// status, help, quit. Bans are kept in bans.txt (reloaded when the file changes).
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -29,10 +30,12 @@
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <mutex>
 #include <random>
+#include <set>
 #include <string>
 #include <thread>
 #include <vector>
@@ -86,8 +89,10 @@ std::string trim(std::string s) {
 struct Options {
     uint16_t port = 47800;
     std::string logPath = "mecmp_server.log";
+    std::string bansPath = "bans.txt";
     mecmp::server::Config relay;
 };
+Options g_opts;
 
 // mecmp_server.ini: key=value lines (port, name, max_players, log, log_chat); '#' or ';' comments.
 bool readConfig(const std::string& path, Options& o, bool required) {
@@ -109,13 +114,16 @@ bool readConfig(const std::string& path, Options& o, bool required) {
         else if (k == "log") o.logPath = v;
         else if (k == "log_chat") o.relay.logChat = v != "0";
         else if (k == "mirror") o.relay.mirror = v == "1";
+        else if (k == "motd") o.relay.motd = v;
+        else if (k == "max_per_ip") o.relay.maxPerIp = static_cast<size_t>(std::atoi(v.c_str()));
+        else if (k == "bans") o.bansPath = v;
     }
     return true;
 }
 
 void usage() {
     std::printf("mecmp_server [--port 47800] [--name \"My server\"] [--max-players 16]\n"
-                "             [--config mecmp_server.ini] [--log mecmp_server.log] [--mirror]\n");
+                "             [--config mecmp_server.ini] [--log mecmp_server.log] [--bans bans.txt] [--mirror]\n");
 }
 
 void onSignal(int) { g_quit = true; }
@@ -213,6 +221,77 @@ void readConsole() {
     // stdin closed (e.g. run as a service): keep serving.
 }
 
+// --- bans.txt: one IPv4 address per line; anything after it ('#' comment, name, date) is ignored ----
+std::filesystem::file_time_type g_bansTime{};
+bool g_bansSeen = false;
+
+std::set<uint32_t> readBans(const std::string& path, size_t* bad) {
+    std::set<uint32_t> out;
+    std::ifstream in(path);
+    std::string line;
+    while (std::getline(in, line)) {
+        line = trim(line);
+        if (line.empty() || line[0] == '#') continue;
+        const std::string first = line.substr(0, line.find_first_of(" \t#"));
+        uint32_t ip = 0;
+        if (mecmp::server::parseIp(first, ip)) out.insert(ip);
+        else if (bad) ++*bad;
+    }
+    return out;
+}
+
+void noteBansTime() {
+    std::error_code ec;
+    const auto t = std::filesystem::last_write_time(g_opts.bansPath, ec);
+    g_bansSeen = !ec;
+    if (!ec) g_bansTime = t;
+}
+
+// Keeps the comments of existing lines; adds `note` to a new one.
+void writeBans(const std::set<uint32_t>& ips, uint32_t added, const std::string& note) {
+    if (g_opts.bansPath.empty()) return;
+    std::vector<std::string> kept;
+    {
+        std::ifstream in(g_opts.bansPath);
+        std::string line;
+        while (std::getline(in, line)) {
+            const std::string t = trim(line);
+            uint32_t ip = 0;
+            if (t.empty() || t[0] == '#' || (mecmp::server::parseIp(t.substr(0, t.find_first_of(" \t#")), ip) && ips.count(ip)))
+                kept.push_back(t);
+        }
+    }
+    if (kept.empty()) kept.push_back("# MECMP server bans: one IPv4 address per line; text after it is a comment.");
+    if (added) {
+        std::time_t now = std::time(nullptr);
+        char date[16];
+        std::strftime(date, sizeof(date), "%Y-%m-%d", std::localtime(&now));
+        kept.push_back(mecmp::server::ipToString(added) + "  # " + note + " " + date);
+    }
+    std::ofstream out(g_opts.bansPath, std::ios::trunc);
+    for (const auto& l : kept) out << l << '\n';
+    out.close();
+    noteBansTime();
+}
+
+void loadBans(mecmp::server::Relay& relay, bool startup) {
+    if (g_opts.bansPath.empty()) return;
+    size_t bad = 0;
+    std::set<uint32_t> ips = readBans(g_opts.bansPath, &bad);
+    noteBansTime();
+    if (!startup || !ips.empty())
+        logLine(std::string(startup ? "" : "bans file changed: ") + std::to_string(ips.size()) + " banned address(es) from " +
+                g_opts.bansPath + (bad ? " (" + std::to_string(bad) + " line(s) not understood)" : ""));
+    relay.setBans(std::move(ips));
+}
+
+void reloadBansIfChanged(mecmp::server::Relay& relay) {
+    if (g_opts.bansPath.empty()) return;
+    std::error_code ec;
+    const auto t = std::filesystem::last_write_time(g_opts.bansPath, ec);
+    if (ec ? g_bansSeen : (!g_bansSeen || t != g_bansTime)) loadBans(relay, false);
+}
+
 void runCommand(const std::string& cmd, mecmp::server::Relay& relay) {
     const size_t sp = cmd.find(' ');
     const std::string verb = cmd.substr(0, sp), arg = sp == std::string::npos ? "" : trim(cmd.substr(sp + 1));
@@ -231,15 +310,28 @@ void runCommand(const std::string& cmd, mecmp::server::Relay& relay) {
         }
     } else if (verb == "kick") {
         if (!relay.kick(arg, nowMs())) logLine("no player '" + arg + "' (use the id or name from 'list')");
+    } else if (verb == "ban") {
+        std::string name;
+        for (const auto& m : relay.members())
+            if (m.name == arg) name = m.name;
+        if (const uint32_t ip = relay.ban(arg)) writeBans(relay.bans(), ip, name.empty() ? std::string("banned") : "'" + name + "'");
+        else logLine("no player or IP address '" + arg + "' (use the id or name from 'list', or an IP)");
+    } else if (verb == "unban") {
+        if (relay.unban(arg)) writeBans(relay.bans(), 0, "");
+        else logLine("'" + arg + "' is not banned (bans lists them)");
+    } else if (verb == "bans") {
+        logLine(std::to_string(relay.bans().size()) + " banned address(es)" + (g_opts.bansPath.empty() ? "" : " (" + g_opts.bansPath + ")"));
+        for (uint32_t ip : relay.bans()) logLine("  " + mecmp::server::ipToString(ip));
     } else if (verb == "say") {
         relay.say(arg);
     } else if (verb == "status") {
         const auto& s = relay.stats();
         logLine("'" + relay.config().name + "': " +
                 std::to_string(relay.members().size()) + " players, " + std::to_string(s.received) + " received, " +
-                std::to_string(s.relayed) + " relayed, " + std::to_string(s.dropped) + " dropped");
+                std::to_string(s.relayed) + " relayed, " + std::to_string(s.dropped) + " dropped, " +
+                std::to_string(s.infoAnswered) + " server-list queries answered");
     } else if (verb == "help") {
-        logLine("commands: list | kick <id|name> | say <text> | status | quit");
+        logLine("commands: list | kick <id|name> | ban <id|name|ip> | unban <ip> | bans | say <text> | status | quit");
     } else {
         logLine("unknown command '" + verb + "' (help lists them)");
     }
@@ -247,7 +339,7 @@ void runCommand(const std::string& cmd, mecmp::server::Relay& relay) {
 } // namespace
 
 int main(int argc, char** argv) {
-    Options o;
+    Options& o = g_opts;
     std::string configPath = "mecmp_server.ini";
     bool configGiven = false;
     for (int i = 1; i < argc; ++i)
@@ -261,6 +353,7 @@ int main(int argc, char** argv) {
         else if (a == "--max-players" && hasValue) o.relay.maxPlayers = static_cast<size_t>(std::atoi(argv[++i]));
         else if (a == "--log" && hasValue) o.logPath = argv[++i];
         else if (a == "--mirror") o.relay.mirror = true;
+        else if (a == "--bans" && hasValue) o.bansPath = argv[++i];
         else if (a == "--config" && hasValue) ++i;
         else if (a == "--help" || a == "-h") { usage(); return 0; }
         else { usage(); return 1; }
@@ -305,6 +398,7 @@ int main(int argc, char** argv) {
 
     std::signal(SIGINT, onSignal);
     std::signal(SIGTERM, onSignal);
+    loadBans(relay, true);
     std::thread(readConsole).detach();
     char hexSession[16];
     std::snprintf(hexSession, sizeof(hexSession), "%08x", session);
@@ -368,6 +462,11 @@ int main(int argc, char** argv) {
             cmds.swap(g_cmds);
         }
         for (const auto& c : cmds) runCommand(c, relay);
+        static uint32_t bansCheckedAt = 0;
+        if (now - bansCheckedAt >= 5000) {
+            bansCheckedAt = now;
+            reloadBansIfChanged(relay);
+        }
     }
     logLine("server stopping");
     closeSocket(sock);

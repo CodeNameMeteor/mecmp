@@ -19,7 +19,6 @@
 #include "game/hooks.h"
 #include "game/teleport.h"
 #include "game/mumble_link.h"
-#include "game/ping_point.h"
 #include "imgui.h"
 #include "ui/chat.h"
 #include "ui/gamepad.h"
@@ -27,6 +26,7 @@
 #include "ui/menu.h"
 #include "ui/nametags.h"
 #include "ui/notices.h"
+#include "ui/radial.h"
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND, UINT, WPARAM, LPARAM);
 
@@ -52,6 +52,7 @@ std::atomic<bool> g_keyCapture{false};
 std::atomic<bool> g_justOpened{false}; // focus the menu window on the next frame (gamepad navigation)
 std::atomic<int> g_chatKey{'T'};
 std::atomic<int> g_pingKey{0}; // 0 = none
+std::atomic<int> g_pingClearKey{0}; // a key, or VK_MBUTTON / VK_XBUTTON1 / VK_XBUTTON2; 0 = none
 bool g_eatChar = false; // the character typed by the key that opened the chat (window thread)
 int g_openingChatKey = 0;
 
@@ -117,6 +118,10 @@ void handleRawMouse(LPARAM l) {
     if (b & RI_MOUSE_RIGHT_BUTTON_UP) up |= 2;
     if (b & RI_MOUSE_MIDDLE_BUTTON_DOWN) down |= 4;
     if (b & RI_MOUSE_MIDDLE_BUTTON_UP) up |= 4;
+    if (b & RI_MOUSE_BUTTON_4_DOWN) down |= 8;
+    if (b & RI_MOUSE_BUTTON_4_UP) up |= 8;
+    if (b & RI_MOUSE_BUTTON_5_DOWN) down |= 16;
+    if (b & RI_MOUSE_BUTTON_5_UP) up |= 16;
     if (down) g_btnDown |= down;
     if (up) g_btnUp |= up;
     if (b & RI_MOUSE_WHEEL) g_wheel += static_cast<SHORT>(m.usButtonData);
@@ -128,7 +133,7 @@ void applyRawMouse() {
     ImGuiIO& io = ImGui::GetIO();
     io.AddMousePosEvent(g_cursorX, g_cursorY);
     const uint32_t down = g_btnDown.exchange(0), up = g_btnUp.exchange(0);
-    for (int i = 0; i < 3; ++i) {
+    for (int i = 0; i < 5; ++i) {
         // A click that went down and up between two frames: press this frame, release the next.
         if (down & (1u << i)) io.AddMouseButtonEvent(i, true);
         if (up & (1u << i)) {
@@ -152,6 +157,26 @@ bool isRawKeyPress(LPARAM l) { return rawKeyEvent(l) == 1; }
 
 bool isMouseMessage(UINT msg) { return msg >= WM_MOUSEFIRST && msg <= WM_MOUSELAST; }
 
+// Raw input while the marker wheel is open: mouse movement steers the wheel, a left click picks and
+// the mouse wheel switches wheel. True for a mouse event (which then stays away from the game);
+// keyboard input is not touched.
+bool g_radialRaw = false; // raw mouse input arrives, so the legacy mouse messages are duplicates (window thread)
+bool radialRawMouse(LPARAM l) {
+    RAWINPUT ri{};
+    UINT size = sizeof(ri);
+    if (GetRawInputData(reinterpret_cast<HRAWINPUT>(l), RID_INPUT, &ri, &size, sizeof(RAWINPUTHEADER)) == static_cast<UINT>(-1))
+        return false;
+    if (ri.header.dwType != RIM_TYPEMOUSE) return false;
+    const RAWMOUSE& m = ri.data.mouse;
+    const USHORT b = m.usButtonFlags;
+    g_radialRaw = true;
+    if (!(m.usFlags & MOUSE_MOVE_ABSOLUTE) && (m.lLastX || m.lLastY))
+        radial::moved(static_cast<float>(m.lLastX), static_cast<float>(m.lLastY));
+    if (b & RI_MOUSE_LEFT_BUTTON_DOWN) radial::click();
+    if (b & RI_MOUSE_WHEEL) radial::switchWheel(static_cast<SHORT>(m.usButtonData) > 0 ? -1 : 1);
+    return true;
+}
+
 LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
     const bool keyUp = msg == WM_KEYUP || msg == WM_SYSKEYUP;
     if (keyUp && g_ready) ImGui_ImplWin32_WndProcHandler(hwnd, msg, w, l);
@@ -162,6 +187,27 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
     if (keyUp && static_cast<int>(w) == g_openingChatKey) { g_openingChatKey = 0; g_eatChar = false; }
     if (msg == WM_DESTROY && hwnd == g_window) {
         if (auto fn = g_onDestroyed.exchange(nullptr)) fn();
+    }
+    // The marker wheel (ui/radial.h). The keyboard still reaches the game, so keys are only noted here
+    // and passed on; while the wheel is open it owns the mouse (the camera stays still).
+    if (msg == WM_KILLFOCUS || (msg == WM_ACTIVATEAPP && w == FALSE)) radial::cancel();
+    if (msg == WM_KEYUP && g_pingKey.load() != 0 && static_cast<int>(w) == g_pingKey.load()) radial::keyUp();
+    if (radial::engaged() && msg == WM_KEYDOWN && !(l & (1 << 30))) {
+        const int key = static_cast<int>(w);
+        if (key >= '1' && key <= '9') radial::digit(key - '0');
+        else if (key >= VK_NUMPAD1 && key <= VK_NUMPAD9) radial::digit(key - VK_NUMPAD0);
+        else if (key == VK_LEFT) radial::switchWheel(-1);
+        else if (key == VK_RIGHT) radial::switchWheel(1);
+    }
+    if (radial::open()) {
+        if (msg == WM_INPUT && radialRawMouse(l)) return DefWindowProcW(hwnd, msg, w, l);
+        if (isMouseMessage(msg)) {
+            if (!g_radialRaw) { // no raw mouse input here: the legacy messages are all there is
+                if (msg == WM_LBUTTONDOWN) radial::click();
+                else if (msg == WM_MOUSEWHEEL) radial::switchWheel(GET_WHEEL_DELTA_WPARAM(w) > 0 ? -1 : 1);
+            }
+            return 0;
+        }
     }
     // Only the menu key toggles the menu, never Escape: Escape reaches ImGui below (it cancels a key
     // capture and closes combo boxes) and nothing else. The menu has no close button by design.
@@ -178,16 +224,18 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
         MLOG("chat: not opened (a game menu is up)");
     else if (msg == WM_KEYDOWN && !g_open && !chat::isOpen() && g_ready && static_cast<int>(w) == g_chatKey.load() &&
              !(l & (1 << 30))) {
+        radial::cancel(); // the chat takes the keyboard
         chat::open();
         if (!chat::isOpen()) return CallWindowProcW(g_origWndProc, hwnd, msg, w, l);
         g_openingChatKey = static_cast<int>(w);
         g_eatChar = true;
         return 0;
     }
-    // Marker key: only noted here (the server tick places the marker); the game still gets the key.
+    // Marker key: only noted here; the game still gets the key. A short press places a marker when
+    // the key is released, holding it opens the marker wheel. Not over one of the game's own menus.
     if (msg == WM_KEYDOWN && !g_open && !chat::isOpen() && g_ready && g_pingKey.load() != 0 &&
         static_cast<int>(w) == g_pingKey.load() && !(l & (1 << 30)) && !game::hooks::gameMenuOpen())
-        game::ping::request();
+        radial::keyDown(g_pingKey.load());
     if (chat::isOpen() && g_ready && !g_open) {
         if (msg == WM_KEYDOWN && w == VK_ESCAPE) { chat::close(); return 0; }
         if (msg == WM_CHAR && g_eatChar) { g_eatChar = false; return 0; }
@@ -241,13 +289,29 @@ bool init(IDXGISwapChain* sc) {
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad;
     // Readable on big screens: Segoe UI scaled with the window height. Without it, ImGui's built-in
     // font at the same size (A-1: it used to stay at its 13 px default).
+    // Names, chat and marker titles are the players' own text, so the font carries more than Latin:
+    // Latin Extended, Greek and Cyrillic from Segoe UI, and the common Chinese characters from
+    // Microsoft YaHei where Windows has it. Anything else still shows as "?".
     RECT rc{};
     GetClientRect(g_window, &rc);
     float px = (rc.bottom - rc.top) > 0 ? (rc.bottom - rc.top) / 55.f : 18.f;
     if (px < 16.f) px = 16.f;
     ImFont* font = nullptr;
-    if (GetFileAttributesW(L"C:\\Windows\\Fonts\\segoeui.ttf") != INVALID_FILE_ATTRIBUTES)
-        font = io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeui.ttf", px);
+    if (GetFileAttributesW(L"C:\\Windows\\Fonts\\segoeui.ttf") != INVALID_FILE_ATTRIBUTES) {
+        static ImVector<ImWchar> ranges; // the atlas reads it when it is built, on the first frame
+        static const ImWchar kMore[] = {0x0100, 0x024F, 0x0370, 0x03FF, 0x2000, 0x206F, 0};
+        ImFontGlyphRangesBuilder builder;
+        builder.AddRanges(io.Fonts->GetGlyphRangesDefault());
+        builder.AddRanges(io.Fonts->GetGlyphRangesCyrillic());
+        builder.AddRanges(kMore);
+        builder.BuildRanges(&ranges);
+        font = io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeui.ttf", px, nullptr, ranges.Data);
+        if (font && GetFileAttributesW(L"C:\\Windows\\Fonts\\msyh.ttc") != INVALID_FILE_ATTRIBUTES) {
+            ImFontConfig merge;
+            merge.MergeMode = true;
+            io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\msyh.ttc", px, &merge, io.Fonts->GetGlyphRangesChineseSimplifiedCommon());
+        }
+    }
     if (!font) {
         ImFontConfig fc;
         fc.SizePixels = px;
@@ -280,6 +344,7 @@ HRESULT STDMETHODCALLTYPE presentHook(IDXGISwapChain* sc, UINT sync, UINT flags)
         ImGui::GetIO().MouseDrawCursor = g_open.load();
         nametags::draw();
         markers::draw();
+        radial::draw();
         if (const float a = game::teleport::fadeAlpha(); a > 0.f) // "Go to": the game's teleport behind a fade
             ImGui::GetForegroundDrawList()->AddRectFilled(ImVec2(0, 0), ImGui::GetIO().DisplaySize,
                                                           ImGui::GetColorU32(ImVec4(0, 0, 0, a)));
@@ -306,6 +371,7 @@ void setOnWindowDestroyed(void (*fn)()) { g_onDestroyed = fn; }
 
 void toggleMenu() {
     const bool open = !g_open.load();
+    if (open) radial::cancel(); // the menu takes the mouse
     if (open && g_window) {
         ClipCursor(nullptr);
         RECT rc{};
@@ -334,9 +400,40 @@ bool setPingKey(const std::string& name) {
         return true;
     }
     const int key = actionKeyFromName(name);
-    if (key == 0 || key == g_toggleKey.load() || key == g_chatKey.load()) return false;
+    if (key == 0 || key == g_toggleKey.load() || key == g_chatKey.load() || key == g_pingClearKey.load()) return false;
     g_pingKey = key;
     return true;
+}
+
+namespace {
+// As actionKeyFromName, plus the mouse buttons a "clear markers" binding may use.
+int clearKeyFromName(const std::string& n) {
+    if (_stricmp(n.c_str(), "MOUSE3") == 0) return VK_MBUTTON;
+    if (_stricmp(n.c_str(), "MOUSE4") == 0) return VK_XBUTTON1;
+    if (_stricmp(n.c_str(), "MOUSE5") == 0) return VK_XBUTTON2;
+    return actionKeyFromName(n);
+}
+} // namespace
+
+bool setPingClearKey(const std::string& name) {
+    if (name.empty()) {
+        g_pingClearKey = 0;
+        return true;
+    }
+    const int key = clearKeyFromName(name);
+    if (key == 0 || key == g_toggleKey.load() || key == g_chatKey.load() || key == g_pingKey.load()) return false;
+    g_pingClearKey = key;
+    return true;
+}
+
+int pingClearVk() { return g_pingClearKey.load(); }
+bool gameFocused() { return g_window && GetForegroundWindow() == g_window; }
+
+std::string keyLabel(const std::string& name) {
+    if (_stricmp(name.c_str(), "MOUSE3") == 0) return "Middle click";
+    if (_stricmp(name.c_str(), "MOUSE4") == 0) return "Mouse 4";
+    if (_stricmp(name.c_str(), "MOUSE5") == 0) return "Mouse 5";
+    return name;
 }
 void setKeyCapture(bool on) { g_keyCapture = on; }
 
@@ -357,8 +454,10 @@ bool install() {
     // The marker key must not double as the menu or chat key (those win).
     const int pingKey = actionKeyFromName(config::get()->pingKey);
     g_pingKey = pingKey == g_toggleKey.load() || pingKey == g_chatKey.load() ? 0 : pingKey;
+    setPingClearKey(config::get()->pingClearKey); // refused (so none) if it is one of the keys above
     gamepad::setBinding(gamepad::parse(config::get()->menuPad));
     gamepad::setBinding(gamepad::parse(config::get()->pingPad), gamepad::Action::Ping);
+    gamepad::setBinding(gamepad::parse(config::get()->pingClearPad), gamepad::Action::PingClear);
     // A throwaway device + swap chain on a hidden window, only to find DXGI's swap-chain vtable.
     WNDCLASSEXW wc{};
     wc.cbSize = sizeof(wc);

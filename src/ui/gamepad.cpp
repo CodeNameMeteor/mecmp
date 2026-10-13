@@ -11,8 +11,9 @@
 
 #include "core/log.h"
 #include "game/engine.h"
-#include "game/ping_point.h"
+#include "game/hooks.h"
 #include "ui/overlay.h"
+#include "ui/radial.h"
 
 namespace mecmp::ui::gamepad {
 namespace {
@@ -28,8 +29,10 @@ std::atomic<bool> g_seen{false};
 struct Pad {
     std::atomic<uint16_t> held{0};
     std::atomic<bool> swallow[kActions];
+    std::atomic<uint16_t> wheelButtons{0}; // LB/RB pressed for the marker wheel: hidden until released
 };
 Pad g_pads[XUSER_MAX_COUNT];
+std::atomic<int> g_wheelPad{-1}; // the controller whose marker buttons are held (it drives the marker wheel)
 std::atomic<DWORD> g_fakePacket{1};
 
 // Capture: 0 off, 1 waiting until nothing is held (the press that clicked "Change"), 2 waiting for
@@ -74,6 +77,7 @@ DWORD WINAPI getState(DWORD user, XINPUT_STATE* st) {
     const uint16_t now = st->Gamepad.wButtons;
     const uint16_t before = pad.held.exchange(now);
     uint16_t hidden = 0; // buttons the game must not see this time
+    bool pingPressed = false, clearPressed = false;
     if (g_capture.load() != 0) track(now);
     for (int a = 0; a < kActions; ++a) {
         const uint16_t bind = g_binding[a].load();
@@ -82,21 +86,44 @@ DWORD WINAPI getState(DWORD user, XINPUT_STATE* st) {
             if (a == static_cast<int>(Action::Menu)) {
                 ui::toggleMenu();
                 pad.swallow[a] = true;
-            } else if (!ui::menuOpen()) {
-                game::ping::request();
+            } else if (a == static_cast<int>(Action::Ping)) {
+                if (!ui::menuOpen() && !game::hooks::gameMenuOpen()) {
+                    pingPressed = true; // a short press places a marker, a long one opens the wheel (below)
+                    pad.swallow[a] = true;
+                }
+            } else if (g_wheelPad.load() == static_cast<int>(user) && radial::engaged()) {
+                clearPressed = true; // only while the marker buttons are held; otherwise the game has these buttons
                 pad.swallow[a] = true;
             }
         }
         if (pad.swallow[a] && !(now & bind)) pad.swallow[a] = false;
         if (pad.swallow[a]) hidden = static_cast<uint16_t>(hidden | bind);
     }
+    // The marker wheel: this pad's right stick points at a slot and LB/RB switch wheel while it is open.
+    bool wheelOpen = false;
+    if (pingPressed && g_wheelPad.load() < 0) g_wheelPad = static_cast<int>(user);
+    if (g_wheelPad.load() == static_cast<int>(user)) {
+        const uint16_t bind = g_binding[static_cast<int>(Action::Ping)].load();
+        const bool held = bind && g_capture.load() == 0 && (now & bind) == bind;
+        const uint16_t shoulders = static_cast<uint16_t>((XINPUT_GAMEPAD_LEFT_SHOULDER | XINPUT_GAMEPAD_RIGHT_SHOULDER) & ~bind);
+        const uint16_t went = static_cast<uint16_t>(now & ~before & shoulders);
+        wheelOpen = radial::padUpdate(pingPressed, held, st->Gamepad.sThumbRX / 32767.f, -st->Gamepad.sThumbRY / 32767.f,
+                                      (went & XINPUT_GAMEPAD_LEFT_SHOULDER) != 0, (went & XINPUT_GAMEPAD_RIGHT_SHOULDER) != 0,
+                                      clearPressed);
+        if (wheelOpen) pad.wheelButtons = static_cast<uint16_t>(pad.wheelButtons | (now & shoulders));
+        if (!held) g_wheelPad = -1;
+    }
+    // LB/RB that switched wheel stay hidden until they are released, also after the wheel closed.
+    pad.wheelButtons = static_cast<uint16_t>(pad.wheelButtons & now);
+    hidden = static_cast<uint16_t>(hidden | pad.wheelButtons);
     if (ui::menuOpen() || g_capture.load() != 0) {
         // The game sees a pad at rest. A new packet number each time, so it does not keep the values
         // it read before the menu opened (it skips packets whose number did not change).
         memset(&st->Gamepad, 0, sizeof(st->Gamepad));
         st->dwPacketNumber = 0x80000000u | g_fakePacket.fetch_add(1);
-    } else if (hidden) {
+    } else if (hidden || wheelOpen) {
         st->Gamepad.wButtons = static_cast<uint16_t>(st->Gamepad.wButtons & ~hidden);
+        if (wheelOpen) st->Gamepad.sThumbRX = st->Gamepad.sThumbRY = 0; // the camera stays still
         st->dwPacketNumber = 0x80000000u | g_fakePacket.fetch_add(1);
     }
     return r;

@@ -21,9 +21,12 @@ void maintain();
 // Button sets use XINPUT_GAMEPAD_* bits. Names: A B X Y LB RB LS RS BACK START UP DOWN LEFT RIGHT.
 uint16_t parse(const std::string& combo); // "LS+RS" -> bits (0 for empty or unknown)
 std::string format(uint16_t buttons);     // bits -> "LS+RS"
-// What a combination does. Menu opens/closes the menu; Ping places your marker (not while the menu is
-// open). The combination's buttons are hidden from the game until they are released.
-enum class Action { Menu, Ping, Count };
+// What a combination does. Menu opens/closes the menu; Ping places a marker on a short press and
+// opens the marker wheel when held (ui/radial.h; not while the menu is open). The combination's
+// buttons are hidden from the game until they are released; while the marker wheel is open, so are
+// the right stick and LB/RB.
+// PingClear removes all your markers; it only acts on the pad whose Ping buttons are held.
+enum class Action { Menu, Ping, PingClear, Count };
 void setBinding(uint16_t buttons, Action action = Action::Menu); // 0 = none
 
 // Binding from the menu: start, then poll until it returns true (the buttons held together,

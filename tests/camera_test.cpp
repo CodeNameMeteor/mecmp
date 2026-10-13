@@ -107,6 +107,26 @@ int main() {
             lastRing = p.ring;
         }
     }
+    // The marker wheel: nine wedges, the first straight up and the rest clockwise; the middle picks nothing.
+    {
+        using mecmp::game::radialSlot;
+        const float R = 100.f, dz = 20.f;
+        const auto at = [&](float deg) { // a point on the circle, `deg` clockwise from straight up
+            const float a = deg * 3.14159265f / 180.f;
+            return radialSlot(R * std::sin(a), -R * std::cos(a), dz, 9);
+        };
+        for (int i = 0; i < 9; ++i) {
+            CHECK(at(i * 40.f) == i);          // the wedge's own direction
+            CHECK(at(i * 40.f + 17.f) == i);   // inside it, either side
+            CHECK(at(i * 40.f - 17.f) == i);
+        }
+        CHECK(at(359.f) == 0 && at(1.f) == 0);                 // wraps at the top
+        CHECK(radialSlot(0, 5, dz, 9) == -1 && radialSlot(0, 0, dz, 9) == -1);
+        CHECK(radialSlot(0, -21, dz, 9) == 0 && radialSlot(21, 0, dz, 9) == 2);
+        CHECK(radialSlot(NAN, 50, dz, 9) == -1 && radialSlot(50, NAN, dz, 9) == -1);
+        CHECK(radialSlot(50, 50, dz, 0) == -1);
+        CHECK(radialSlot(INFINITY, 0, dz, 9) >= 0 && radialSlot(INFINITY, 0, dz, 9) < 9);
+    }
     if (g_failures == 0) std::printf("camera tests: all passed\n");
     return g_failures == 0 ? 0 : 1;
 }

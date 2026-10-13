@@ -188,7 +188,12 @@ UDP, one socket. Sessions have one host and any number of joiners (up to 16).
   ip:port into a 10-character Crockford base32 code. The host forwards every joiner's packets
   unchanged to all other joiners, so only the host has to be reachable.
 - **Join**: send to the host only; everyone else's packets arrive through the host.
-- Packets: STATE ~30 Hz and HELLO (name and look: u32, 0 = Faith, else the echo hash) ~1 Hz. Remote players are keyed by the random session id
+- **Dedicated server** (`tools/server/mecmp_server.cpp`, rules in `server/relay.cpp`, docs/SERVER.md):
+  relays like a host but is not a player. Its HELLO (about once a second, flags host | server, name =
+  the server's name) gives clients the session id (Mumble context) and the name for the menu; it sends
+  no STATE, so it never gets a ghost or a player-list entry. It binds each player id to the address
+  that first used it, rate-limits per player and drops silent players after 10 s.
+- Packets: STATE 30 Hz and HELLO (name and look: u32, 0 = Faith, else the echo hash) ~1 Hz. Remote players are keyed by the random session id
   in each packet. Pose compression: rotations smallest-three 32-bit, translations i16 at 1/1024 m,
   only for bones that changed since the last full packet (one per second); about 150 bytes.
 - Receivers buffer 16 snapshots per player and show them 120 ms in the past, blended. The sender's

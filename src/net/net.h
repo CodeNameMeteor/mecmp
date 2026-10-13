@@ -77,6 +77,7 @@ bool remoteState(uint32_t id, PlayerState& out, uint32_t& ageMs);
 bool running();
 bool hosting();
 bool connectedToHost();   // joiner: the host has answered
+std::string serverName(); // joiner: the dedicated server's name; empty when a player hosts (or not heard yet)
 // The same number for everyone in a session (the host's session id); 0 while not known (e.g. solo test).
 uint32_t sessionKey();
 std::string lanCode();    // host: code for players on the same network

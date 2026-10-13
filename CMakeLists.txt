@@ -16,8 +16,26 @@ if(MSVC)
   add_compile_definitions(_CRT_SECURE_NO_WARNINGS NOMINMAX)
 else()
   add_compile_options(-Wall -Wextra)
-  add_link_options(-static -static-libgcc -static-libstdc++)
-  add_compile_definitions(NOMINMAX)
+  if(WIN32)
+    add_link_options(-static -static-libgcc -static-libstdc++)
+    add_compile_definitions(NOMINMAX)
+  else()
+    add_link_options(-static-libgcc -static-libstdc++)
+  endif()
+endif()
+
+# --- mecmp_server: dedicated server (Windows or Linux, no game needed) ---------------------------
+find_package(Threads REQUIRED)
+add_executable(mecmp_server tools/server/mecmp_server.cpp src/server/relay.cpp src/net/protocol.cpp)
+target_include_directories(mecmp_server PRIVATE src)
+target_link_libraries(mecmp_server PRIVATE Threads::Threads)
+if(WIN32)
+  target_link_libraries(mecmp_server PRIVATE ws2_32)
+endif()
+
+# Everything else is the Windows mod. On other systems only the server is built.
+if(NOT WIN32)
+  return()
 endif()
 
 # --- mecmp.dll: the mod ------------------------------------------------------------------------

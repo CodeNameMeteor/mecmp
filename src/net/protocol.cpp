@@ -55,12 +55,61 @@ template <class T> bool get(const char*& p, const char* end, T& v) {
 
 // Positions are metres in the level's world; anything beyond this (or NaN/inf) is a broken or hostile packet.
 constexpr float kMaxCoord = 100000.f;
-bool sanePlacement(const PlayerState& s) {
-    for (float v : s.pos)
-        if (!std::isfinite(v) || std::fabs(v) > kMaxCoord) return false;
-    return std::isfinite(s.yaw);
-}
+bool sanePlacement(const PlayerState& s) { return sanePosition(s.pos) && std::isfinite(s.yaw); }
 } // namespace
+
+bool sanePosition(const float pos[3]) {
+    for (int i = 0; i < 3; ++i)
+        if (!std::isfinite(pos[i]) || std::fabs(pos[i]) > kMaxCoord) return false;
+    return true;
+}
+
+size_t writePing(char* buf, const Header& h, const Ping& pg) {
+    char* p = buf;
+    put(p, h);
+    put(p, pg.id);
+    put(p, pg.pos);
+    put(p, pg.flags);
+    put(p, pg.rgb);
+    return static_cast<size_t>(p - buf);
+}
+
+bool readPing(const char* payload, size_t n, Ping& out) {
+    const char* p = payload;
+    const char* end = payload + n;
+    Ping pg;
+    if (!get(p, end, pg.id) || !get(p, end, pg.pos) || !sanePosition(pg.pos)) return false;
+    if (get(p, end, pg.flags)) get(p, end, pg.rgb); // optional tail; the defaults stay otherwise
+    out = pg;
+    return true;
+}
+
+bool parseRgb(const std::string& hex, uint8_t rgb[3]) {
+    const size_t at = !hex.empty() && hex[0] == '#' ? 1 : 0;
+    if (hex.size() - at != 6) return false;
+    uint8_t v[3] = {};
+    for (size_t i = 0; i < 6; ++i) {
+        const char c = hex[at + i];
+        int d = -1;
+        if (c >= '0' && c <= '9') d = c - '0';
+        else if (c >= 'a' && c <= 'f') d = c - 'a' + 10;
+        else if (c >= 'A' && c <= 'F') d = c - 'A' + 10;
+        if (d < 0) return false;
+        v[i / 2] = static_cast<uint8_t>(v[i / 2] * 16 + d);
+    }
+    memcpy(rgb, v, 3);
+    return true;
+}
+
+std::string formatRgb(const uint8_t rgb[3]) {
+    static const char kHex[] = "0123456789abcdef";
+    std::string s;
+    for (int i = 0; i < 3; ++i) {
+        s.push_back(kHex[rgb[i] >> 4]);
+        s.push_back(kHex[rgb[i] & 15]);
+    }
+    return s;
+}
 
 size_t writeState(char* buf, const Header& h, const PlayerState& s, Encoder& enc) {
     char* p = buf;

@@ -12,6 +12,7 @@
 //   is world space and is clamped; receivers place it at pos instead.
 // type 2 HELLO (about once a second): char name[24] (UTF-8, at most 23 bytes, NUL padded)
 //   | u32 look (0 = Faith, else the game's echo CustomizationHash; absent from older versions = 0)
+// type 3 CHAT and type 4 PING: see below.
 
 #include <cstddef>
 #include <cstdint>
@@ -26,6 +27,12 @@ constexpr uint16_t kProtocol = 5;
 constexpr uint16_t kTypeState = 1;
 constexpr uint16_t kTypeHello = 2;
 constexpr uint16_t kTypeChat = 3;
+constexpr uint16_t kTypePing = 4; // experimental: a world marker
+// The packet types this version understands. Anything else is dropped before it can create state or
+// be forwarded, so a new type needs no protocol bump: older versions simply ignore it.
+constexpr bool knownType(uint16_t type) {
+    return type == kTypeState || type == kTypeHello || type == kTypeChat || type == kTypePing;
+}
 constexpr size_t kMaxChatBytes = 120; // UTF-8, after cleaning
 constexpr size_t kNameLen = 24;
 constexpr uint32_t kFullEvery = 30;
@@ -129,6 +136,46 @@ struct LossWindow {
 std::string cleanChatText(const std::string& raw);
 size_t writeChat(char* buf, const Header& h, uint32_t id, const std::string& text);
 bool readChat(const char* payload, size_t n, uint32_t& id, std::string& text);
+
+// Ids of the messages already handled, for packets that are sent several times (the newest N).
+// Id 0 always counts as seen (the slots start as 0), so senders never use it.
+template <size_t N> struct RecentIds {
+    uint32_t ids[N] = {};
+    size_t head = 0;
+    bool seen(uint32_t id) const {
+        for (uint32_t v : ids)
+            if (v == id) return true;
+        return false;
+    }
+    // True the first time `id` is offered (and remembers it).
+    bool add(uint32_t id) {
+        if (seen(id)) return false;
+        ids[head] = id;
+        head = (head + 1) % N;
+        return true;
+    }
+};
+
+// A world position a packet may carry: finite and within the level's range (as for STATE).
+bool sanePosition(const float pos[3]);
+
+// type 4 PING (experimental): u32 id | f32 pos[3] | u8 flags (bit 0: remove my marker) | u8 r, g, b.
+// Sent a few times like CHAT; each player has at most one marker, a new one replaces the old.
+// Older senders may stop after pos: flags = 0 and the default colour.
+constexpr uint8_t kPingClear = 1;
+constexpr uint32_t kPingLifeMs = 30000; // a marker is shown this long after it arrived
+struct Ping {
+    uint32_t id = 0;
+    float pos[3] = {0, 0, 0};
+    uint8_t flags = 0;
+    uint8_t rgb[3] = {255, 210, 60};
+};
+size_t writePing(char* buf, const Header& h, const Ping& p);
+// False for a short packet or a position outside the sane range.
+bool readPing(const char* payload, size_t n, Ping& out);
+// "ffd23c" or "#ffd23c" -> r, g, b. False (rgb untouched) for anything else.
+bool parseRgb(const std::string& hex, uint8_t rgb[3]);
+std::string formatRgb(const uint8_t rgb[3]);
 
 size_t writeState(char* buf, const Header& h, const PlayerState& s, Encoder& enc);
 // HELLO: char name[24] | u32 look | u8 flags (bit 0: the sender hosts this session). Older senders stop

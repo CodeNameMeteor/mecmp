@@ -12,8 +12,6 @@
 namespace mecmp::ui::nametags {
 namespace {
 constexpr float kHeadHeight = 2.05f; // above the ghost's trajectory bone (its feet)
-constexpr float kFullUntil = 40.f;   // metres: fully visible up to here...
-constexpr float kGoneAt = 150.f;     // ...then fading out until here
 } // namespace
 
 void draw() {
@@ -33,8 +31,8 @@ void draw() {
         const float head[3] = {st.pos[0], st.pos[1] + kHeadHeight, st.pos[2]};
         float sx = 0, sy = 0, depth = 0;
         if (!game::projectToScreen(cam, head, io.DisplaySize.x, io.DisplaySize.y, sx, sy, depth)) continue;
-        if (depth > kGoneAt) continue;
-        const float alpha = depth <= kFullUntil ? 1.f : 1.f - (depth - kFullUntil) / (kGoneAt - kFullUntil);
+        const float alpha = game::distanceFade(depth);
+        if (alpha <= 0.f) continue;
         const float size = ImGui::GetFontSize() * std::clamp(1.2f - depth / 60.f, 0.75f, 1.2f);
         const std::string name = r.name.empty() ? std::string("Runner") : r.name;
         const ImVec2 ts = font->CalcTextSizeA(size, FLT_MAX, 0.f, name.c_str());

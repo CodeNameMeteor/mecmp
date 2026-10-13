@@ -44,6 +44,8 @@ void shutdown(uint32_t routerWaitMs = 2000);
 
 // Game thread: newest local state (sent by the network thread).
 void publishLocal(const PlayerState& s);
+// Our own newest state. False when none was published in the last second (not in a level). Any thread.
+bool localState(PlayerState& out);
 // Remote players heard from in the last `maxAgeMs`.
 std::vector<RemoteInfo> remotes(uint32_t maxAgeMs = 5000);
 
@@ -56,6 +58,19 @@ struct ChatLine {
 };
 void sendChat(const std::string& text);
 std::vector<ChatLine> chatLines(size_t max = 50); // oldest first
+// World markers ("pings", experimental). Each player has at most one; a new one replaces the old and
+// it disappears after 30 s. sendPing shows ours here at once and sends it to everyone (any thread).
+struct PingInfo {
+    uint32_t owner = 0; // session id of the player who placed it
+    std::string name;
+    float pos[3] = {0, 0, 0};
+    uint8_t rgb[3] = {255, 210, 60};
+    uint32_t ageMs = 0;
+    bool own = false;
+};
+void sendPing(const float pos[3], const uint8_t rgb[3]);
+void clearPing(); // removes ours, here and for everyone
+std::vector<PingInfo> pings(); // the markers to show now (ours first)
 // Smoothed state of a remote player (shown ~100 ms in the past, blended between packets).
 bool remoteState(uint32_t id, PlayerState& out, uint32_t& ageMs);
 

@@ -19,9 +19,11 @@
 #include "game/hooks.h"
 #include "game/teleport.h"
 #include "game/mumble_link.h"
+#include "game/ping_point.h"
 #include "imgui.h"
 #include "ui/chat.h"
 #include "ui/gamepad.h"
+#include "ui/markers.h"
 #include "ui/menu.h"
 #include "ui/nametags.h"
 #include "ui/notices.h"
@@ -49,6 +51,7 @@ std::atomic<int> g_toggleKey{VK_INSERT};
 std::atomic<bool> g_keyCapture{false};
 std::atomic<bool> g_justOpened{false}; // focus the menu window on the next frame (gamepad navigation)
 std::atomic<int> g_chatKey{'T'};
+std::atomic<int> g_pingKey{0}; // 0 = none
 bool g_eatChar = false; // the character typed by the key that opened the chat (window thread)
 
 const MenuKey kMenuKeys[] = {
@@ -165,6 +168,10 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
         g_eatChar = true;
         return 0;
     }
+    // Marker key: only noted here (the server tick places the marker); the game still gets the key.
+    if (msg == WM_KEYDOWN && !g_open && !chat::isOpen() && g_ready && g_pingKey.load() != 0 &&
+        static_cast<int>(w) == g_pingKey.load() && !(l & (1 << 30)))
+        game::ping::request();
     if (chat::isOpen() && g_ready && !g_open) {
         if (msg == WM_KEYDOWN && w == VK_ESCAPE) { chat::close(); return 0; }
         if (msg == WM_CHAR && g_eatChar) { g_eatChar = false; return 0; }
@@ -189,15 +196,6 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
         if (isInputMessage(msg)) return 0;
     }
     return CallWindowProcW(g_origWndProc, hwnd, msg, w, l);
-}
-
-// The chat key: a letter (A..Z), ENTER, or one of the menu keys.
-int chatKeyFromName(const std::string& n) {
-    if (n.size() == 1 && isalpha(static_cast<unsigned char>(n[0]))) return toupper(static_cast<unsigned char>(n[0]));
-    if (_stricmp(n.c_str(), "ENTER") == 0) return VK_RETURN;
-    for (const MenuKey& k : kMenuKeys)
-        if (_stricmp(n.c_str(), k.name) == 0) return k.vk;
-    return 'T';
 }
 
 int keyFromName(const std::string& n) {
@@ -260,6 +258,7 @@ HRESULT STDMETHODCALLTYPE presentHook(IDXGISwapChain* sc, UINT sync, UINT flags)
         if (g_justOpened.exchange(false)) ImGui::SetWindowFocus("###mecmp");
         ImGui::GetIO().MouseDrawCursor = g_open.load();
         nametags::draw();
+        markers::draw();
         if (const float a = game::teleport::fadeAlpha(); a > 0.f) // "Go to": the game's teleport behind a fade
             ImGui::GetForegroundDrawList()->AddRectFilled(ImVec2(0, 0), ImGui::GetIO().DisplaySize,
                                                           ImGui::GetColorU32(ImVec4(0, 0, 0, a)));
@@ -308,14 +307,37 @@ const MenuKey* menuKeys(int& count) {
     return kMenuKeys;
 }
 void setMenuKey(const std::string& name) { g_toggleKey = keyFromName(name); }
+bool setPingKey(const std::string& name) {
+    if (name.empty()) {
+        g_pingKey = 0;
+        return true;
+    }
+    const int key = actionKeyFromName(name);
+    if (key == 0 || key == g_toggleKey.load() || key == g_chatKey.load()) return false;
+    g_pingKey = key;
+    return true;
+}
 void setKeyCapture(bool on) { g_keyCapture = on; }
 
 bool menuOpen() { return g_open.load(); }
 
+int actionKeyFromName(const std::string& n) {
+    if (n.size() == 1 && isalpha(static_cast<unsigned char>(n[0]))) return toupper(static_cast<unsigned char>(n[0]));
+    if (_stricmp(n.c_str(), "ENTER") == 0) return VK_RETURN;
+    for (const MenuKey& k : kMenuKeys)
+        if (_stricmp(n.c_str(), k.name) == 0) return k.vk;
+    return 0;
+}
+
 bool install() {
     g_toggleKey = keyFromName(config::get()->menuKey);
-    g_chatKey = chatKeyFromName(config::get()->chatKey);
+    const int chatKey = actionKeyFromName(config::get()->chatKey);
+    g_chatKey = chatKey ? chatKey : 'T';
+    // The marker key must not double as the menu or chat key (those win).
+    const int pingKey = actionKeyFromName(config::get()->pingKey);
+    g_pingKey = pingKey == g_toggleKey.load() || pingKey == g_chatKey.load() ? 0 : pingKey;
     gamepad::setBinding(gamepad::parse(config::get()->menuPad));
+    gamepad::setBinding(gamepad::parse(config::get()->pingPad), gamepad::Action::Ping);
     // A throwaway device + swap chain on a hidden window, only to find DXGI's swap-chain vtable.
     WNDCLASSEXW wc{};
     wc.cbSize = sizeof(wc);

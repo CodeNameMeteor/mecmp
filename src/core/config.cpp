@@ -43,6 +43,8 @@ constexpr const char* kDefaultIni =
     "name=Runner\r\n"
     "; how the other players see you: faith, or a ghost style and colour (pick it in the in-game menu)\r\n"
     "look=faith\r\n"
+    "; colour of the marker you place, as the others see it: RRGGBB\r\n"
+    "ping_color=ffd23c\r\n"
     "\r\n"
     "[ghost]\r\n"
     "; spawn other players' ghosts automatically when their packets arrive\r\n"
@@ -61,11 +63,22 @@ constexpr const char* kDefaultIni =
     "menu_pad=LS+RS\r\n"
     "; 1 = show player names above their ghosts\r\n"
     "show_names=1\r\n"
-    "; 1 = show a short notice when a player joins or leaves\r\n"
+    "; 1 = show a short notice when a player joins, leaves or places a marker\r\n"
     "show_notices=1\r\n"
     "; 1 = show chat messages; chat_key opens the chat line (a letter A..Z, ENTER, or INSERT/F1../...)\r\n"
     "show_chat=1\r\n"
     "chat_key=T\r\n"
+    "; markers (experimental): ping_key places yours where you stand (a letter A..Z, ENTER, or INSERT/F1../...;\r\n"
+    "; empty = no key), ping_pad = gamepad buttons for it (as menu_pad; empty = none). It lasts 30 s.\r\n"
+    "; Both can be changed in the menu.\r\n"
+    "ping_key=G\r\n"
+    "ping_pad=\r\n"
+    "; 1 = show the players' markers\r\n"
+    "show_pings=1\r\n"
+    "; 1 = show an arrow on the screen's edge towards each player who is off screen\r\n"
+    "show_arrows=1\r\n"
+    "; 1 = a marker flashes for a moment when it arrives or moves (0 = no animation)\r\n"
+    "ping_pulse=1\r\n"
     "\r\n"
     "[debug]\r\n"
     "; 1 = detailed diagnostic log (for bug reports)\r\n"
@@ -121,6 +134,12 @@ void load(const std::wstring& dir) {
     s.showNotices = readInt(ini, L"ui", L"show_notices", 1) != 0;
     s.showChat = readInt(ini, L"ui", L"show_chat", 1) != 0;
     s.chatKey = readString(ini, L"ui", L"chat_key", "T");
+    s.pingKey = readString(ini, L"ui", L"ping_key", "G");
+    s.pingPad = readString(ini, L"ui", L"ping_pad", "");
+    s.showPings = readInt(ini, L"ui", L"show_pings", 1) != 0;
+    s.showArrows = readInt(ini, L"ui", L"show_arrows", 1) != 0;
+    s.pingPulse = readInt(ini, L"ui", L"ping_pulse", 1) != 0;
+    s.pingColor = readString(ini, L"player", L"ping_color", "ffd23c");
     s.verbose = readInt(ini, L"debug", L"verbose", 0) != 0;
     log::verbose = s.verbose;
     s.ignoreBuildCheck = readInt(ini, L"debug", L"ignore_build_check", 0) != 0;
@@ -188,6 +207,12 @@ void applyPending() {
     put(L"voice", L"mumble_link", snapshot->mumbleLink ? "1" : "0");
     put(L"ui", L"show_notices", snapshot->showNotices ? "1" : "0");
     put(L"ui", L"show_chat", snapshot->showChat ? "1" : "0");
+    put(L"ui", L"ping_key", snapshot->pingKey);
+    put(L"ui", L"ping_pad", snapshot->pingPad);
+    put(L"ui", L"show_pings", snapshot->showPings ? "1" : "0");
+    put(L"ui", L"show_arrows", snapshot->showArrows ? "1" : "0");
+    put(L"ui", L"ping_pulse", snapshot->pingPulse ? "1" : "0");
+    put(L"player", L"ping_color", snapshot->pingColor);
     MLOG("config: saved");
 }
 

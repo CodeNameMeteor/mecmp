@@ -20,6 +20,12 @@ void toggleMenu(); // any thread (keyboard on the window thread, gamepad on the 
 struct MenuKey { const char* name; int vk; int imguiKey; };
 const MenuKey* menuKeys(int& count);
 void setMenuKey(const std::string& name);  // takes effect at once
+// Sets the marker key (as ping_key: a letter, ENTER or a menu key name; empty = none), at once.
+// False, and nothing changed, if it is not such a key or is the menu key or the chat key.
+bool setPingKey(const std::string& name);
 void setKeyCapture(bool on);               // while the menu waits for a new key, the old one does not close it
+// A key from mecmp.ini that is not the menu key (chat_key, ping_key): a letter A..Z, ENTER, or a menu
+// key name. 0 for anything else (including empty = no key).
+int actionKeyFromName(const std::string& name);
 
 } // namespace mecmp::ui

@@ -65,10 +65,16 @@ struct Remote {
     int nameLogs = 0;         // name changes logged for this player (at most kMaxNameLogs)
     proto::ClockUnwrap clock; // sender's timestamps without the 49-day wrap
     proto::LossWindow loss;
-    uint32_t chatSeen[16] = {};  // message ids already shown (repeats are dropped)
-    int chatSeenHead = 0;
+    proto::RecentIds<16> chatSeen; // message ids already shown (repeats are dropped)
     DWORD chatBurstAt = 0;       // flood limit
     int chatBurst = 0;
+    // Their world marker (at most one; see PING in protocol.h).
+    proto::RecentIds<8> pingSeen;
+    proto::Ping ping;
+    bool havePing = false;
+    DWORD pingAt = 0;      // when it arrived
+    DWORD pingBurstAt = 0; // flood limit
+    int pingBurst = 0;
     Snap snaps[kSnapCount];
     int head = 0, fill = 0;
 };
@@ -91,6 +97,7 @@ std::string g_joinCode, g_lanCode;
 std::atomic<uint32_t> g_generation{0}; // bumped on every start(); stale host setups don't publish
 PlayerState g_local;
 bool g_haveLocal = false;
+DWORD g_localAt = 0; // when g_local was published
 std::string g_name;
 std::atomic<uint32_t> g_look{0};
 
@@ -268,10 +275,7 @@ void receiveChat(Remote& r, bool own, const char* payload, size_t len) { // call
     std::string text;
     if (!proto::readChat(payload, len, id, text)) { ++g_dropped; return; }
     if (own) return; // solo test: our own message, already shown when we sent it
-    for (uint32_t seen : r.chatSeen)
-        if (seen == id) return; // a repeat of a message we already showed
-    r.chatSeen[r.chatSeenHead] = id;
-    r.chatSeenHead = (r.chatSeenHead + 1) % static_cast<int>(sizeof(r.chatSeen) / sizeof(r.chatSeen[0]));
+    if (!r.chatSeen.add(id)) return; // a repeat of a message we already showed
     const DWORD now = GetTickCount();
     if (now - r.chatBurstAt > kChatBurstMs) { r.chatBurstAt = now; r.chatBurst = 0; }
     if (++r.chatBurst > kChatBurst) {
@@ -298,6 +302,65 @@ void sendPendingChat() {
     for (const auto& m : out) sendAll(buf, proto::writeChat(buf, header(proto::kTypeChat), m.first, m.second));
 }
 
+// --- Markers (PING) and other small packets sent a few times -------------------------------------
+// One-off packets go out like chat: in kChatSends consecutive send cycles, since UDP may drop one.
+struct OutBurst { uint16_t type; std::vector<char> payload; int left; };
+std::vector<OutBurst> g_outBurst; // guarded by g_m
+uint32_t g_burstId = 0;           // guarded by g_m
+constexpr int kPingBurst = 5;     // at most this many marker changes from one player per kChatBurstMs
+struct MyPing { bool have = false; proto::Ping ping; DWORD at = 0; };
+MyPing g_myPing; // guarded by g_m
+
+uint32_t nextBurstId() { // caller holds g_m
+    uint32_t id = (g_session << 16) ^ ++g_burstId;
+    if (!id) id = (g_session << 16) ^ ++g_burstId; // 0 always counts as "seen" on the other side
+    return id;
+}
+
+void queuePing(const proto::Ping& p) { // caller holds g_m
+    char buf[proto::kMaxPacket];
+    const size_t n = proto::writePing(buf, proto::Header{}, p);
+    g_outBurst.push_back({proto::kTypePing, std::vector<char>(buf + sizeof(proto::Header), buf + n), kChatSends});
+}
+
+void sendPendingBursts() {
+    std::vector<std::pair<uint16_t, std::vector<char>>> out;
+    {
+        std::lock_guard<std::mutex> lock(g_m);
+        if (g_sendTo.empty()) { g_outBurst.clear(); return; }
+        for (auto& b : g_outBurst) {
+            out.emplace_back(b.type, b.payload);
+            --b.left;
+        }
+        g_outBurst.erase(std::remove_if(g_outBurst.begin(), g_outBurst.end(), [](const OutBurst& b) { return b.left <= 0; }),
+                         g_outBurst.end());
+    }
+    char buf[proto::kMaxPacket];
+    for (const auto& b : out) {
+        if (b.second.size() > sizeof(buf) - sizeof(proto::Header)) continue;
+        const proto::Header h = header(b.first);
+        memcpy(buf, &h, sizeof(h));
+        memcpy(buf + sizeof(h), b.second.data(), b.second.size());
+        sendAll(buf, sizeof(h) + b.second.size());
+    }
+}
+
+void receivePing(Remote& r, bool own, const char* payload, size_t len) { // caller holds g_m
+    proto::Ping p;
+    if (!proto::readPing(payload, len, p)) { ++g_dropped; return; }
+    if (own) return; // solo test: our own marker, already shown when we placed it
+    if (!r.pingSeen.add(p.id)) return; // a repeat
+    const DWORD now = GetTickCount();
+    if (now - r.pingBurstAt > kChatBurstMs) { r.pingBurstAt = now; r.pingBurst = 0; }
+    if (++r.pingBurst > kPingBurst) {
+        if (r.pingBurst == kPingBurst + 1 && peerLogAllowed()) MLOG("net: player %08x places markers too fast; dropping some", r.id);
+        return;
+    }
+    r.havePing = !(p.flags & proto::kPingClear);
+    r.ping = p;
+    r.pingAt = now;
+}
+
 void handlePacket(const char* buf, int n, const sockaddr_in& from) {
     proto::Header h;
     if (n < static_cast<int>(sizeof(h))) { ++g_dropped; return; }
@@ -314,7 +377,7 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
         return;
     }
     // Only the packet types we know may create state or be forwarded to other players.
-    if (h.type != proto::kTypeState && h.type != proto::kTypeHello && h.type != proto::kTypeChat) { ++g_dropped; return; }
+    if (!proto::knownType(h.type)) { ++g_dropped; return; }
     const bool own = h.session == g_session;
     std::lock_guard<std::mutex> lock(g_m);
     if (!own && g_role == Role::Host) {
@@ -407,6 +470,10 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
     }
     if (h.type == proto::kTypeChat) {
         receiveChat(r, own, payload, len);
+        return;
+    }
+    if (h.type == proto::kTypePing) {
+        receivePing(r, own, payload, len);
         return;
     }
     if (h.type != proto::kTypeState) return;
@@ -590,7 +657,7 @@ void threadMain() {
         timeval tv{0, 10000};
         if (select(0, &rd, nullptr, nullptr, &tv) > 0) receiveAll();
         const DWORD now = GetTickCount();
-        if (now - lastSend >= 33) { lastSend = now; sendState(); sendPendingChat(); }
+        if (now - lastSend >= 33) { lastSend = now; sendState(); sendPendingChat(); sendPendingBursts(); }
         if (now - lastHello >= 1000) { lastHello = now; sendHello(); }
         if (now - lastStats >= 30000) { lastStats = now; MLOG("net: %s", describe().c_str()); }
         if (now - lastHousekeeping >= 1000) {
@@ -638,6 +705,8 @@ bool start(uint16_t port, const std::string& join, float loopbackOffset, const s
         g_joinCode.clear();
         g_lanCode.clear();
         g_name = name;
+        g_outBurst.clear();
+        g_myPing = MyPing{};
     }
     g_stunIp = 0;
     {
@@ -722,6 +791,57 @@ void publishLocal(const PlayerState& s) {
     std::lock_guard<std::mutex> lock(g_m);
     g_local = s;
     g_haveLocal = true;
+    g_localAt = GetTickCount();
+}
+
+bool localState(PlayerState& out) {
+    std::lock_guard<std::mutex> lock(g_m);
+    if (!g_haveLocal || GetTickCount() - g_localAt > 1000) return false;
+    out = g_local;
+    return true;
+}
+
+void sendPing(const float pos[3], const uint8_t rgb[3]) {
+    if (!proto::sanePosition(pos)) return;
+    std::lock_guard<std::mutex> lock(g_m);
+    proto::Ping p;
+    p.id = nextBurstId();
+    memcpy(p.pos, pos, sizeof(p.pos));
+    memcpy(p.rgb, rgb, sizeof(p.rgb));
+    g_myPing = {true, p, GetTickCount()};
+    if (g_run) queuePing(p);
+}
+
+void clearPing() {
+    std::lock_guard<std::mutex> lock(g_m);
+    if (!g_myPing.have) return;
+    g_myPing.have = false;
+    proto::Ping p = g_myPing.ping;
+    p.id = nextBurstId();
+    p.flags = proto::kPingClear;
+    if (g_run) queuePing(p);
+}
+
+std::vector<PingInfo> pings() {
+    std::vector<PingInfo> v;
+    const DWORD now = GetTickCount();
+    std::lock_guard<std::mutex> lock(g_m);
+    auto add = [&](uint32_t owner, const std::string& name, const proto::Ping& p, DWORD at, bool own) {
+        PingInfo i;
+        i.owner = owner;
+        i.name = name.empty() ? std::string("Runner") : name;
+        memcpy(i.pos, p.pos, sizeof(i.pos));
+        memcpy(i.rgb, p.rgb, sizeof(i.rgb));
+        i.ageMs = now - at;
+        i.own = own;
+        v.push_back(i);
+    };
+    if (g_myPing.have && now - g_myPing.at < proto::kPingLifeMs) add(g_session, g_name, g_myPing.ping, g_myPing.at, true);
+    for (const auto& kv : g_remotes) {
+        const Remote& r = kv.second;
+        if (r.havePing && now - r.pingAt < proto::kPingLifeMs) add(r.id, r.name, r.ping, r.pingAt, false);
+    }
+    return v;
 }
 
 void sendChat(const std::string& raw) {

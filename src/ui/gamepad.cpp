@@ -11,6 +11,7 @@
 
 #include "core/log.h"
 #include "game/engine.h"
+#include "game/ping_point.h"
 #include "ui/overlay.h"
 
 namespace mecmp::ui::gamepad {
@@ -18,14 +19,15 @@ namespace {
 
 using GetStateFn = DWORD(WINAPI*)(DWORD, XINPUT_STATE*);
 std::atomic<GetStateFn> g_orig{nullptr};
-std::atomic<uint16_t> g_binding{0};
+constexpr int kActions = static_cast<int>(Action::Count);
+std::atomic<uint16_t> g_binding[kActions];
 std::atomic<bool> g_seen{false};
 
-// Per controller (XInput has 4): what was held last time, and whether the game must be kept from
-// seeing the binding's buttons until they are released (they just toggled the menu).
+// Per controller (XInput has 4): what was held last time, and for each action whether the game must
+// be kept from seeing its buttons until they are released (they just triggered it).
 struct Pad {
     std::atomic<uint16_t> held{0};
-    std::atomic<bool> swallow{false};
+    std::atomic<bool> swallow[kActions];
 };
 Pad g_pads[XUSER_MAX_COUNT];
 std::atomic<DWORD> g_fakePacket{1};
@@ -71,21 +73,30 @@ DWORD WINAPI getState(DWORD user, XINPUT_STATE* st) {
     Pad& pad = g_pads[user];
     const uint16_t now = st->Gamepad.wButtons;
     const uint16_t before = pad.held.exchange(now);
-    const uint16_t bind = g_binding.load();
-    if (g_capture.load() != 0) {
-        track(now);
-    } else if (bind && (now & bind) == bind && (before & bind) != bind) {
-        ui::toggleMenu(); // the last button of the combination went down
-        pad.swallow = true;
+    uint16_t hidden = 0; // buttons the game must not see this time
+    if (g_capture.load() != 0) track(now);
+    for (int a = 0; a < kActions; ++a) {
+        const uint16_t bind = g_binding[a].load();
+        if (g_capture.load() == 0 && bind && (now & bind) == bind && (before & bind) != bind) {
+            // The last button of the combination went down.
+            if (a == static_cast<int>(Action::Menu)) {
+                ui::toggleMenu();
+                pad.swallow[a] = true;
+            } else if (!ui::menuOpen()) {
+                game::ping::request();
+                pad.swallow[a] = true;
+            }
+        }
+        if (pad.swallow[a] && !(now & bind)) pad.swallow[a] = false;
+        if (pad.swallow[a]) hidden = static_cast<uint16_t>(hidden | bind);
     }
-    if (pad.swallow && !(now & bind)) pad.swallow = false;
     if (ui::menuOpen() || g_capture.load() != 0) {
         // The game sees a pad at rest. A new packet number each time, so it does not keep the values
         // it read before the menu opened (it skips packets whose number did not change).
         memset(&st->Gamepad, 0, sizeof(st->Gamepad));
         st->dwPacketNumber = 0x80000000u | g_fakePacket.fetch_add(1);
-    } else if (pad.swallow) {
-        st->Gamepad.wButtons = static_cast<uint16_t>(st->Gamepad.wButtons & ~bind);
+    } else if (hidden) {
+        st->Gamepad.wButtons = static_cast<uint16_t>(st->Gamepad.wButtons & ~hidden);
         st->dwPacketNumber = 0x80000000u | g_fakePacket.fetch_add(1);
     }
     return r;
@@ -99,7 +110,7 @@ void maintain() {
     if (game::inImage(cur)) return; // not an XInput function: leave it alone
     g_orig = reinterpret_cast<GetStateFn>(cur);
     if (mem::patchPointer(slot, reinterpret_cast<uintptr_t>(&getState), nullptr))
-        MLOG("ui: gamepad hooked (menu buttons: %s)", format(g_binding.load()).c_str());
+        MLOG("ui: gamepad hooked (menu buttons: %s)", format(g_binding[0].load()).c_str());
 }
 
 uint16_t parse(const std::string& combo) {
@@ -129,7 +140,9 @@ std::string format(uint16_t buttons) {
     return s.empty() ? "none" : s;
 }
 
-void setBinding(uint16_t buttons) { g_binding = buttons; }
+void setBinding(uint16_t buttons, Action action) {
+    if (action != Action::Count) g_binding[static_cast<int>(action)] = buttons;
+}
 void beginCapture() { g_captured = 0; g_capture = 1; }
 bool captureDone(uint16_t& buttons) {
     if (g_capture.load() != 4) return false;

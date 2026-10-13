@@ -1,6 +1,6 @@
 #pragma once
-// Gamepad: opening the menu with a button combination, and keeping the game from seeing the pad
-// while the menu is open.
+// Gamepad: opening the menu (and other mod actions) with a button combination, and keeping the game
+// from seeing the pad while the menu is open.
 //
 // The game loads XInput itself and keeps XInputGetState in a data pointer (0x14256d7e0, written
 // once by 0x1437ba6c0). The mod swaps that pointer for its own function, which calls the real one:
@@ -21,7 +21,10 @@ void maintain();
 // Button sets use XINPUT_GAMEPAD_* bits. Names: A B X Y LB RB LS RS BACK START UP DOWN LEFT RIGHT.
 uint16_t parse(const std::string& combo); // "LS+RS" -> bits (0 for empty or unknown)
 std::string format(uint16_t buttons);     // bits -> "LS+RS"
-void setBinding(uint16_t buttons);        // the combination that opens/closes the menu (0 = none)
+// What a combination does. Menu opens/closes the menu; Ping places your marker (not while the menu is
+// open). The combination's buttons are hidden from the game until they are released.
+enum class Action { Menu, Ping, Count };
+void setBinding(uint16_t buttons, Action action = Action::Menu); // 0 = none
 
 // Binding from the menu: start, then poll until it returns true (the buttons held together,
 // reported once all are released). cancelCapture() stops it.

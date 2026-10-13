@@ -22,12 +22,13 @@ constexpr uint32_t kGoneMs = 5000; // same as the ghosts: silent this long = lef
 struct Notice { std::string text; DWORD at; };
 std::deque<Notice> g_notices;
 std::unordered_map<uint32_t, std::string> g_present; // id -> name, players announced as here
+std::unordered_map<uint32_t, uint32_t> g_pingAge;    // owner -> age of their marker when last looked at
+} // namespace
 
 void push(std::string text) {
     g_notices.push_back({std::move(text), GetTickCount()});
     while (g_notices.size() > kMaxShown) g_notices.pop_front();
 }
-} // namespace
 
 void draw() {
     // Track arrivals and departures even while notices are off, so turning them on does not
@@ -41,6 +42,20 @@ void draw() {
     for (const auto& kv : g_present)
         if (!now.count(kv.first) && on) push(kv.second + " left");
     g_present.swap(now);
+
+    // Other players' markers. A marker counts as new when its owner had none (and it is fresh: not
+    // one that was already there when we joined), or when its age went back (a replacement starts
+    // again at 0). Tracked while notices are off too, like joins above.
+    constexpr uint32_t kFreshMs = 3000;
+    std::unordered_map<uint32_t, uint32_t> pingAge;
+    for (const auto& p : net::pings()) {
+        if (p.own) continue;
+        pingAge[p.owner] = p.ageMs;
+        const auto was = g_pingAge.find(p.owner);
+        const bool isNew = was == g_pingAge.end() ? p.ageMs < kFreshMs : p.ageMs < was->second;
+        if (on && isNew) push((p.name.empty() ? std::string("Someone") : p.name) + " placed a marker");
+    }
+    g_pingAge.swap(pingAge);
 
     const DWORD t = GetTickCount();
     while (!g_notices.empty() && t - g_notices.front().at >= kShowMs) g_notices.pop_front();

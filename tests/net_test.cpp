@@ -224,7 +224,83 @@ static void testChat() {
     CHECK(!protocol::readChat(bad, 6, id, text));
 }
 
+static void testKnownTypes() {
+    CHECK(protocol::knownType(protocol::kTypeState) && protocol::knownType(protocol::kTypeHello));
+    CHECK(protocol::knownType(protocol::kTypeChat) && protocol::knownType(protocol::kTypePing));
+    CHECK(!protocol::knownType(0) && !protocol::knownType(5) && !protocol::knownType(0xffff));
+}
+
+static void testRecentIds() {
+    protocol::RecentIds<4> r;
+    CHECK(!r.add(0)); // 0 is never a message id
+    CHECK(r.add(10) && !r.add(10)); // shown once, repeats refused
+    CHECK(r.add(11) && r.add(12) && r.add(13));
+    CHECK(!r.add(10)); // still remembered: 4 slots
+    CHECK(r.add(14));  // pushes the oldest (10) out
+    CHECK(r.add(10) && !r.add(14));
+}
+
+static void testPing() {
+    char buf[protocol::kMaxPacket];
+    protocol::Header h{protocol::kMagic, protocol::kProtocol, protocol::kTypePing, 7, 1};
+    protocol::Ping in;
+    in.id = 0x00070001;
+    in.pos[0] = 12.5f; in.pos[1] = -3.25f; in.pos[2] = 900.f;
+    in.rgb[0] = 10; in.rgb[1] = 200; in.rgb[2] = 30;
+    const size_t n = protocol::writePing(buf, h, in);
+    CHECK(n == sizeof(h) + 4 + 12 + 1 + 3);
+    protocol::Ping out;
+    CHECK(protocol::readPing(buf + sizeof(h), n - sizeof(h), out));
+    CHECK(out.id == in.id && out.pos[0] == 12.5f && out.pos[1] == -3.25f && out.pos[2] == 900.f && out.flags == 0);
+    CHECK(out.rgb[0] == 10 && out.rgb[1] == 200 && out.rgb[2] == 30);
+    // "Remove my marker".
+    in.flags = protocol::kPingClear;
+    const size_t nc = protocol::writePing(buf, h, in);
+    CHECK(protocol::readPing(buf + sizeof(h), nc - sizeof(h), out) && (out.flags & protocol::kPingClear));
+    // A sender that stops after the position: no flags, the default colour.
+    protocol::Ping def;
+    out.rgb[0] = 1;
+    CHECK(protocol::readPing(buf + sizeof(h), 16, out) && out.flags == 0 && out.rgb[0] == def.rgb[0]);
+    // Flags but a cut-off colour: the colour stays the default.
+    CHECK(protocol::readPing(buf + sizeof(h), 18, out) && (out.flags & protocol::kPingClear) && out.rgb[1] == def.rgb[1]);
+    // Too short for a position: refused, and `out` is left alone.
+    out.id = 99;
+    CHECK(!protocol::readPing(buf + sizeof(h), 15, out) && out.id == 99);
+    CHECK(!protocol::readPing(buf + sizeof(h), 0, out));
+    // Positions that are not numbers or far outside any level: refused (as for STATE).
+    for (float bad : {std::nanf(""), INFINITY, -INFINITY, 100001.f, -1e30f}) {
+        protocol::Ping b = in;
+        b.pos[1] = bad;
+        const size_t nb = protocol::writePing(buf, h, b);
+        CHECK(!protocol::readPing(buf + sizeof(h), nb - sizeof(h), out));
+    }
+    const float edge[3] = {100000.f, -100000.f, 0};
+    CHECK(protocol::sanePosition(edge));
+    // Random bytes never crash the reader, and what it accepts is always a sane position.
+    std::mt19937 rng(1234);
+    for (int i = 0; i < 2000; ++i) {
+        char junk[32];
+        for (char& ch : junk) ch = static_cast<char>(rng());
+        protocol::Ping j;
+        if (protocol::readPing(junk, rng() % (sizeof(junk) + 1), j)) CHECK(protocol::sanePosition(j.pos));
+    }
+}
+
+static void testRgb() {
+    uint8_t rgb[3] = {1, 2, 3};
+    CHECK(protocol::parseRgb("ffd23c", rgb) && rgb[0] == 0xff && rgb[1] == 0xd2 && rgb[2] == 0x3c);
+    CHECK(protocol::parseRgb("#00FF7f", rgb) && rgb[0] == 0 && rgb[1] == 0xff && rgb[2] == 0x7f);
+    CHECK(protocol::formatRgb(rgb) == "00ff7f");
+    for (const char* bad : {"", "#", "fff", "ffd23", "ffd23c0", "gggggg", "ff d23c", "#ffd23"})
+        CHECK(!protocol::parseRgb(bad, rgb));
+    CHECK(rgb[0] == 0 && rgb[1] == 0xff && rgb[2] == 0x7f); // left alone when refused
+}
+
 int main() {
+    testKnownTypes();
+    testRecentIds();
+    testPing();
+    testRgb();
     testChat();
     testLossWindow();
     testHelloLook();

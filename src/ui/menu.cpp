@@ -28,6 +28,9 @@ char g_name[net::protocol::kMaxNameBytes + 1] = {}; // what fits on the wire
 char g_code[64] = {};
 bool g_inited = false;
 bool g_keyCapture = false; // waiting for a new menu key
+bool g_pingKeyCapture = false; // waiting for a new marker key
+std::string g_pingKeyNote;     // why the last marker key was refused (empty = nothing to say)
+gamepad::Action g_padCapture = gamepad::Action::Count; // which gamepad binding is being recorded (Count = none)
 DWORD g_hintUntil = 0;
 
 void copyToClipboard(const std::string& text) {
@@ -256,13 +259,45 @@ void myLookSection() {
     ImGui::NewLine();
 }
 
+// Markers ("pings") and the arrows on the screen's edge (experimental).
+void markersSection() {
+    const auto cfg = config::get();
+    bool showPings = cfg->showPings;
+    if (ImGui::Checkbox("Markers (experimental)", &showPings))
+        config::change([showPings](config::Settings& c) { c.showPings = showPings; });
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Each player can place one marker where they stand (%s%s). It lasts 30 s;\n"
+                          "off screen it shows as an arrow on the screen's edge.",
+                          cfg->pingKey.empty() ? "no key set" : cfg->pingKey.c_str(),
+                          gamepad::parse(cfg->pingPad) ? (" or " + gamepad::format(gamepad::parse(cfg->pingPad))).c_str() : "");
+    ImGui::SameLine();
+    uint8_t rgb[3] = {255, 210, 60};
+    net::protocol::parseRgb(cfg->pingColor, rgb);
+    float col[3] = {rgb[0] / 255.f, rgb[1] / 255.f, rgb[2] / 255.f};
+    if (ImGui::ColorEdit3("##pingcolour", col, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel)) {
+        for (int i = 0; i < 3; ++i) rgb[i] = static_cast<uint8_t>(col[i] < 0 ? 0 : (col[i] > 1 ? 255 : col[i] * 255.f + 0.5f));
+        const std::string hex = net::protocol::formatRgb(rgb);
+        config::change([hex](config::Settings& c) { c.pingColor = hex; });
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Your marker's colour, as everyone sees it");
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Clear my marker")) net::clearPing();
+    bool showArrows = cfg->showArrows;
+    if (ImGui::Checkbox("Arrows to players off screen (experimental)", &showArrows))
+        config::change([showArrows](config::Settings& c) { c.showArrows = showArrows; });
+    bool pingPulse = cfg->pingPulse;
+    if (ImGui::Checkbox("Flash a marker when it arrives", &pingPulse))
+        config::change([pingPulse](config::Settings& c) { c.pingPulse = pingPulse; });
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("The marker blinks and rings spread from it for a moment when it is placed or moves");
+}
+
 void lookSection() {
     ImGui::SeparatorText("Other players");
     bool showNames = config::get()->showNames;
     if (ImGui::Checkbox("Names above players", &showNames))
         config::change([showNames](config::Settings& c) { c.showNames = showNames; });
     bool showNotices = config::get()->showNotices;
-    if (ImGui::Checkbox("Join/leave notices", &showNotices))
+    if (ImGui::Checkbox("Notices (join/leave, markers)", &showNotices))
         config::change([showNotices](config::Settings& c) { c.showNotices = showNotices; });
     bool showChat = config::get()->showChat;
     if (ImGui::Checkbox("Chat", &showChat)) config::change([showChat](config::Settings& c) { c.showChat = showChat; });
@@ -274,9 +309,73 @@ void lookSection() {
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("With Mumble running (Positional Audio and the Link plugin on, everyone on the same\n"
                           "Mumble server), players in this session hear each other from where they are.");
+    markersSection();
     if (ImGui::Button("Show ghosts")) game::ghosts::requestSpawnOrRefresh();
     ImGui::SameLine();
     if (ImGui::Button("Hide ghosts")) game::ghosts::requestHideAll();
+}
+
+// The action key pressed this frame (as ping_key names it: a letter, ENTER or a menu key), if any.
+bool pressedActionKey(std::string& name) {
+    for (int i = 0; i < 26; ++i) {
+        if (!ImGui::IsKeyPressed(static_cast<ImGuiKey>(ImGuiKey_A + i), false)) continue;
+        name.assign(1, static_cast<char>('A' + i));
+        return true;
+    }
+    if (ImGui::IsKeyPressed(ImGuiKey_Enter, false)) {
+        name = "ENTER";
+        return true;
+    }
+    int count = 0;
+    const ui::MenuKey* keys = ui::menuKeys(count);
+    for (int i = 0; i < count; ++i) {
+        if (!ImGui::IsKeyPressed(static_cast<ImGuiKey>(keys[i].imguiKey), false)) continue;
+        name = keys[i].name;
+        return true;
+    }
+    return false;
+}
+
+// One gamepad binding: its buttons, Change (hold the buttons, let go) and Clear.
+void padRow(const char* label, gamepad::Action action, const std::string& current, std::string config::Settings::*field) {
+    ImGui::PushID(static_cast<int>(action));
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted(label);
+    ImGui::SameLine();
+    uint16_t got = 0;
+    if (gamepad::capturing() && g_padCapture == action) {
+        if (gamepad::captureDone(got)) {
+            const std::string combo = gamepad::format(got);
+            gamepad::setBinding(got, action);
+            config::change([combo, field](config::Settings& c) { c.*field = combo; });
+            g_padCapture = gamepad::Action::Count;
+        } else {
+            ImGui::TextColored(ImVec4(1.f, 0.85f, 0.3f, 1.f), "hold the buttons together, then let go");
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Cancel")) {
+                gamepad::cancelCapture();
+                g_padCapture = gamepad::Action::Count;
+            }
+        }
+    } else {
+        const uint16_t bits = gamepad::parse(current);
+        ImGui::Text("%s", bits ? gamepad::format(bits).c_str() : "none");
+        ImGui::SameLine();
+        ImGui::BeginDisabled(gamepad::capturing()); // one binding is recorded at a time
+        if (ImGui::SmallButton("Change")) {
+            g_padCapture = action;
+            gamepad::beginCapture();
+        }
+        ImGui::EndDisabled();
+        if (bits) {
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Clear")) {
+                gamepad::setBinding(0, action);
+                config::change([field](config::Settings& c) { (c.*field).clear(); });
+            }
+        }
+    }
+    ImGui::PopID();
 }
 
 void controlsSection() {
@@ -306,40 +405,58 @@ void controlsSection() {
     } else {
         ImGui::Text("%s", cfg->menuKey.c_str());
         ImGui::SameLine();
+        ImGui::BeginDisabled(g_pingKeyCapture); // one key is recorded at a time
         if (ImGui::SmallButton("Change##key")) {
             g_keyCapture = true;
             ui::setKeyCapture(true);
         }
+        ImGui::EndDisabled();
     }
     // Gamepad buttons that open it.
+    padRow("Gamepad:", gamepad::Action::Menu, cfg->menuPad, &config::Settings::menuPad);
+    // The marker key: a letter, Enter or one of the menu keys. Change = press the new key; Clear = none.
     ImGui::AlignTextToFramePadding();
-    ImGui::Text("Gamepad:");
+    ImGui::Text("Marker key:");
     ImGui::SameLine();
-    uint16_t got = 0;
-    if (gamepad::capturing()) {
-        if (gamepad::captureDone(got)) {
-            const std::string combo = gamepad::format(got);
-            gamepad::setBinding(got);
-            config::change([combo](config::Settings& c) { c.menuPad = combo; });
-        } else {
-            ImGui::TextColored(ImVec4(1.f, 0.85f, 0.3f, 1.f), "hold the buttons together, then let go");
-            ImGui::SameLine();
-            if (ImGui::SmallButton("Cancel##pad")) gamepad::cancelCapture();
+    if (g_pingKeyCapture) {
+        ImGui::TextColored(ImVec4(1.f, 0.85f, 0.3f, 1.f), "press a key (Esc cancels)");
+        std::string name;
+        if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
+            g_pingKeyCapture = false;
+        } else if (pressedActionKey(name)) {
+            if (ui::setPingKey(name)) {
+                config::change([name](config::Settings& c) { c.pingKey = name; });
+                g_pingKeyNote.clear();
+            } else {
+                g_pingKeyNote = name + " is the menu or chat key";
+            }
+            g_pingKeyCapture = false;
         }
+        if (!g_pingKeyCapture) ui::setKeyCapture(false);
     } else {
-        const uint16_t bits = gamepad::parse(cfg->menuPad);
-        ImGui::Text("%s", bits ? gamepad::format(bits).c_str() : "none");
+        ImGui::Text("%s", cfg->pingKey.empty() ? "none" : cfg->pingKey.c_str());
         ImGui::SameLine();
-        if (ImGui::SmallButton("Change##pad")) gamepad::beginCapture();
-        if (bits) {
+        ImGui::BeginDisabled(g_keyCapture || gamepad::capturing());
+        if (ImGui::SmallButton("Change##pingkey")) {
+            g_pingKeyCapture = true;
+            g_pingKeyNote.clear();
+            ui::setKeyCapture(true);
+        }
+        ImGui::EndDisabled();
+        if (!cfg->pingKey.empty()) {
             ImGui::SameLine();
-            if (ImGui::SmallButton("Clear##pad")) {
-                gamepad::setBinding(0);
-                config::change([](config::Settings& c) { c.menuPad.clear(); });
+            if (ImGui::SmallButton("Clear##pingkey")) {
+                ui::setPingKey("");
+                config::change([](config::Settings& c) { c.pingKey.clear(); });
             }
         }
-        if (!gamepad::active()) ImGui::TextDisabled("No gamepad seen yet.");
+        if (!g_pingKeyNote.empty()) {
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(1.f, 0.45f, 0.4f, 1.f), "%s", g_pingKeyNote.c_str());
+        }
     }
+    padRow("Marker gamepad:", gamepad::Action::Ping, cfg->pingPad, &config::Settings::pingPad);
+    if (!gamepad::active()) ImGui::TextDisabled("No gamepad seen yet.");
 }
 
 // "INSERT or LS+RS"

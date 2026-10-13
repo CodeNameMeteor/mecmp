@@ -58,18 +58,42 @@ struct ChatLine {
 };
 void sendChat(const std::string& text);
 std::vector<ChatLine> chatLines(size_t max = 50); // oldest first
-// World markers ("pings", experimental). Each player has at most one; a new one replaces the old and
-// it disappears after 30 s. sendPing shows ours here at once and sends it to everyone (any thread).
+// World markers ("pings"). Each player has a few at once (see PING in protocol.h); each disappears
+// after the time its owner gave it. sendPing shows ours here at once and sends it to everyone (any thread).
 struct PingInfo {
     uint32_t owner = 0; // session id of the player who placed it
+    uint8_t index = 0;  // which of the owner's cells it is in
     std::string name;
     float pos[3] = {0, 0, 0};
     uint8_t rgb[3] = {255, 210, 60};
-    uint32_t ageMs = 0;
+    uint8_t accent[3] = {255, 255, 255}; // the detail inside the glyph
+    uint8_t glyph = 0;  // the shape to draw (protocol::pingGlyph)
+    std::string label;  // its title, as its owner wrote it; may be empty
+    uint32_t ageMs = 0;  // since it appeared (placing the same marker again right away does not restart it)
+    uint32_t leftMs = 0; // until it disappears
+    uint32_t lifeMs = 0; // how long it lasts in all
     bool own = false;
 };
-void sendPing(const float pos[3], const uint8_t rgb[3]);
-void clearPing(); // removes ours, here and for everyone
+// What a new marker looks like and how long it stays.
+struct PingStyle {
+    uint8_t rgb[3] = {255, 210, 60};
+    uint8_t accent[3] = {255, 255, 255};
+    uint8_t glyph = 0;
+    std::string label;
+    int seconds = 30; // 5..300
+};
+// Places a marker of ours; `limit` = how many we may have at once (1..protocol::kPingCells). The same
+// marker close to one of ours moves that one; over the limit, the oldest goes.
+void sendPing(const float pos[3], const PingStyle& style, int limit);
+bool clearPing();          // removes all of ours, here and for everyone; false if there were none
+// One of ours, by its cell (PingInfo::index). move, rename and renew start its time again, as placing
+// it anew would (renew does nothing else, and the marker does not flash again); they return false if
+// that cell holds no marker now.
+void removePing(uint8_t index);
+bool movePing(uint8_t index, const float pos[3]);
+bool renamePing(uint8_t index, const std::string& label);
+bool renewPing(uint8_t index);
+void trimPings(int limit); // removes our oldest markers until at most `limit` are left
 std::vector<PingInfo> pings(); // the markers to show now (ours first)
 // Smoothed state of a remote player (shown ~100 ms in the past, blended between packets).
 bool remoteState(uint32_t id, PlayerState& out, uint32_t& ageMs);

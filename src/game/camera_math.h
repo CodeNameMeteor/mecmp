@@ -33,13 +33,16 @@ inline bool projectToScreen(const CameraView& c, const float p[3], float width, 
     return std::isfinite(sx) && std::isfinite(sy);
 }
 
-// How visible something `depth` metres ahead is: full until 40 m, gone by 150 m (name tags, markers).
+// How visible something `depth` metres ahead is: full until `fullUntil`, gone by `goneAt`. Name tags:
+// 40 m to 150 m. Markers: 50 m to 300 m, as far as an aimed marker reaches (game/ping_point.cpp).
 constexpr float kFadeFullUntil = 40.f;
 constexpr float kFadeGoneAt = 150.f;
-inline float distanceFade(float depth) {
-    if (!(depth > kFadeFullUntil)) return 1.f;
-    if (depth >= kFadeGoneAt) return 0.f;
-    return 1.f - (depth - kFadeFullUntil) / (kFadeGoneAt - kFadeFullUntil);
+constexpr float kMarkerFadeFullUntil = 50.f;
+constexpr float kMarkerFadeGoneAt = 300.f;
+inline float distanceFade(float depth, float fullUntil = kFadeFullUntil, float goneAt = kFadeGoneAt) {
+    if (!(depth > fullUntil)) return 1.f;
+    if (depth >= goneAt) return 0.f;
+    return 1.f - (depth - fullUntil) / (goneAt - fullUntil);
 }
 
 // The marker wheel: which of `n` equal wedges the offset (dx, dy) from its centre points at, in screen

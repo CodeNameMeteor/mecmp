@@ -85,6 +85,10 @@ constexpr uintptr_t Fn_SpatialEntity_setTransform = 0x1432eb1f0; // (entity, con
 // The game's character teleport, as its teleport entities use it (ServerTeleportEntity_teleportPlayer
 // 0x143391430): (ServerCharacterEntity*, const LinearTransform* 16-byte aligned).
 constexpr uintptr_t Fn_ServerCharacterEntity_teleport = 0x143378830;
+// The ray caster behind the game's ray cast entities (ServerRaycastEntity; called per entity from
+// 0x143a204b0): (const Query*, world [unused], physics, Result*), layouts in raycast.cpp. A plain ray
+// goes on to 0x1434e27f0 (physics, input, raw hit) with collision filter 9 and nothing ignored.
+constexpr uintptr_t Fn_RaycastQuery = 0x143a24890;
 constexpr uintptr_t Fn_NetState_setDirty = 0x14347e420;          // (netState, bits)
 constexpr uintptr_t Fn_Arena_allocFromMember = 0x142a647d0;      // (&arenaMember, size, align)
 constexpr uintptr_t Fn_LocalClientCharacter = 0x1439655f0;       // () -> local PamClientCharacterEntity
@@ -110,6 +114,10 @@ constexpr size_t Character_Data = 0x30;          // PamCharacterEntityData
 constexpr size_t Character_Player = 0x250;
 constexpr size_t CharData_GhostShader = 0xe8;    // PamCharacterEntityData::PamUseRunnersGhostShader
 constexpr size_t Entity_TransformSpace = 0x38;
+// ServerGameWorld -> its physics, as the ray cast entities' update reads it (0x143a1fd7a and the
+// getter 0x1434ee940), and what a ray cast reads from the physics object (0x14351a1a0).
+constexpr size_t World_PhysicsManager = 0x50, PhysManager_Holder = 0xf0, PhysHolder_Physics = 0x18;
+constexpr size_t Phys_HavokWorld = 0x10, HavokWorld_FilterOwner = 0x150, FilterOwner_Filter = 0x4d0;
 
 // PamServerReplayPlayerComponent: playback object at +0x30 (state at +0x38, 1 = playing).
 constexpr size_t SRP_PlaybackState = 0x38, SRP_Setup = 0xb0, SRP_Pose = 0x178, SRP_PoseEnd = 0x180,

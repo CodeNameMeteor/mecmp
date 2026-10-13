@@ -189,6 +189,9 @@ constexpr uint8_t kPingAllCells = 0xFF;
 constexpr uint32_t kPingLifeUnitMs = 5000;
 constexpr uint32_t kPingDefaultLifeMs = 30000;
 constexpr uint8_t kPingMaxLife = 60; // 5 minutes
+// A marker is drawn this far above pos (pos began as the placing player's feet). A sender that
+// wants its marker on an exact spot sends that spot lowered by this much.
+constexpr float kPingLift = 1.2f;
 inline uint8_t pingGlyph(uint8_t flags) { return static_cast<uint8_t>((flags >> kPingGlyphShift) & (kPingGlyphs - 1)); }
 inline uint8_t withPingGlyph(uint8_t flags, uint8_t glyph) {
     return static_cast<uint8_t>((flags & ~((kPingGlyphs - 1) << kPingGlyphShift)) |

@@ -69,6 +69,7 @@ struct Settings {
     bool showPings = true;                // markers placed by players
     bool showArrows = true;               // arrows on the screen's edge to players who are off screen
     bool pingPulse = true;                // a new marker flashes briefly when it arrives
+    bool pingAim = true;                  // a marker goes where you look (false: where you stand)
     std::string pingKey = "G";            // press = place a marker, hold = the wheel: a letter, ENTER, or a menu key name; empty = none
     std::string pingPad;                  // gamepad buttons for the same (as menu_pad); empty = none
     int pingWheel = 0;                    // the wheel that opens (the one used last)

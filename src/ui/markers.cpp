@@ -15,7 +15,7 @@
 
 namespace mecmp::ui::markers {
 namespace {
-constexpr float kMarkerHeight = 1.2f; // a marker floats this far above the spot it was placed on
+constexpr float kMarkerHeight = net::protocol::kPingLift; // a marker floats this far above its position
 constexpr float kHeadHeight = 2.05f;  // as for name tags: above the ghost's feet
 constexpr float kFadeLastMs = 3000.f; // a marker fades out over its last seconds (a third of its life if that is less)
 
@@ -74,9 +74,9 @@ void draw() {
             const float at[3] = {p.pos[0], p.pos[1] + kMarkerHeight, p.pos[2]};
             game::EdgeIndicator e;
             if (!game::edgeIndicator(cam, at, screen.x, screen.y, margin, e)) continue;
-            // Fades with distance like the names, and over its last seconds.
+            // Fades with distance (later than the names do), and over its last seconds.
             const float fadeMs = std::min(kFadeLastMs, static_cast<float>(p.lifeMs) / 3.f);
-            const float alpha = game::distanceFade(e.distance) * std::clamp(static_cast<float>(p.leftMs) / fadeMs, 0.f, 1.f);
+            const float alpha = game::distanceFade(e.distance, game::kMarkerFadeFullUntil, game::kMarkerFadeGoneAt) * std::clamp(static_cast<float>(p.leftMs) / fadeMs, 0.f, 1.f);
             if (alpha <= 0.f) continue;
             snprintf(text, sizeof(text), "%s  %.0f m", p.name.c_str(), e.distance);
             // A flash when it arrives, so a new or moved marker is noticed (unless switched off).

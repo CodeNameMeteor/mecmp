@@ -63,7 +63,12 @@ players hear each other from the direction of their ghost, quieter with distance
 1. Everyone installs Mumble and joins the same Mumble server and channel.
 2. In Mumble: *Settings > Audio Output > Positional Audio* on, and *Settings > Plugins > Link* enabled
    (with *Link to Game and Transmit Position* on).
-3. Play in the same MECMP session. Mumble says it linked to "Mirror's Edge Catalyst (MECMP)".
+3. Play in the same MECMP session. Mumble's log shows a "linked" line when it picks the game up.
+
+The MECMP menu shows the state under *Positional voice (Mumble)*: Mumble not running, waiting for a
+level, waiting for a session, or *Sending to Mumble* (hover it for the Mumble settings). Mumble does not
+answer the game, so this shows that MECMP is doing its part; whether Mumble uses it shows in Mumble.
+To test it, two players in the same session walk apart: the other voice should move and fade.
 
 Only players in the same MECMP session are positioned for each other (outside the game, or in another
 session, Mumble falls back to normal voice). Turn it off with *Positional voice (Mumble)* in the menu or

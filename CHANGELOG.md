@@ -3,6 +3,11 @@
 ## Unreleased
 
 ### Fixes
+- **The injector finds the game, not the activation window.** Starting the game first runs an
+  activation process that is also called MirrorsEdgeCatalyst.exe; an injector started early loaded the
+  mod into that one. It now waits until the game itself is running (the engine is loaded and its window
+  is up), so it can be started before the game. Started by double-click, its window stays open until a
+  key is pressed, so the result can be read.
 - **Hosting is harder to flood.** A host accepts at most 4 players from one IP address, refuses a
   player who claims another player's session id, and limits each player to 80 packets a second.
   Before, one machine could take every slot of a session, and another player could send as someone else.

@@ -3,9 +3,10 @@ MECMP - Mirror's Edge Catalyst multiplayer (public beta)
 
 INSTALL
 1. Unzip this folder anywhere (not inside the game folder is fine).
-2. Start Mirror's Edge Catalyst and wait for the main menu.
-3. Run mecmp_inject.exe. It says when the mod is loaded. A log, mecmp.log, is written
-   next to mecmp.dll; the first run also creates mecmp.ini there.
+2. Run mecmp_inject.exe, before or after starting Mirror's Edge Catalyst. It waits out the
+   activation window and loads the mod into the game itself, then says so. A log, mecmp.log, is
+   written next to mecmp.dll; the first run also creates mecmp.ini there.
+3. If the game runs as administrator, run mecmp_inject.exe as administrator too.
 4. Load into free roam.
 
 Without the injector (optional): copy version.dll and mecmp.dll into the game's folder, the one

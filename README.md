@@ -14,7 +14,9 @@ Download the latest release from the [Releases](https://github.com/CodeNameMeteo
 ## Use
 
 1. Put `mecmp.dll` and `mecmp_inject.exe` in one folder. The first run creates `mecmp.ini` there.
-2. Start the game, run `mecmp_inject.exe` (it says when the mod is loaded; `mecmp.log` says "ready"), load into free roam.
+2. Run `mecmp_inject.exe`, before or after starting the game: it waits out the activation window (also
+   called MirrorsEdgeCatalyst.exe) and loads the mod into the game itself, then says so (`mecmp.log`
+   says "ready"). Load into free roam.
 
 **In game, press INSERT, or click both sticks (LS+RS) on a gamepad,** for the MECMP menu: host a
 session, paste a join code and join, set your name, see who is connected, pick your own look (Faith,

@@ -108,6 +108,11 @@ void updateManager(uintptr_t mgr, const std::vector<net::RemoteInfo>& players, b
 
 void beforeManagerUpdate(void* pool) {
     const uintptr_t pl = reinterpret_cast<uintptr_t>(pool);
+    static bool first = true;
+    if (first) {
+        first = false;
+        MLOG("map: the game updates its friend markers (pool %p)", pool);
+    }
     uintptr_t range[2] = {};
     if (!pl || !mem::read(pl + Pool_Entries, range, sizeof(range)) || range[1] <= range[0] ||
         (range[1] - range[0]) / Pool_EntrySize > 16)
@@ -115,6 +120,19 @@ void beforeManagerUpdate(void* pool) {
     const size_t n = (range[1] - range[0]) / Pool_EntrySize;
     uintptr_t entries[16 * 2] = {};
     if (!mem::read(range[0], entries, n * Pool_EntrySize)) return;
+    static size_t loggedN = static_cast<size_t>(-1);
+    if (n != loggedN) { // diagnostics: what the pool holds
+        loggedN = n;
+        std::string what;
+        for (size_t i = 0; i < n; ++i) {
+            uintptr_t vt = 0;
+            mem::read(entries[i * 2], vt);
+            char one[64];
+            snprintf(one, sizeof(one), " %p (vtable %p)", reinterpret_cast<void*>(entries[i * 2]), reinterpret_cast<void*>(vt));
+            what += one;
+        }
+        MLOG("map: the friend-marker pool %p holds %zu manager(s):%s", pool, n, what.c_str());
+    }
     const bool enabled = config::get()->playersOnMap && net::running();
     const std::vector<net::RemoteInfo> players = enabled ? net::remotes(kShowAfterMs) : std::vector<net::RemoteInfo>{};
     for (size_t i = 0; i < n; ++i) {

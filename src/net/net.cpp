@@ -627,7 +627,8 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
         // Nothing of ours comes back to the host, so a packet that claims our session id is forged.
         if (own) { ++g_dropped; return; }
         Member* m = memberFrom(from);
-        if (!m && !(m = admitMember(from, h.session))) { ++g_dropped; return; }
+        if (!m) m = admitMember(from, h.session);
+        if (!m) { ++g_dropped; return; }
         m->lastSeen = GetTickCount();
         // A player speaks only as itself: its session id is fixed when it joins. Only a HELLO may change it
         // (the game was restarted), and only to an id no other player uses.

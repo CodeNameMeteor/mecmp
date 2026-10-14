@@ -1,3 +1,4 @@
+#include "ui/overlay.h"
 #include "ui/chat.h"
 
 #include <windows.h>
@@ -44,6 +45,7 @@ void draw() {
     ImFont* font = ImGui::GetFont();
     const float size = ImGui::GetFontSize();
     for (auto it = lines.rbegin(); it != lines.rend(); ++it) {
+        if (!typing && overlayHidden()) break;
         const DWORD age = now - it->atMs;
         float alpha = 1.f;
         if (!typing) {

@@ -643,8 +643,21 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
             if (sendto(g_sock, out, n, 0, reinterpret_cast<const sockaddr*>(&a), sizeof(a)) == n) ++g_relayed;
         lock.lock();
     }
+    // Joining: everything legitimate comes through the host (a player host forwards its joiners, a server
+    // relays everyone), so a packet from any other address is forged or stray. Without this, anyone who knows
+    // a joiner's address could send it packets that claim the host's session (a host summon, chat, a pose).
+    if (g_role == Role::Join && !sameAddr(from, g_hostAddr)) {
+        ++g_dropped;
+        static DWORD lastWarn = 0;
+        if (GetTickCount() - lastWarn > 10000) {
+            lastWarn = GetTickCount();
+            MLOG("net: ignored a packet from %s (not the host %s)", addrToString(from).c_str(),
+                 addrToString(g_hostAddr).c_str());
+        }
+        return;
+    }
     // Joining: the host answered. A solo test joins itself, so its own packets coming back count too.
-    if (g_role == Role::Join && sameAddr(from, g_hostAddr) && !g_heardFromHost) {
+    if (g_role == Role::Join && !g_heardFromHost) {
         g_heardFromHost = true;
         MLOG("net: connected to the host %s", addrToString(from).c_str());
     }

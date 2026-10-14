@@ -315,7 +315,8 @@ bool readInfoAnswer(const char* payload, size_t n, ServerInfo& out) {
     out.maxPlayers = static_cast<uint8_t>(payload[2]);
     size_t len = 0;
     while (len < kNameLen && payload[4 + len]) ++len;
-    out.name.assign(payload + 4, len);
+    // The name comes from whatever server answers: shown as chat and in the menu, so clean it like a player's.
+    out.name = cleanText(std::string(payload + 4, len), kMaxNameBytes);
     return true;
 }
 

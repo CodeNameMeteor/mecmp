@@ -22,6 +22,7 @@
 
 #include "core/config.h"
 #include "core/log.h"
+#include "net/host_guard.h"
 #include "net/joincode.h"
 #include "net/protocol.h"
 #include "net/upnp.h"
@@ -96,7 +97,12 @@ struct Remote {
 enum class Role { Host, Join };
 Role g_role = Role::Host;
 
-struct Member { sockaddr_in addr{}; DWORD lastSeen = 0; };
+struct Member {
+    sockaddr_in addr{};
+    DWORD lastSeen = 0;
+    uint32_t session = 0;     // the session id this joiner speaks with (see handlePacket)
+    guard::Bucket bucket;     // how fast it may send (net/host_guard.h)
+};
 
 std::mutex g_m;
 std::map<uint32_t, Remote> g_remotes;     // by session id
@@ -410,6 +416,54 @@ void receivePing(Remote& r, bool own, const char* payload, size_t len) { // call
     putPing(r.pings[p.index], p, now, 0);
 }
 
+// --- Host side: who may join and what they may send (caller holds g_m) ---------------------------
+Member* memberFrom(const sockaddr_in& from) {
+    for (auto& m : g_members)
+        if (sameAddr(m.addr, from)) return &m;
+    return nullptr;
+}
+
+// True if another player (or the host itself) already speaks with this session id.
+bool sessionInUse(uint32_t session, const sockaddr_in& except) {
+    if (session == g_session) return true;
+    for (const auto& m : g_members)
+        if (m.session == session && !sameAddr(m.addr, except)) return true;
+    return false;
+}
+
+uint32_t sameIpCount(const sockaddr_in& from) {
+    uint32_t n = 0;
+    for (const auto& m : g_members) n += m.addr.sin_addr.s_addr == from.sin_addr.s_addr;
+    return n;
+}
+
+// Lets a new joiner in, or refuses it (the reason is logged now and then). Null = refused.
+Member* admitMember(const sockaddr_in& from, uint32_t session) {
+    static DWORD lastWarn = 0;
+    const char* why = nullptr;
+    if (g_members.size() >= kMaxPeers) why = "session full";
+    else if (sameIpCount(from) >= guard::kMaxPerIp) why = "too many players from this address";
+    else if (sessionInUse(session, from)) why = "its session id is in use";
+    if (why) {
+        if (GetTickCount() - lastWarn > 10000) {
+            lastWarn = GetTickCount();
+            MLOG("net: not admitting %s: %s (%llu player(s) connected)", addrToString(from).c_str(), why,
+                 static_cast<unsigned long long>(g_members.size()));
+        }
+        return nullptr;
+    }
+    Member m;
+    m.addr = from;
+    m.lastSeen = GetTickCount();
+    m.session = session;
+    g_members.push_back(m);
+    g_sendTo.push_back(from);
+    if (peerLogAllowed())
+        MLOG("net: %s joined (%llu player(s) connected)", addrToString(from).c_str(),
+             static_cast<unsigned long long>(g_members.size()));
+    return &g_members.back();
+}
+
 // --- Quick answers (REACT) -----------------------------------------------------------------------
 constexpr int kReactBurst = 6; // at most this many answers from one player per kChatBurstMs
 std::deque<ReactionInfo> g_reactions; // answers to our markers, not yet shown; guarded by g_m
@@ -449,28 +503,21 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
     // Only the packet types we know may create state or be forwarded to other players.
     if (!proto::knownType(h.type)) { ++g_dropped; return; }
     const bool own = h.session == g_session;
-    std::lock_guard<std::mutex> lock(g_m);
-    if (!own && g_role == Role::Host) {
-        // A joiner: remember it, and forward its packet unchanged to everyone else.
-        bool known = false;
-        for (auto& m : g_members)
-            if (sameAddr(m.addr, from)) { m.lastSeen = GetTickCount(); known = true; }
-        if (!known) {
-            if (g_members.size() >= kMaxPeers) {
-                static DWORD lastFullWarn = 0;
-                if (GetTickCount() - lastFullWarn > 10000) {
-                    lastFullWarn = GetTickCount();
-                    MLOG("net: session full (%llu players); not admitting %s", static_cast<unsigned long long>(g_members.size()),
-                         addrToString(from).c_str());
-                }
-                return;
-            }
-            g_members.push_back({from, GetTickCount()});
-            g_sendTo.push_back(from);
-            if (peerLogAllowed())
-                MLOG("net: %s joined (%llu player(s) connected)", addrToString(from).c_str(),
-                     static_cast<unsigned long long>(g_members.size()));
+    std::unique_lock<std::mutex> lock(g_m);
+    if (g_role == Role::Host) {
+        // Nothing of ours comes back to the host, so a packet that claims our session id is forged.
+        if (own) { ++g_dropped; return; }
+        Member* m = memberFrom(from);
+        if (!m && !(m = admitMember(from, h.session))) { ++g_dropped; return; }
+        m->lastSeen = GetTickCount();
+        // A player speaks only as itself: its session id is fixed when it joins. Only a HELLO may change it
+        // (the game was restarted), and only to an id no other player uses.
+        if (h.session != m->session) {
+            if (h.type != proto::kTypeHello || sessionInUse(h.session, from)) { ++g_dropped; return; }
+            if (peerLogAllowed()) MLOG("net: %s is now session %08x (restarted)", addrToString(from).c_str(), h.session);
+            m->session = h.session;
         }
+        if (!m->bucket.take(GetTickCount())) { ++g_dropped; return; } // flooding: not forwarded, not processed
         // A joiner's HELLO goes on without the "I host" flag: only the host's own HELLO may set it.
         char relay[proto::kMaxPacket + 64];
         const char* out = buf;
@@ -479,9 +526,14 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
             relay[sizeof(h) + proto::kHelloFlagsOffset] = static_cast<char>(relay[sizeof(h) + proto::kHelloFlagsOffset] & ~proto::kHelloHost);
             out = relay;
         }
-        for (const auto& m : g_members)
-            if (!sameAddr(m.addr, from))
-                if (sendto(g_sock, out, n, 0, reinterpret_cast<const sockaddr*>(&m.addr), sizeof(m.addr)) == n) ++g_relayed;
+        // The sends run without g_m: the socket does not block, and only this thread changes the member list.
+        std::vector<sockaddr_in> to;
+        for (const auto& other : g_members)
+            if (!sameAddr(other.addr, from)) to.push_back(other.addr);
+        lock.unlock();
+        for (const auto& a : to)
+            if (sendto(g_sock, out, n, 0, reinterpret_cast<const sockaddr*>(&a), sizeof(a)) == n) ++g_relayed;
+        lock.lock();
     }
     // Joining: the host answered. A solo test joins itself, so its own packets coming back count too.
     if (g_role == Role::Join && sameAddr(from, g_hostAddr) && !g_heardFromHost) {
@@ -717,8 +769,12 @@ void hostSetup(uint32_t generation) {
     if (!lan.empty()) MLOG("net: join code for players on your own network: %s", lan.c_str());
 }
 
+// Packets read per pass. The rest stay in the socket for the next pass, so a flood cannot keep the
+// network thread busy and starve its other work (sends, timeouts, the router lease).
+constexpr int kMaxReadsPerPass = 256;
+
 void receiveAll() {
-    for (;;) {
+    for (int reads = 0; reads < kMaxReadsPerPass; ++reads) {
         char buf[proto::kMaxPacket + 64];
         sockaddr_in from{};
         int fromLen = sizeof(from);

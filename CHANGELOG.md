@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Fixes
+- **Hosting is harder to flood.** A host accepts at most 4 players from one IP address, refuses a
+  player who claims another player's session id, and limits each player to 80 packets a second.
+  Before, one machine could take every slot of a session, and another player could send as someone else.
+
 ### Marker wheel
 - **Instant wheel** (Controls tab): the wheel can open the moment the key goes down instead of after a
   short hold. A very short tap that never moves the pointer still places your marker.

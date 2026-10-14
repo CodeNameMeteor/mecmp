@@ -95,6 +95,35 @@ static void testReactForwarded() {
     CHECK(t.sentTo(B) == 0);
 }
 
+static void testSummonForwarded() {
+    // A summon and its answer are session packets: they reach the others, a dedicated server forwards the
+    // bytes as they are (it is the receivers that refuse to trust a vouch from it, not the server).
+    Harness t;
+    auto hA = hello(1, "alice"), hB = hello(2, "bob");
+    t.relay.onPacket(A, hA.data(), hA.size(), 0);
+    t.relay.onPacket(B, hB.data(), hB.size(), 0);
+    t.sent.clear();
+    char buf[proto::kMaxPacket];
+    const proto::Header h{proto::kMagic, proto::kProtocol, proto::kTypeSummon, 1, 5};
+    proto::Summon s;
+    s.id = 1;
+    s.flags = proto::kSummonHard;
+    s.targetCount = 1;
+    s.targets[0] = 2;
+    size_t n = proto::writeSummon(buf, h, s);
+    t.relay.onPacket(A, buf, n, 10);
+    CHECK(t.sentTo(B) == 1 && t.sentTo(A) == 0);
+    t.sent.clear();
+    const proto::Header hr{proto::kMagic, proto::kProtocol, proto::kTypeSummonReply, 2, 6};
+    proto::SummonReply r;
+    r.id = 1;
+    r.target = 1;
+    r.result = proto::kSummonTeleporting;
+    n = proto::writeSummonReply(buf, hr, r);
+    t.relay.onPacket(B, buf, n, 20);
+    CHECK(t.sentTo(A) == 1 && t.sentTo(B) == 0);
+}
+
 static void testHelloFlagsCleared() {
     Harness t;
     auto hB = hello(2, "bob");
@@ -439,6 +468,7 @@ int main() {
     testMirror();
     testForwardsToOthers();
     testReactForwarded();
+    testSummonForwarded();
     testHelloFlagsCleared();
     testServerHello();
     testSessionBinding();

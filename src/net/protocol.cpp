@@ -286,6 +286,75 @@ bool readReact(const char* payload, size_t n, React& out) {
     return true;
 }
 
+size_t writeSummon(char* buf, const Header& h, const Summon& s) {
+    char* p = buf;
+    put(p, h);
+    put(p, s.id);
+    for (int i = 0; i < 3; ++i) put(p, s.pos[i]);
+    put(p, s.yaw);
+    put(p, static_cast<uint8_t>(s.flags & kSummonKnownFlags));
+    const uint8_t n = static_cast<uint8_t>(s.targetCount > kMaxSummonTargets ? kMaxSummonTargets : s.targetCount);
+    put(p, n);
+    for (int i = 0; i < n; ++i) put(p, s.targets[i]);
+    return static_cast<size_t>(p - buf);
+}
+
+bool readSummon(const char* payload, size_t n, Summon& out) {
+    const char* p = payload;
+    const char* end = payload + n;
+    Summon s;
+    uint8_t flags = 0;
+    if (!get(p, end, s.id)) return false;
+    for (int i = 0; i < 3; ++i)
+        if (!get(p, end, s.pos[i])) return false;
+    if (!get(p, end, s.yaw) || !get(p, end, flags) || !get(p, end, s.targetCount)) return false;
+    if (s.targetCount > kMaxSummonTargets || !sanePosition(s.pos) || !std::isfinite(s.yaw)) return false;
+    for (int i = 0; i < s.targetCount; ++i)
+        if (!get(p, end, s.targets[i])) return false;
+    s.flags = static_cast<uint8_t>(flags & kSummonKnownFlags);
+    out = s;
+    return true;
+}
+
+bool summonCalls(const Summon& s, uint32_t session) {
+    if (s.targetCount == 0) return true;
+    for (int i = 0; i < s.targetCount && i < kMaxSummonTargets; ++i)
+        if (s.targets[i] == session) return true;
+    return false;
+}
+
+void applyHostPolicy(Summon& s, bool senderIsHost, bool membersMayHard) {
+    s.flags = static_cast<uint8_t>(s.flags & ~kSummonVouched); // never what a sender wrote
+    if (senderIsHost || (s.flags & kSummonHard) == 0) return;   // the host needs no vouching
+    if (membersMayHard) s.flags = static_cast<uint8_t>(s.flags | kSummonVouched);
+    else s.flags = static_cast<uint8_t>(s.flags & ~kSummonHard);
+}
+
+bool patchSummonFlags(char* packet, size_t n, uint8_t flags) {
+    constexpr size_t kFlagsAt = sizeof(Header) + sizeof(uint32_t) + 3 * sizeof(float) + sizeof(float);
+    if (n <= kFlagsAt) return false;
+    packet[kFlagsAt] = static_cast<char>(flags & kSummonKnownFlags);
+    return true;
+}
+
+size_t writeSummonReply(char* buf, const Header& h, const SummonReply& r) {
+    char* p = buf;
+    put(p, h);
+    put(p, r.id);
+    put(p, r.target);
+    put(p, r.result);
+    return static_cast<size_t>(p - buf);
+}
+
+bool readSummonReply(const char* payload, size_t n, SummonReply& out) {
+    const char* p = payload;
+    const char* end = payload + n;
+    SummonReply r;
+    if (!get(p, end, r.id) || !get(p, end, r.target) || !get(p, end, r.result) || r.result > kSummonBusy) return false;
+    out = r;
+    return true;
+}
+
 size_t writeInfoRequest(char* buf, const Header& h) {
     memset(buf, 0, kInfoRequestSize);
     memcpy(buf, &h, sizeof(h));

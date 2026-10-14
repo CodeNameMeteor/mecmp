@@ -13,7 +13,7 @@
 // type 2 HELLO (about once a second): char name[24] (UTF-8, at most 23 bytes, NUL padded)
 //   | u32 look (0 = Faith, else the game's echo CustomizationHash; absent from older versions = 0)
 //   | u8 flags (kHelloHost, kHelloServer) | u8 wear (Faith's outfit changes, kWear...; absent = 0)
-// type 3 CHAT and type 4 PING: see below.
+// type 3 CHAT, type 4 PING, type 6 REACT, type 7 SUMMON and type 8 SUMMON_REPLY: see below.
 
 #include <cstddef>
 #include <cstdint>
@@ -30,6 +30,8 @@ constexpr uint16_t kTypeHello = 2;
 constexpr uint16_t kTypeChat = 3;
 constexpr uint16_t kTypePing = 4; // a world marker
 constexpr uint16_t kTypeReact = 6; // a quick answer to someone's marker (see REACT below)
+constexpr uint16_t kTypeSummon = 7; // "come to me" (see SUMMON below)
+constexpr uint16_t kTypeSummonReply = 8; // a summoned player's answer (see SUMMON_REPLY below)
 // type 5 INFO: a server list's question "who are you?" and a dedicated server's answer. Not a session
 // packet: it is not in knownType (never stored or forwarded), and a server answers it whatever the
 // protocol in the header, so a list can say "other version" instead of nothing.
@@ -42,7 +44,8 @@ constexpr size_t kInfoRequestSize = 80;
 // The packet types this version understands. Anything else is dropped before it can create state or
 // be forwarded, so a new type needs no protocol bump: older versions simply ignore it.
 constexpr bool knownType(uint16_t type) {
-    return type == kTypeState || type == kTypeHello || type == kTypeChat || type == kTypePing || type == kTypeReact;
+    return type == kTypeState || type == kTypeHello || type == kTypeChat || type == kTypePing || type == kTypeReact ||
+           type == kTypeSummon || type == kTypeSummonReply;
 }
 constexpr size_t kMaxChatBytes = 120; // UTF-8, after cleaning
 constexpr size_t kNameLen = 24;
@@ -259,6 +262,64 @@ size_t writeReact(char* buf, const Header& h, const React& r);
 // False for a short or damaged packet, a cell out of range, or an empty answer.
 bool readReact(const char* payload, size_t n, React& out);
 
+// type 7 SUMMON: u32 id | f32 pos[3] | f32 yaw | u8 flags | u8 targetCount | u32 targets[targetCount].
+// "Come to me": pos and yaw are where the sender stood when sending (a receiver goes there, not to
+// wherever the sender is by then). targetCount 0 = everyone, else the session ids of the players called
+// (at most kMaxSummonTargets); everyone receives the packet, only those called act on it. Sent a few times
+// like PING, `id` makes the repeats the same event.
+// flags: kSummonHard = "pull them in" (a receiver may still turn it into a plain summon: it is opt-in on
+// their side and only honoured from the host, see below); kSummonVouched = the lobby host allows a hard
+// summon from this sender; kSummonCancel = the sender withdraws summon `id`.
+// kSummonVouched is only ever set by a player-host's relay. Whatever a sender wrote there is replaced
+// (applyHostPolicy), and a receiver connected to a dedicated server (which forwards bytes as they are)
+// must not trust it at all. Bits above kSummonKnownFlags are dropped on reading.
+// Older versions do not know the type and drop it.
+constexpr uint8_t kSummonHard = 1;
+constexpr uint8_t kSummonVouched = 2;
+constexpr uint8_t kSummonCancel = 4;
+constexpr uint8_t kSummonKnownFlags = kSummonHard | kSummonVouched | kSummonCancel;
+constexpr int kMaxSummonTargets = 16;
+struct Summon {
+    uint32_t id = 0;
+    float pos[3] = {0, 0, 0};
+    float yaw = 0;
+    uint8_t flags = 0;
+    uint8_t targetCount = 0; // 0 = everyone
+    uint32_t targets[kMaxSummonTargets] = {};
+};
+size_t writeSummon(char* buf, const Header& h, const Summon& s);
+// False for a short or damaged packet, a position outside the sane range, a non-finite yaw, or more
+// targets than kMaxSummonTargets.
+bool readSummon(const char* payload, size_t n, Summon& out);
+// True when `session` is among those called (or the summon is for everyone). The sender never is.
+bool summonCalls(const Summon& s, uint32_t session);
+// What a player-host's relay does to a summon before it forwards it and acts on it itself: the sender is
+// the host (always allowed) or a member (allowed only while `membersMayHard`). A hard summon from a
+// member the host does not allow becomes a plain one; kSummonVouched is set exactly for an allowed
+// hard summon from a member, and cleared otherwise.
+void applyHostPolicy(Summon& s, bool senderIsHost, bool membersMayHard);
+// Rewrites the flags byte inside an already written SUMMON packet of `n` bytes (what the relay forwards).
+// False when `n` is too short to hold one.
+bool patchSummonFlags(char* packet, size_t n, uint8_t flags);
+
+// type 8 SUMMON_REPLY: u32 id | u32 target | u8 result.
+// A called player's answer to summon `id`, for the player whose session id is `target` (the one who
+// called). Everyone receives it; only `target` shows it. Sent a few times, `id` + sender make the
+// repeats the same event.
+enum SummonResult : uint8_t {
+    kSummonDeclined = 0,    // said no, or the answer window ran out
+    kSummonTeleporting = 1, // is on the way (accepted, or a hard summon's countdown ended)
+    kSummonBusy = 2,        // could not go right now (loading, a menu, a teleport already running)
+};
+struct SummonReply {
+    uint32_t id = 0;
+    uint32_t target = 0;
+    uint8_t result = kSummonDeclined;
+};
+size_t writeSummonReply(char* buf, const Header& h, const SummonReply& r);
+// False for a short packet or a result code nobody knows.
+bool readSummonReply(const char* payload, size_t n, SummonReply& out);
+
 // "ffd23c" or "#ffd23c" -> r, g, b. False (rgb untouched) for anything else.
 bool parseRgb(const std::string& hex, uint8_t rgb[3]);
 std::string formatRgb(const uint8_t rgb[3]);
@@ -279,6 +340,10 @@ bool readInfoAnswer(const char* payload, size_t n, ServerInfo& out);
 // name or the look; missing fields read as 0.
 constexpr uint8_t kHelloHost = 1;
 constexpr uint8_t kHelloServer = 2;
+// bit 2: only in a player-host's own HELLO: the host lets members start hard summons (see SUMMON), so a
+// member's menu can say whether holding the summon key will pull players in. Like kHelloHost, it is
+// cleared from what a host or a server forwards for a joiner, and a joiner reads it from the host only.
+constexpr uint8_t kHelloMembersHard = 4;
 // `wear`: what a player whose look is 0 (Faith) changed about her outfit; 0 = nothing, each viewer
 // shows her as in their own game. The bits are game::models::Wear. Hosts and servers pass the byte on
 // with the rest of the packet; older versions do not send it and ignore it.

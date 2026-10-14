@@ -178,7 +178,8 @@ void Relay::onPacket(const Addr& from, const char* buf, size_t n, uint32_t nowMs
         if (len > proto::kHelloFlagsOffset) { // only the server may say it hosts
             memcpy(copy, buf, n);
             copy[sizeof(h) + proto::kHelloFlagsOffset] =
-                static_cast<char>(copy[sizeof(h) + proto::kHelloFlagsOffset] & ~(proto::kHelloHost | proto::kHelloServer));
+                static_cast<char>(copy[sizeof(h) + proto::kHelloFlagsOffset] &
+                                  ~(proto::kHelloHost | proto::kHelloServer | proto::kHelloMembersHard));
             out = copy;
         }
     } else if (h.type == proto::kTypeChat && cfg_.logChat) {

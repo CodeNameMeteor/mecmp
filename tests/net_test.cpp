@@ -3,12 +3,14 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <limits>
 #include <random>
 #include <string>
 #include <vector>
 
 #include "net/joincode.h"
 #include "net/protocol.h"
+#include "net/summon_policy.h"
 
 using namespace mecmp::net;
 
@@ -408,6 +410,178 @@ static void testReact() {
           out.text.find(char(7)) == std::string::npos);
 }
 
+// "Come to me": the position, the called players, the flags.
+static void testSummon() {
+    char buf[protocol::kMaxPacket];
+    const protocol::Header h{protocol::kMagic, protocol::kProtocol, protocol::kTypeSummon, 7, 1};
+    CHECK(protocol::knownType(protocol::kTypeSummon));
+    protocol::Summon in, out;
+    in.id = 21;
+    in.pos[0] = 10.5f;
+    in.pos[1] = -3.f;
+    in.pos[2] = 99.25f;
+    in.yaw = 1.5f;
+    in.flags = protocol::kSummonHard;
+    // Everyone (no list).
+    size_t n = protocol::writeSummon(buf, h, in);
+    CHECK(n == sizeof(h) + 4 + 12 + 4 + 1 + 1);
+    CHECK(protocol::readSummon(buf + sizeof(h), n - sizeof(h), out));
+    CHECK(out.id == 21 && out.pos[0] == 10.5f && out.pos[1] == -3.f && out.pos[2] == 99.25f && out.yaw == 1.5f);
+    CHECK(out.flags == protocol::kSummonHard && out.targetCount == 0);
+    CHECK(protocol::summonCalls(out, 1) && protocol::summonCalls(out, 0xfffffffeu));
+    // A list: only those named are called.
+    in.targetCount = 2;
+    in.targets[0] = 0x11111111u;
+    in.targets[1] = 0x22222222u;
+    n = protocol::writeSummon(buf, h, in);
+    CHECK(protocol::readSummon(buf + sizeof(h), n - sizeof(h), out) && out.targetCount == 2);
+    CHECK(out.targets[0] == 0x11111111u && out.targets[1] == 0x22222222u);
+    CHECK(protocol::summonCalls(out, 0x22222222u) && !protocol::summonCalls(out, 0x33333333u));
+    // Every cut of a good packet is refused, never read out of bounds (the sanitizers watch).
+    for (size_t cut = 0; cut + 1 < n - sizeof(h); ++cut) CHECK(!protocol::readSummon(buf + sizeof(h), cut, out));
+    // The most it may call; one more than that is refused.
+    in.targetCount = protocol::kMaxSummonTargets;
+    for (int i = 0; i < protocol::kMaxSummonTargets; ++i) in.targets[i] = 100u + static_cast<uint32_t>(i);
+    n = protocol::writeSummon(buf, h, in);
+    CHECK(protocol::readSummon(buf + sizeof(h), n - sizeof(h), out) && out.targetCount == protocol::kMaxSummonTargets);
+    buf[sizeof(h) + 4 + 12 + 4 + 1] = static_cast<char>(protocol::kMaxSummonTargets + 1);
+    CHECK(!protocol::readSummon(buf + sizeof(h), n - sizeof(h), out));
+    // A target count that claims more than the packet holds.
+    in.targetCount = 1;
+    n = protocol::writeSummon(buf, h, in);
+    buf[sizeof(h) + 4 + 12 + 4 + 1] = 5;
+    CHECK(!protocol::readSummon(buf + sizeof(h), n - sizeof(h), out));
+    // A place outside the level or not a number, and a yaw that is not one.
+    in.targetCount = 0;
+    in.pos[1] = 1e9f;
+    n = protocol::writeSummon(buf, h, in);
+    CHECK(!protocol::readSummon(buf + sizeof(h), n - sizeof(h), out));
+    in.pos[1] = 0.f;
+    in.yaw = std::numeric_limits<float>::quiet_NaN();
+    n = protocol::writeSummon(buf, h, in);
+    CHECK(!protocol::readSummon(buf + sizeof(h), n - sizeof(h), out));
+    // Flag bits nobody defined are dropped, the known ones stay.
+    in.yaw = 0.f;
+    in.flags = protocol::kSummonCancel;
+    n = protocol::writeSummon(buf, h, in);
+    buf[sizeof(h) + 4 + 12 + 4] = static_cast<char>(0xF0 | protocol::kSummonCancel);
+    CHECK(protocol::readSummon(buf + sizeof(h), n - sizeof(h), out) && out.flags == protocol::kSummonCancel);
+}
+
+// What a player-host's relay makes of the flags before it forwards a summon.
+static void testSummonHostPolicy() {
+    using protocol::applyHostPolicy;
+    protocol::Summon s;
+    // A plain summon is left as it is, but a vouch a sender wrote itself is wiped.
+    s.flags = protocol::kSummonVouched;
+    applyHostPolicy(s, false, true);
+    CHECK(s.flags == 0);
+    // The host's hard summon needs no vouching and stays hard, whatever the setting.
+    s.flags = protocol::kSummonHard | protocol::kSummonVouched;
+    applyHostPolicy(s, true, false);
+    CHECK(s.flags == protocol::kSummonHard);
+    // A member's hard summon: vouched while the host allows it, a plain summon while not.
+    s.flags = protocol::kSummonHard;
+    applyHostPolicy(s, false, true);
+    CHECK(s.flags == (protocol::kSummonHard | protocol::kSummonVouched));
+    s.flags = protocol::kSummonHard | protocol::kSummonVouched;
+    applyHostPolicy(s, false, false);
+    CHECK(s.flags == 0);
+    // A cancel keeps its bit.
+    s.flags = protocol::kSummonCancel;
+    applyHostPolicy(s, false, false);
+    CHECK(s.flags == protocol::kSummonCancel);
+    // The same on the wire: patching the flags byte of a written packet.
+    char buf[protocol::kMaxPacket];
+    const protocol::Header h{protocol::kMagic, protocol::kProtocol, protocol::kTypeSummon, 7, 1};
+    protocol::Summon in, out;
+    in.flags = protocol::kSummonHard;
+    in.targetCount = 1;
+    in.targets[0] = 5;
+    size_t n = protocol::writeSummon(buf, h, in);
+    CHECK(protocol::patchSummonFlags(buf, n, protocol::kSummonHard | protocol::kSummonVouched));
+    CHECK(protocol::readSummon(buf + sizeof(h), n - sizeof(h), out));
+    CHECK(out.flags == (protocol::kSummonHard | protocol::kSummonVouched) && out.targetCount == 1 && out.targets[0] == 5);
+    CHECK(!protocol::patchSummonFlags(buf, sizeof(h) + 4, 0)); // too short to hold a summon
+}
+
+// Who a summon turns into a question, a countdown, or nothing.
+static void testSummonDecide() {
+    using summon::Action;
+    summon::Input in;
+    in.calledMe = true;
+    CHECK(summon::decide(in) == Action::Soft);              // a plain call asks the player
+    in.fromSelf = true;
+    CHECK(summon::decide(in) == Action::Ignore);            // our own packet
+    in.fromSelf = false;
+    in.calledMe = false;
+    CHECK(summon::decide(in) == Action::Ignore);            // someone else was called
+    in.calledMe = true;
+    // Hard needs a trusted sender AND the player's own opt-in; missing either keeps it a question.
+    in.hardRequested = true;
+    in.senderIsHost = true;
+    CHECK(summon::decide(in) == Action::Soft);              // not opted in
+    in.optedIn = true;
+    CHECK(summon::decide(in) == Action::Hard);              // the host, opted in
+    in.senderIsHost = false;
+    CHECK(summon::decide(in) == Action::Soft);              // a member nobody vouched for
+    in.vouched = true;
+    CHECK(summon::decide(in) == Action::Soft);              // vouch that came by an untrusted path (dedicated server)
+    in.vouchTrusted = true;
+    CHECK(summon::decide(in) == Action::Hard);              // a member the host vouched for
+    in.hardRequested = false;
+    CHECK(summon::decide(in) == Action::Soft);              // not asked hard
+    // The same sender again too soon is dropped; later it counts.
+    in.sinceLastFromSenderMs = summon::kMinGapMs - 1;
+    CHECK(summon::decide(in) == Action::Ignore);
+    in.sinceLastFromSenderMs = summon::kMinGapMs;
+    CHECK(summon::decide(in) == Action::Soft);
+}
+
+// The sentence the caller reads when the answers are in.
+static void testSummonReport() {
+    summon::Tally t;
+    t.expected = 1;
+    t.singleName = "Meteor";
+    CHECK(!summon::complete(t));
+    CHECK(summon::reportText(t) == "Meteor didn't answer");
+    t.teleporting = 1;
+    CHECK(summon::complete(t) && summon::reportText(t) == "Meteor accepted your summon");
+    t.teleporting = 0;
+    t.declined = 1;
+    CHECK(summon::reportText(t) == "Meteor declined your summon");
+    t.declined = 0;
+    t.busy = 1;
+    CHECK(summon::reportText(t) == "Meteor can't come right now");
+    summon::Tally many;
+    many.expected = 4;
+    many.teleporting = 3;
+    CHECK(!summon::complete(many));
+    many.declined = 1;
+    CHECK(summon::complete(many) && summon::reportText(many) == "Summon: 3 of 4 teleported");
+    many.teleporting = 5; // players that joined meanwhile and answered too
+    CHECK(summon::reportText(many) == "Summon: 5 of 6 teleported");
+    summon::Tally none;
+    CHECK(!summon::complete(none)); // nobody called: never "complete"
+}
+
+// A called player's answer.
+static void testSummonReply() {
+    char buf[protocol::kMaxPacket];
+    const protocol::Header h{protocol::kMagic, protocol::kProtocol, protocol::kTypeSummonReply, 7, 1};
+    CHECK(protocol::knownType(protocol::kTypeSummonReply));
+    protocol::SummonReply in, out;
+    in.id = 21;
+    in.target = 0xabcdef01u;
+    in.result = protocol::kSummonTeleporting;
+    size_t n = protocol::writeSummonReply(buf, h, in);
+    CHECK(protocol::readSummonReply(buf + sizeof(h), n - sizeof(h), out));
+    CHECK(out.id == 21 && out.target == 0xabcdef01u && out.result == protocol::kSummonTeleporting);
+    for (size_t cut = 0; cut + 1 < n - sizeof(h); ++cut) CHECK(!protocol::readSummonReply(buf + sizeof(h), cut, out));
+    buf[n - 1] = 9; // a result nobody knows
+    CHECK(!protocol::readSummonReply(buf + sizeof(h), n - sizeof(h), out));
+}
+
 static void testPingTail() {
     char buf[protocol::kMaxPacket];
     protocol::Header h{protocol::kMagic, protocol::kProtocol, protocol::kTypePing, 7, 1};
@@ -512,6 +686,11 @@ int main() {
     testPing();
     testPingLabel();
     testReact();
+    testSummon();
+    testSummonHostPolicy();
+    testSummonReply();
+    testSummonDecide();
+    testSummonReport();
     testPingTail();
     testPingCells();
     testRgb();

@@ -2,8 +2,8 @@
 // "Go to a player": move the local player to another player, with the game's own character teleport
 // (ServerCharacterEntity_teleport, the call the game's teleport entities make) behind a short fade.
 //
-//   fade out -> teleport -> hold (city streams in; re-placed if falling through unloaded ground)
-//   -> fade in
+//   fade out -> teleport -> hold (kept in place until a ray finds the ground under the target, then
+//   set down on it and re-placed if falling; no ground in 8 s: back where we started) -> fade in
 //
 // Threads: request/fadeAlpha/status from any thread; tick on the server game thread.
 

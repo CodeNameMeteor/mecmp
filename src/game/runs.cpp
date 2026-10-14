@@ -31,6 +31,12 @@ constexpr uint32_t kTypeChallengeFinished = 0x9b35497c; // PamSocialPlayChalleng
 // Its fields (seen in game, three finishes 3-4 s after starting): +0x48 the time trial's GUID, +0x60 u32 the
 // time in hundredths of a second (139, 159, 249).
 constexpr size_t Tt_Guid = 0x48, Tt_Time = 0x60;
+// The trial's marker (PamServerChallengeMarkerEntity, vtable 0x141c7e3e8; its finish is vf28 0x143a88af7):
+// +0x80 PamSharedContentId (the same 24 bytes as the message's +0x48), +0xb8 the trial's name (char*,
+// what the game publishes as "contentName" while you play it).
+constexpr uintptr_t Vtbl_PamServerChallengeMarkerEntity = 0x141c7e3e8;
+constexpr size_t Marker_ContentId = 0x80, Marker_Name = 0xb8;
+constexpr size_t kContentIdSize = 0x18;
 constexpr size_t Msg_Category = 0x08, Msg_Type = 0x0c;
 constexpr size_t Fin_ContentId = 0x48, Fin_Delta = 0x50, Fin_HadRecord = 0x54, Fin_Value = 0x58, Fin_NewRecord = 0x60;
 
@@ -50,6 +56,36 @@ std::atomic<uintptr_t> g_clientRegistered{0}, g_serverRegistered{0}; // the mana
 
 std::mutex g_m;
 std::vector<uintptr_t> g_entities; // live PamServerNamedChallengeEntity (checked by vtable before use)
+std::vector<uintptr_t> g_markers;  // live PamServerChallengeMarkerEntity (time trials; checked likewise)
+
+// Keeps a list of entities of one class: pushes `e`, first dropping the dead ones when it is full.
+void track(std::vector<uintptr_t>& list, uintptr_t e, uintptr_t vtblVa) { // caller holds g_m
+    if (list.size() >= 512) {
+        std::vector<uintptr_t> live;
+        for (uintptr_t x : list)
+            if (mem::readOr<uintptr_t>(x) == rva(vtblVa)) live.push_back(x);
+        list.swap(live);
+        if (list.size() >= 512) return;
+    }
+    list.push_back(e);
+}
+
+// The name of the time trial with this content id (empty: its marker is not loaded or has no name).
+std::string timeTrialName(const uint8_t* contentId) {
+    std::lock_guard<std::mutex> lock(g_m);
+    for (uintptr_t e : g_markers) {
+        uint8_t head[Marker_Name + 8] = {};
+        if (!mem::read(e, head, sizeof(head))) continue;
+        uintptr_t vt = 0, name = 0;
+        memcpy(&vt, head, sizeof(vt));
+        if (vt != rva(Vtbl_PamServerChallengeMarkerEntity) || memcmp(head + Marker_ContentId, contentId, kContentIdSize) != 0)
+            continue;
+        memcpy(&name, head + Marker_Name, sizeof(name));
+        std::string s;
+        if (name && mem::readCString(name, s, 96)) return s;
+    }
+    return {};
+}
 struct Recent { uint32_t content; int64_t value; uint32_t at; };
 Recent g_recent{0, 0, 0}; // the last finish reported: the same one from the other manager is a repeat
 
@@ -183,7 +219,8 @@ void onTimeTrialFinished(const uint8_t* m) {
     r.contentId = guidHead;
     r.kind = proto::kRunTimeTrial;
     r.value = static_cast<int64_t>(cs) * 10;
-    MLOG("runs: you finished a time trial in %s", proto::formatRunTime(r.value).c_str());
+    r.title = timeTrialName(m + Tt_Guid);
+    MLOG("runs: you finished the time trial '%s' in %s", r.title.c_str(), proto::formatRunTime(r.value).c_str());
     net::sendResult(r);
 }
 
@@ -225,14 +262,13 @@ void onMessage(Listener* self, const void* message) {
 void onNamedChallengeEntity(void* entity) {
     if (!entity) return;
     std::lock_guard<std::mutex> lock(g_m);
-    if (g_entities.size() >= 512) { // drop the ones that are gone (levels come and go; nothing else clears them)
-        std::vector<uintptr_t> live;
-        for (uintptr_t e : g_entities)
-            if (mem::readOr<uintptr_t>(e) == rva(Vtbl_PamServerNamedChallengeEntity)) live.push_back(e);
-        g_entities.swap(live);
-        if (g_entities.size() >= 512) return;
-    }
-    g_entities.push_back(reinterpret_cast<uintptr_t>(entity));
+    track(g_entities, reinterpret_cast<uintptr_t>(entity), Vtbl_PamServerNamedChallengeEntity);
+}
+
+void onChallengeMarker(void* entity) {
+    if (!entity) return;
+    std::lock_guard<std::mutex> lock(g_m);
+    track(g_markers, reinterpret_cast<uintptr_t>(entity), Vtbl_PamServerChallengeMarkerEntity);
 }
 
 void clientTick() { registerOn(kClientGameContext, g_clientListener, g_clientRegistered); }

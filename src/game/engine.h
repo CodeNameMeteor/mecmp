@@ -30,6 +30,9 @@ constexpr uintptr_t Fn_PresenceInfoManager_assignSlot = 0x143a405e0;
 // PamServerNamedChallengeEntity (dashes and other named challenges; game/runs.h): creator slot -> thunk.
 constexpr uintptr_t Slot_ServerNamedChallengeCreator = 0x141c7ee00;
 constexpr uintptr_t Fn_ServerNamedChallengeCreator = 0x143a834b0;
+// PamServerChallengeMarkerEntity (player-made time trials): creator slot -> thunk.
+constexpr uintptr_t Slot_ServerChallengeMarkerCreator = 0x141c7e9f0;
+constexpr uintptr_t Fn_ServerChallengeMarkerCreator = 0x143a83460;
 constexpr uintptr_t Slot_PresenceInfoManagerCreator = 0x141c74cb8; // creator vtable slot -> the create thunk
 constexpr uintptr_t Fn_PresenceInfoManagerCreator = 0x143a41850;
 constexpr size_t UISystem_PauseController = 0x8c8;

@@ -15,6 +15,8 @@ namespace mecmp::game::runs {
 
 // Creator hook: a PamServerNamedChallengeEntity was created.
 void onNamedChallengeEntity(void* entity);
+// Creator hook: a PamServerChallengeMarkerEntity (a player-made time trial) was created; names a finish.
+void onChallengeMarker(void* entity);
 // Each tick on the client / server game thread: registers the listener once that context exists.
 void clientTick();
 void serverTick();

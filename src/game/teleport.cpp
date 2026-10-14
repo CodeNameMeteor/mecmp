@@ -9,20 +9,14 @@
 #include "core/log.h"
 #include "game/engine.h"
 #include "game/level.h"
-#include "game/raycast.h"
 #include "net/net.h"
 
 namespace mecmp::game::teleport {
 namespace {
 constexpr DWORD kFadeMs = 350;      // fade to black, and back
 constexpr DWORD kHoldMs = 1200;     // black while the target area streams in
-constexpr float kFallMargin = 0.5f; // below the target by this much during the hold: placed again
-// The target area may not be loaded yet (another player far away): its ground has no collision until it
-// streams in, and the player would fall through and die. During the hold the player is kept at the
-// target (placed again whenever it drops) until a ray straight down finds ground, at most kGroundWaitMs.
-constexpr DWORD kGroundWaitMs = 12000;
-constexpr float kGroundRayUp = 1.0f, kGroundRayDown = 40.f; // the ray: from just above the target, this far down
-constexpr int kMaxRetries = 2000; // placements during one hold (one per tick at most)
+constexpr float kFallMargin = 2.f;  // below the target by this much during the hold: placed again
+constexpr int kMaxRetries = 3;
 constexpr float kNearTarget = 30.f; // further than this (horizontally): respawned elsewhere, leave it
 // The screen must never stay black: a phase running this much longer than planned (the server tick
 // stopped, e.g. while the game handles a death) ends the whole thing, drawn or not.
@@ -124,7 +118,7 @@ float fadeAlpha() {
     const int p = g_phase.load();
     if (p == Idle) return 0.f;
     const DWORD since = GetTickCount() - g_phaseAt.load();
-    const DWORD planned = p == Hold ? kGroundWaitMs : kFadeMs; // the hold may wait for the ground
+    const DWORD planned = p == Hold ? kHoldMs : kFadeMs;
     if (since > planned + kStuckMs) { // nothing moved it on: give the screen back
         int expected = p;
         if (g_phase.compare_exchange_strong(expected, Idle))
@@ -221,32 +215,9 @@ void tick() {
             g_retries < kMaxRetries) {
             ++g_retries;
             teleportTo(player, g_target);
-            if (g_retries <= 3 || g_retries % 30 == 0)
-                VLOG("teleport: placed again (%.1f m below the target, attempt %d)", g_target.trans[1] - now.trans[1], g_retries);
+            VLOG("teleport: placed again (%.1f m below the target, attempt %d)", g_target.trans[1] - now.trans[1], g_retries);
         }
-        if (since < kHoldMs) return;
-        // Is there ground under the target yet? (Without the ray cast: the fixed hold, as before.) The rays
-        // pass 0.75 m beside the target, not through it: the player's own body stands there. The area
-        // streams in as a whole, so ground beside the spot means ground under it.
-        raycast::Hit hit;
-        bool ground = !raycast::available();
-        for (float side : {0.75f, -0.75f}) {
-            if (ground) break;
-            const float from[3] = {g_target.trans[0] + side, g_target.trans[1] + kGroundRayUp, g_target.trans[2]};
-            const float to[3] = {g_target.trans[0] + side, g_target.trans[1] - kGroundRayDown, g_target.trans[2]};
-            ground = raycast::cast(from, to, hit);
-        }
-        if (ground || since >= kGroundWaitMs) {
-            if (!ground) MLOG("teleport: no ground under the target after %u s; letting go", static_cast<unsigned>(kGroundWaitMs / 1000));
-            else if (since > kHoldMs + 500) MLOG("teleport: the target area loaded after %.1f s", since / 1000.0);
-            if (ground && raycast::available() && hit.distance > kGroundRayUp + 1.5f) {
-                // The target was well in the air (the other player was jumping): set down on the ground below.
-                LinearTransform down = g_target;
-                down.trans[1] = hit.pos[1] + 0.05f;
-                teleportTo(player, down);
-            }
-            setPhase(FadeIn);
-        }
+        if (since >= kHoldMs) setPhase(FadeIn);
         return;
     }
     if (p == FadeIn && since >= kFadeMs) g_phase = Idle;

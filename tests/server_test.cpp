@@ -502,6 +502,16 @@ static void testDiscordFormatting() {
     std::deque<std::string> lines{"one", "two", std::string(30, 'x')};
     auto posts = dc::pack(lines, 30);
     CHECK(posts.size() == 2 && posts[0] == "one\ntwo" && posts[1].size() == 30);
+    // The live status message: its id from the ?wait=true answer, and the edit / post addresses.
+    CHECK(dc::messageId("{\"type\": 0, \"id\": \"1295071234567890123\", \"channel_id\": \"12\"}") == "1295071234567890123");
+    CHECK(dc::messageId("{\"message\": \"Unknown Webhook\"}").empty());
+    CHECK(dc::messageId("{\"id\": \"12a\"}").empty());
+    CHECK(dc::isMessageId("123") && !dc::isMessageId("") && !dc::isMessageId("1 2"));
+    CHECK(dc::withPath("https://discord.com/api/webhooks/1/abc", "/messages/9") == "https://discord.com/api/webhooks/1/abc/messages/9");
+    CHECK(dc::withPath("https://discord.com/api/webhooks/1/abc?thread_id=5", "/messages/9") ==
+          "https://discord.com/api/webhooks/1/abc/messages/9?thread_id=5");
+    CHECK(dc::withQuery("https://x/y", "wait=true") == "https://x/y?wait=true");
+    CHECK(dc::withQuery("https://x/y?thread_id=5", "wait=true") == "https://x/y?thread_id=5&wait=true");
     // A webhook without a valid URL never starts (and logs why).
     std::vector<std::string> log;
     dc::Config bad;

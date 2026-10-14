@@ -57,12 +57,23 @@ webhook_url=https://discord.com/api/webhooks/...
 webhook_name=Beat Link
 ; the address the "online" post tells players to join (default: the public address the server finds)
 public_address=play.example.com:47800
-; 0 turns a kind of post off: players joining and leaving, server online / offline, finished runs
-; (dashes and other timed challenges, with the time the player's game reports)
+; one message that always shows who is online and where to join, edited as players come and go
+; (kept across restarts: its id is saved in webhook_status_id_file, next to the log)
+webhook_live=1
+webhook_status_id_file=webhook_status_id.txt
+; posts (0 turns one off): players joining and leaving, server online / offline, finished dashes and
+; time trials (with the time the player's game reports)
 webhook_joins=1
-webhook_status=1
+webhook_status=0
 webhook_results=1
 ```
+
+The live message looks like this, and is updated within a few seconds of anyone joining or leaving:
+
+> 🟢 **Beat Link** — 3/16 online: Meteor, Foie, Nollz
+> Join: `play.example.com:47800` (MECMP menu → Join)
+
+When the server stops it changes to "offline". Delete it in Discord and the server posts a new one.
 
 Keep the webhook URL private: anyone who has it can post to your channel. The server never sends it to
 players or writes it to the log. Posts are gathered for a couple of seconds and sent together, well under

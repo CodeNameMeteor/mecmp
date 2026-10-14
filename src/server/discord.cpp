@@ -96,6 +96,32 @@ double retryAfter(const std::string& body, double fallback) {
     return v > 0 && v < 600 ? v : fallback;
 }
 
+bool isMessageId(const std::string& id) {
+    if (id.empty() || id.size() > 25) return false;
+    for (char c : id)
+        if (c < '0' || c > '9') return false;
+    return true;
+}
+
+std::string messageId(const std::string& body) {
+    const size_t k = body.find("\"id\"");
+    if (k == std::string::npos) return {};
+    const size_t q1 = body.find('"', body.find(':', k) + 1);
+    const size_t q2 = q1 == std::string::npos ? q1 : body.find('"', q1 + 1);
+    if (q2 == std::string::npos) return {};
+    const std::string id = body.substr(q1 + 1, q2 - q1 - 1);
+    return isMessageId(id) ? id : std::string();
+}
+
+std::string withPath(const std::string& url, const std::string& more) {
+    const size_t q = url.find('?');
+    return q == std::string::npos ? url + more : url.substr(0, q) + more + url.substr(q);
+}
+
+std::string withQuery(const std::string& url, const std::string& param) {
+    return url + (url.find('?') == std::string::npos ? "?" : "&") + param;
+}
+
 std::deque<std::string> pack(std::deque<std::string> lines, size_t limit) {
     std::deque<std::string> posts;
     std::string cur;
@@ -135,23 +161,27 @@ bool httpReady(std::string& why) {
     return true;
 }
 
-Answer postJson(const std::string& url, const std::string& body) {
+Answer sendJson(const char* method, const std::string& url, const std::string& body) {
     Answer a;
     const std::wstring wurl = widen(url);
     URL_COMPONENTS uc{};
     uc.dwStructSize = sizeof(uc);
-    wchar_t host[256] = {}, path[2048] = {};
+    wchar_t host[256] = {}, pathOnly[2048] = {}, query[1024] = {};
     uc.lpszHostName = host;
     uc.dwHostNameLength = 255;
-    uc.lpszUrlPath = path;
+    uc.lpszUrlPath = pathOnly;
     uc.dwUrlPathLength = 2047;
+    uc.lpszExtraInfo = query;
+    uc.dwExtraInfoLength = 1023;
     if (!WinHttpCrackUrl(wurl.c_str(), 0, 0, &uc)) { a.error = "bad URL"; return a; }
+    const std::wstring path = std::wstring(pathOnly) + query;
+    const std::wstring verb = widen(method);
     HINTERNET s = WinHttpOpen(L"mecmp_server", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME,
                               WINHTTP_NO_PROXY_BYPASS, 0);
     if (!s) { a.error = "WinHttpOpen failed"; return a; }
     WinHttpSetTimeouts(s, 10000, 10000, 10000, 10000);
     HINTERNET c = WinHttpConnect(s, host, uc.nPort, 0);
-    HINTERNET r = c ? WinHttpOpenRequest(c, L"POST", path, nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
+    HINTERNET r = c ? WinHttpOpenRequest(c, verb.c_str(), path.c_str(), nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES,
                                          WINHTTP_FLAG_SECURE)
                     : nullptr;
     const wchar_t* headers = L"Content-Type: application/json\r\n";
@@ -202,7 +232,7 @@ struct Curl {
 };
 constexpr int kOptWriteData = 10001, kOptUrl = 10002, kOptPostFields = 10015, kOptUserAgent = 10018,
               kOptHttpHeader = 10023, kOptWriteFunction = 20011, kOptTimeout = 13, kOptPostFieldSize = 60,
-              kOptNoSignal = 99;
+              kOptNoSignal = 99, kOptCustomRequest = 10036;
 constexpr int kInfoResponseCode = 0x200002;
 
 const Curl& curl() {
@@ -239,13 +269,14 @@ bool httpReady(std::string& why) {
     return false;
 }
 
-Answer postJson(const std::string& url, const std::string& body) {
+Answer sendJson(const char* method, const std::string& url, const std::string& body) {
     Answer a;
     const Curl& c = curl();
     void* h = c.init();
     if (!h) { a.error = "curl_easy_init failed"; return a; }
     void* headers = c.slistAppend(nullptr, "Content-Type: application/json");
     c.setopt(h, kOptUrl, url.c_str());
+    if (strcmp(method, "POST") != 0) c.setopt(h, kOptCustomRequest, method);
     c.setopt(h, kOptHttpHeader, headers);
     c.setopt(h, kOptPostFields, body.c_str());
     c.setopt(h, kOptPostFieldSize, static_cast<long>(body.size()));
@@ -304,19 +335,97 @@ void Webhook::post(const std::string& line) {
     cv_.notify_all();
 }
 
+void Webhook::setStatus(const std::string& text) {
+    if (!running_ || !cfg_.live) return;
+    {
+        std::lock_guard<std::mutex> lock(m_);
+        if (text == statusText_ && !statusDirty_) return;
+        statusText_ = text;
+        statusDirty_ = true;
+    }
+    cv_.notify_all();
+}
+
+namespace {
+std::string readFileTrimmed(const std::string& path) {
+    std::string out;
+    if (FILE* f = fopen(path.c_str(), "rb")) {
+        char buf[64] = {};
+        const size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+        fclose(f);
+        out.assign(buf, n);
+    }
+    while (!out.empty() && (out.back() == '\n' || out.back() == '\r' || out.back() == ' ')) out.pop_back();
+    return out;
+}
+void writeFile(const std::string& path, const std::string& text) {
+    if (FILE* f = fopen(path.c_str(), "wb")) {
+        fwrite(text.data(), 1, text.size(), f);
+        fclose(f);
+    }
+}
+} // namespace
+
+// The live status message: edited in place (PATCH .../messages/<id>); posted the first time, or again if it
+// was deleted. Returns false to retry later (network, rate limit).
+bool Webhook::sendStatus(const std::string& text, std::chrono::steady_clock::time_point& nextPost) {
+    using clock = std::chrono::steady_clock;
+    if (statusId_.empty() && !cfg_.statusIdFile.empty()) {
+        const std::string saved = readFileTrimmed(cfg_.statusIdFile);
+        if (isMessageId(saved)) statusId_ = saved;
+    }
+    const auto now = clock::now();
+    if (now < nextPost) std::this_thread::sleep_for(nextPost - now);
+    Answer a;
+    if (!statusId_.empty()) {
+        a = sendJson("PATCH", withPath(cfg_.url, "/messages/" + statusId_), payload(text, ""));
+        if (a.status == 404) { // deleted in Discord: post a new one
+            log_("discord: the status message was deleted; posting a new one");
+            statusId_.clear();
+        }
+    }
+    if (statusId_.empty()) {
+        a = sendJson("POST", withQuery(cfg_.url, "wait=true"), payload(text, cfg_.username));
+        if (a.status >= 200 && a.status < 300) {
+            statusId_ = messageId(a.body);
+            if (!statusId_.empty() && !cfg_.statusIdFile.empty()) writeFile(cfg_.statusIdFile, statusId_);
+        }
+    }
+    nextPost = clock::now() + std::chrono::milliseconds(2100);
+    if (a.status == 429) {
+        nextPost = clock::now() + std::chrono::milliseconds(static_cast<long long>(retryAfter(a.body, 5.0) * 1000) + 100);
+        return false;
+    }
+    if (a.status >= 200 && a.status < 300) return true;
+    log_("discord: status update failed (" + (a.status ? "HTTP " + std::to_string(a.status) : a.error) + ")");
+    return a.status >= 400 && a.status < 500; // a 4xx will not get better by retrying
+}
+
 void Webhook::run() {
     using clock = std::chrono::steady_clock;
     clock::time_point nextPost = clock::now();
+    clock::time_point nextStatus = clock::now(); // at most one edit every kStatusGap (the latest text wins)
+    constexpr auto kStatusGap = std::chrono::seconds(5);
     int failuresLogged = 0;
     for (;;) {
         std::deque<std::string> lines;
+        std::string status;
+        bool haveStatus = false;
         {
             std::unique_lock<std::mutex> lock(m_);
-            cv_.wait(lock, [this] { return stop_ || !queue_.empty(); });
-            if (queue_.empty() && stop_) return;
+            cv_.wait(lock, [this] { return stop_ || !queue_.empty() || statusDirty_; });
+            if (stop_ && queue_.empty() && !statusDirty_) return;
             // Gather what arrives in the next 2 s into the same post (unless stopping).
-            if (!stop_) cv_.wait_for(lock, std::chrono::seconds(2), [this] { return stop_; });
+            if (!stop_ && !queue_.empty()) cv_.wait_for(lock, std::chrono::seconds(2), [this] { return stop_; });
             lines.swap(queue_);
+            if (statusDirty_ && (stop_ || clock::now() >= nextStatus)) {
+                status = statusText_;
+                statusDirty_ = false;
+                haveStatus = true;
+            } else if (statusDirty_ && lines.empty()) {
+                cv_.wait_until(lock, nextStatus, [this] { return stop_; }); // the next edit is not due yet
+                continue;
+            }
         }
         std::deque<std::string> posts = pack(std::move(lines));
         const clock::time_point giveUp = clock::now() + std::chrono::seconds(stop_ ? 5 : 120);
@@ -324,7 +433,7 @@ void Webhook::run() {
             const auto now = clock::now();
             if (now >= giveUp) break;
             if (now < nextPost) std::this_thread::sleep_for(nextPost - now);
-            const Answer a = postJson(cfg_.url, payload(posts.front(), cfg_.username));
+            const Answer a = sendJson("POST", cfg_.url, payload(posts.front(), cfg_.username));
             nextPost = clock::now() + std::chrono::milliseconds(2100); // ~28 posts a minute at most
             if (a.status >= 200 && a.status < 300) {
                 posts.pop_front();
@@ -340,8 +449,13 @@ void Webhook::run() {
                 else nextPost = clock::now() + std::chrono::seconds(10);
             }
         }
-        std::lock_guard<std::mutex> lock(m_);
-        if (stop_ && queue_.empty()) return;
+        if (haveStatus) {
+            if (!sendStatus(status, nextPost)) {
+                std::lock_guard<std::mutex> lock(m_);
+                if (!statusDirty_) { statusText_ = status; statusDirty_ = !stop_; } // retry unless stopping
+            }
+            nextStatus = clock::now() + kStatusGap;
+        }
     }
 }
 

@@ -8,6 +8,8 @@
   and are not announced. The time is what the player's own game reports.
 
 ### Discord
+- **A live "who's online" message in Discord**: one message, edited as players join and leave, with the
+  player list and the address to join; "offline" when the server stops (`webhook_live`).
 - **Servers can post to Discord.** Set `webhook_url` in `mecmp_server.ini` and the server posts when it
   goes online (with the address to join) or offline, and when players join and leave, with the player
   count, and finished runs with their times (`webhook_results`). Posts are batched and rate-limit aware;

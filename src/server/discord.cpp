@@ -1,5 +1,6 @@
 #include "server/discord.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -427,8 +428,16 @@ void Webhook::run() {
                 continue;
             }
         }
+        // Stopping: the live message says "offline" first (a closed console window leaves about 5 s), and our
+        // own spacing between requests is cut short (Discord allows 5 per 2 s; a 429 still makes us wait).
+        if (stop_) nextPost = std::min(nextPost, clock::now() + std::chrono::milliseconds(300));
+        if (haveStatus && stop_) {
+            sendStatus(status, nextPost);
+            haveStatus = false;
+            nextPost = std::min(nextPost, clock::now() + std::chrono::milliseconds(300));
+        }
         std::deque<std::string> posts = pack(std::move(lines));
-        const clock::time_point giveUp = clock::now() + std::chrono::seconds(stop_ ? 5 : 120);
+        const clock::time_point giveUp = clock::now() + std::chrono::seconds(stop_ ? 3 : 120);
         while (!posts.empty()) {
             const auto now = clock::now();
             if (now >= giveUp) break;

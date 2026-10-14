@@ -175,6 +175,19 @@ void usage() {
 
 void onSignal(int) { g_quit = true; }
 
+#ifdef _WIN32
+// Closing the console window (its X), logging off or shutting down is not a signal: Windows calls this on
+// its own thread and ends the process when it returns, or about 5 s after a close at the latest. Stop the
+// server and wait here until it has shut down, so the webhook can still say "offline".
+std::atomic<bool> g_exited{false};
+BOOL WINAPI onConsoleEvent(DWORD type) {
+    if (type != CTRL_CLOSE_EVENT && type != CTRL_LOGOFF_EVENT && type != CTRL_SHUTDOWN_EVENT) return FALSE; // Ctrl+C: onSignal
+    g_quit = true;
+    for (int i = 0; i < 45 && !g_exited.load(); ++i) Sleep(100);
+    return TRUE;
+}
+#endif
+
 // --- This server's address, for the log ---------------------------------------------------------
 std::string ipString(uint32_t ip) {
     const std::string s = mecmp::server::toString({ip, 0});
@@ -446,7 +459,7 @@ void runCommand(const std::string& cmd, mecmp::server::Relay& relay) {
 }
 } // namespace
 
-int main(int argc, char** argv) {
+int serverMain(int argc, char** argv) {
     Options& o = g_opts;
     std::string configPath = "mecmp_server.ini";
     bool configGiven = false;
@@ -547,6 +560,11 @@ int main(int argc, char** argv) {
 
     std::signal(SIGINT, onSignal);
     std::signal(SIGTERM, onSignal);
+#ifdef _WIN32
+    SetConsoleCtrlHandler(onConsoleEvent, TRUE);
+#else
+    std::signal(SIGHUP, onSignal); // the terminal (an SSH session) was closed
+#endif
     loadBans(relay, true);
     std::thread(readConsole).detach();
     char hexSession[16];
@@ -627,4 +645,12 @@ int main(int argc, char** argv) {
     WSACleanup();
 #endif
     return 0;
+}
+
+int main(int argc, char** argv) {
+    const int code = serverMain(argc, argv); // the webhook (a local there) has sent "offline" when this returns
+#ifdef _WIN32
+    g_exited = true;
+#endif
+    return code;
 }

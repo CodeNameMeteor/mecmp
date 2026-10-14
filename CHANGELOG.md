@@ -13,6 +13,11 @@
 - **F9 logs a "perf:" line** (developer builds): time per call, calls per second and memory calls per
   call for each part of the mod (tick, capture, ghosts, render pose, UI check, overlay).
 
+### Changes
+- **The solo test is a developer tool now.** Release builds have no *Solo test* button and ignore
+  their own packets (joining yourself shows nobody). Developer builds keep it. A server started with
+  `--mirror` still mirrors you, with any build.
+
 ### Fixes
 - **A joiner listens only to its host.** Everything in a session reaches a joiner through the host (or the
   server), so packets from any other address are now ignored. Before, someone who knew a player's address

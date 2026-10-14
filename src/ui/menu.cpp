@@ -156,8 +156,10 @@ void sessionSection() {
     ImGui::EndDisabled();
     if (noCode && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
         ImGui::SetTooltip("Enter the host's join code, or a server's address (name or ip, :port if not 47800).");
+#if MECMP_DEBUG_KEYS // a developer tool: not in release builds
     if (ImGui::Button("Solo test (mirror me)")) startSession("127.0.0.1:" + std::to_string(config::get()->port));
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Test on your own PC: a ghost copies your moves 3 m away (it does not turn with you; look around for it).");
+#endif
 }
 
 // Saved dedicated servers: name, players and round trip of each (asked while the menu is open).

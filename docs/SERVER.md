@@ -42,6 +42,33 @@ bans=bans.txt
 `motd` is a chat line each player gets when they join. `max_per_ip` limits players from one IP address
 (a household can share one; more than a few is usually someone filling the server).
 
+## Discord
+
+The server can post to a Discord channel when it goes online or offline and when players join and leave,
+so your community sees who is on (and where to join):
+
+1. In Discord: *Server Settings → Integrations → Webhooks → New Webhook*, pick the channel, *Copy Webhook URL*.
+2. In `mecmp_server.ini`:
+
+```
+webhook_url=https://discord.com/api/webhooks/...
+; optional (comments go on their own line):
+; the name the posts appear under (default: the server's name)
+webhook_name=Beat Link
+; the address the "online" post tells players to join (default: the public address the server finds)
+public_address=play.example.com:47800
+; 0 turns a kind of post off: players joining and leaving, server online / offline, finished runs
+webhook_joins=1
+webhook_status=1
+webhook_results=1
+```
+
+Keep the webhook URL private: anyone who has it can post to your channel. The server never sends it to
+players or writes it to the log. Posts are gathered for a couple of seconds and sent together, well under
+Discord's limits; player names cannot ping anyone. On Linux the webhook needs libcurl
+(`sudo apt install libcurl4`, already there on most systems); without it the server runs and logs that
+the webhook is off.
+
 Console commands (type them in the server's window):
 
 | Command | |

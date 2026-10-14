@@ -63,6 +63,13 @@ struct Member {
     bool announced = false; // its join was logged with a name
 };
 
+// Something the server's outside world may want to know (the Discord webhook).
+struct Event {
+    enum Kind { Joined, Left } kind = Joined;
+    std::string name;   // the player's name
+    size_t players = 0; // players connected after it
+};
+
 struct Stats {
     uint64_t received = 0, relayed = 0, dropped = 0, infoAnswered = 0;
 };
@@ -71,6 +78,7 @@ class Relay {
 public:
     using Send = std::function<void(const Addr& to, const char* data, size_t len)>;
     using Log = std::function<void(const std::string& line)>;
+    using OnEvent = std::function<void(const Event&)>;
 
     Relay(Config cfg, uint32_t serverSession, Send send, Log log);
 
@@ -91,6 +99,7 @@ public:
     const std::set<uint32_t>& bans() const { return bans_; }
     void setBans(std::set<uint32_t> ips); // e.g. bans.txt (re)loaded; drops players now banned
 
+    void setOnEvent(OnEvent f) { onEvent_ = std::move(f); }
     const std::vector<Member>& members() const { return members_; }
     const Stats& stats() const { return stats_; }
     const Config& config() const { return cfg_; }
@@ -112,6 +121,7 @@ private:
     uint32_t seq_ = 0;
     Send send_;
     Log log_;
+    OnEvent onEvent_;
     std::vector<Member> members_;
     Stats stats_;
     uint32_t helloAt_ = 0;

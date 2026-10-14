@@ -1,5 +1,5 @@
 // Tests for the dedicated server's relay rules. They build on Linux:
-//   g++ -std=c++17 -Isrc tests/server_test.cpp src/server/relay.cpp src/net/protocol.cpp -o server_test && ./server_test
+//   g++ -std=c++17 -Isrc tests/server_test.cpp src/server/relay.cpp src/server/discord.cpp src/net/protocol.cpp -ldl -pthread -o server_test && ./server_test
 #include <cstdio>
 #include <cstring>
 #include <set>
@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "net/protocol.h"
+#include "server/discord.h"
 #include "server/relay.h"
 
 using namespace mecmp;
@@ -459,7 +460,60 @@ static void testInfo() {
     CHECK(t.sent.empty());
 }
 
+// Join and leave events (the Discord webhook): named players only, with the count after the change.
+static void testEvents() {
+    server::Config cfg;
+    cfg.timeoutMs = 1000;
+    Harness t(cfg);
+    std::vector<server::Event> ev;
+    t.relay.setOnEvent([&ev](const server::Event& e) { ev.push_back(e); });
+    auto hA = hello(1, "alice"), hB = hello(2, "bob");
+    t.relay.onPacket(A, hA.data(), hA.size(), 0);
+    t.relay.onPacket(B, hB.data(), hB.size(), 0);
+    t.relay.onPacket(A, hA.data(), hA.size(), 100); // a second HELLO: no second "joined"
+    auto s = state(3);
+    t.relay.onPacket(C, s.data(), s.size(), 100); // not named yet: no event, now or when it leaves
+    CHECK(ev.size() == 2 && ev[0].kind == server::Event::Joined && ev[0].name == "alice" && ev[0].players == 1 &&
+          ev[1].name == "bob" && ev[1].players == 2);
+    t.relay.onPacket(A, s.data(), 0, 900); // (nothing)
+    auto sA = state(1);
+    t.relay.onPacket(A, sA.data(), sA.size(), 900);
+    t.relay.tick(1500); // bob and the unnamed player time out; alice was heard at 900
+    CHECK(ev.size() == 3 && ev[2].kind == server::Event::Left && ev[2].name == "bob");
+    CHECK(t.relay.kick("alice", 1600));
+    CHECK(ev.size() == 4 && ev[3].kind == server::Event::Left && ev[3].name == "alice" && ev[3].players == 0);
+}
+
+static void testDiscordFormatting() {
+    namespace dc = server::discord;
+    CHECK(dc::isWebhookUrl("https://discord.com/api/webhooks/123456789/abcDEF_-xyz"));
+    CHECK(dc::isWebhookUrl("https://canary.discord.com/api/webhooks/123456789/abc"));
+    CHECK(!dc::isWebhookUrl("http://discord.com/api/webhooks/123456789/abc"));       // not https
+    CHECK(!dc::isWebhookUrl("https://discord.com.evil.example/api/webhooks/1/abc"));  // another host
+    CHECK(!dc::isWebhookUrl("https://discord.com/api/webhooks/"));                    // no id
+    CHECK(!dc::isWebhookUrl("https://discord.com/api/webhooks/123456789/a b"));       // spaces
+    CHECK(dc::escapeMarkdown("*bold* _x_ `c` @everyone") == "\\*bold\\* \\_x\\_ \\`c\\` @everyone");
+    CHECK(dc::jsonEscape("a\"b\\c\n\x01") == "a\\\"b\\\\c\\n\\u0001");
+    const std::string body = dc::payload("hi \"there\"", "Beat Link");
+    CHECK(body == "{\"content\":\"hi \\\"there\\\"\",\"username\":\"Beat Link\",\"allowed_mentions\":{\"parse\":[]}}");
+    CHECK(dc::payload(std::string(3000, 'x'), "").size() < 2100); // cut to Discord's limit
+    CHECK(dc::retryAfter("{\"message\": \"You are being rate limited.\", \"retry_after\": 1.25, \"global\": false}", 5) == 1.25);
+    CHECK(dc::retryAfter("{}", 5) == 5);
+    std::deque<std::string> lines{"one", "two", std::string(30, 'x')};
+    auto posts = dc::pack(lines, 30);
+    CHECK(posts.size() == 2 && posts[0] == "one\ntwo" && posts[1].size() == 30);
+    // A webhook without a valid URL never starts (and logs why).
+    std::vector<std::string> log;
+    dc::Config bad;
+    bad.url = "https://example.com/hook";
+    dc::Webhook off(bad, [&log](const std::string& l) { log.push_back(l); });
+    CHECK(!off.enabled() && log.size() == 1);
+    off.post("ignored");
+}
+
 int main() {
+    testEvents();
+    testDiscordFormatting();
     testInfo();
     testBans();
     testSharedNames();

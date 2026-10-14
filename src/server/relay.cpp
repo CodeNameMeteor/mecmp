@@ -77,7 +77,10 @@ void Relay::drop(size_t index, const char* why) {
     const Member& m = members_[index];
     log_("player " + hex(m.session) + " '" + m.name + "' (" + toString(m.addr) + ") left: " + why + "; " +
          std::to_string(members_.size() - 1) + " connected");
+    Event e{Event::Left, m.name, members_.size() - 1};
+    const bool tell = m.announced; // a player who never said its name was never announced either
     members_.erase(members_.begin() + static_cast<long>(index));
+    if (tell && onEvent_) onEvent_(e);
 }
 
 void Relay::onPacket(const Addr& from, const char* buf, size_t n, uint32_t nowMs) {
@@ -170,6 +173,7 @@ void Relay::onPacket(const Addr& from, const char* buf, size_t n, uint32_t nowMs
             m->name = name;
             log_("player " + hex(m->session) + " '" + name + "' joined from " + toString(from) + "; " +
                  std::to_string(members_.size()) + " connected");
+            if (onEvent_) onEvent_(Event{Event::Joined, name, members_.size()});
             if (!cfg_.motd.empty()) queueChat(cfg_.motd, &from);
         } else if (name != m->name) {
             log_("player " + hex(m->session) + " '" + m->name + "' is now called '" + name + "'");

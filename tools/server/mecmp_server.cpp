@@ -42,6 +42,7 @@
 
 #include "net/protocol.h"
 #include "net/joincode.h"
+#include "server/discord.h"
 #include "server/relay.h"
 
 namespace {
@@ -88,6 +89,8 @@ std::string trim(std::string s) {
 
 struct Options {
     uint16_t port = 47800;
+    mecmp::server::discord::Config discord;
+    std::string publicAddress; // what the Discord post tells players to join (empty: the address found by STUN)
     std::string logPath = "mecmp_server.log";
     std::string bansPath = "bans.txt";
     mecmp::server::Config relay;
@@ -117,6 +120,12 @@ bool readConfig(const std::string& path, Options& o, bool required) {
         else if (k == "motd") o.relay.motd = v;
         else if (k == "max_per_ip") o.relay.maxPerIp = static_cast<size_t>(std::atoi(v.c_str()));
         else if (k == "bans") o.bansPath = v;
+        else if (k == "webhook_url") o.discord.url = v;
+        else if (k == "webhook_name") o.discord.username = v;
+        else if (k == "webhook_joins") o.discord.joins = v != "0";
+        else if (k == "webhook_status") o.discord.status = v != "0";
+        else if (k == "webhook_results") o.discord.results = v != "0";
+        else if (k == "public_address") o.publicAddress = v;
     }
     return true;
 }
@@ -207,6 +216,17 @@ void logAddresses(uint16_t port, uint32_t publicIp, uint16_t publicPort) {
     } else {
         logLine("internet: the public address could not be found (no answer from the STUN server)");
     }
+}
+
+// The Discord post when the server is up: its name and the address to join (public_address, else the one
+// STUN found; none if neither is known).
+void announceOnline(mecmp::server::discord::Webhook& hook, const Options& o, uint32_t publicIp) {
+    if (!hook.enabled() || !hook.config().status) return;
+    std::string where = o.publicAddress;
+    if (where.empty() && publicIp) where = ipString(publicIp) + ":" + std::to_string(o.port);
+    namespace dc = mecmp::server::discord;
+    hook.post(u8"\U0001F7E2 **" + dc::escapeMarkdown(o.relay.name) + "** is online" +
+              (where.empty() ? std::string() : u8" \u2014 join with `" + where + u8"` (MECMP menu \u2192 Join)"));
 }
 
 // Console input on its own thread (blocking reads); commands are run by the main loop.
@@ -420,6 +440,19 @@ int main(int argc, char** argv) {
         },
         logLine);
 
+    // Discord (optional): joins and leaves as they happen; the "online" post once the address is known.
+    namespace dc = mecmp::server::discord;
+    dc::Config discordCfg = o.discord;
+    if (discordCfg.username.empty()) discordCfg.username = o.relay.name;
+    dc::Webhook webhook(discordCfg, logLine);
+    if (webhook.enabled() && webhook.config().joins)
+        relay.setOnEvent([&webhook](const mecmp::server::Event& e) {
+            const std::string who = "**" + dc::escapeMarkdown(e.name.empty() ? "Runner" : e.name) + "**";
+            const std::string count = std::to_string(e.players) + (e.players == 1 ? " player" : " players") + " online";
+            if (e.kind == mecmp::server::Event::Joined) webhook.post(u8"\u27A1\uFE0F " + who + " joined (" + count + ")");
+            else webhook.post(u8"\u2B05\uFE0F " + who + " left (" + count + ")");
+        });
+
     std::signal(SIGINT, onSignal);
     std::signal(SIGTERM, onSignal);
     loadBans(relay, true);
@@ -460,6 +493,7 @@ int main(int argc, char** argv) {
                 if (!addressShown && readStun(reinterpret_cast<const unsigned char*>(buf), n, pubIp, pubPort)) {
                     addressShown = true;
                     logAddresses(o.port, pubIp, pubPort);
+                    announceOnline(webhook, o, pubIp);
                 } else {
                     relay.onPacket({ntohl(from.sin_addr.s_addr), ntohs(from.sin_port)}, buf, static_cast<size_t>(n), nowMs());
                 }
@@ -474,7 +508,7 @@ int main(int argc, char** argv) {
         if (!addressShown && now - stunAt >= 2000) { // no answer yet: try twice more, then say so
             stunAt = now;
             if (stunTries < 3 && sendStun(sock)) ++stunTries;
-            else { addressShown = true; logAddresses(o.port, 0, 0); }
+            else { addressShown = true; logAddresses(o.port, 0, 0); announceOnline(webhook, o, 0); }
         }
         if (now - lastTick >= 50) {
             lastTick = now;
@@ -493,6 +527,8 @@ int main(int argc, char** argv) {
         }
     }
     logLine("server stopping");
+    if (webhook.enabled() && webhook.config().status)
+        webhook.post(u8"\U0001F534 **" + dc::escapeMarkdown(o.relay.name) + "** is offline");
     closeSocket(sock);
 #ifdef _WIN32
     WSACleanup();

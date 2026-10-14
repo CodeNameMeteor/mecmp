@@ -206,7 +206,8 @@ void serversSection() {
     std::string add = g_addServer;
     while (!add.empty() && add.back() == ' ') add.pop_back();
     while (!add.empty() && add.front() == ' ') add.erase(add.begin());
-    ImGui::BeginDisabled(add.empty());
+    const bool full = saved.size() >= config::kMaxServers;
+    ImGui::BeginDisabled(add.empty() || full);
     if (ImGui::Button("Add")) {
         bool have = false;
         for (const auto& s : saved) have = have || s == add;
@@ -217,6 +218,8 @@ void serversSection() {
         net::servers::refreshNow();
     }
     ImGui::EndDisabled();
+    if (full && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip("The list is full (%d servers): remove one first", static_cast<int>(config::kMaxServers));
     ImGui::SameLine();
     if (ImGui::Button("Refresh")) net::servers::refreshNow();
     if (!remove.empty()) {

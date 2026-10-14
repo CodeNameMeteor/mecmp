@@ -5,6 +5,7 @@
 #endif
 #include <windows.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -129,13 +130,24 @@ constexpr const char* kDefaultIniTail =
     "; 1 = detailed diagnostic log (for bug reports)\r\n"
     "verbose=0\r\n";
 
+// The profile API cuts a value that does not fit its buffer, without saying so. Values are read into a
+// buffer that grows until the whole value fits, up to kMaxProfileChars; a longer value is still cut.
+constexpr size_t kMaxProfileChars = 32767;
+
 std::string readString(const std::wstring& ini, const wchar_t* sec, const wchar_t* key, const char* def) {
-    wchar_t w[2048] = {};
-    GetPrivateProfileStringW(sec, key, L"\x01", w, 2048, ini.c_str());
+    std::vector<wchar_t> w(2048);
+    for (;;) {
+        const DWORD got = GetPrivateProfileStringW(sec, key, L"\x01", w.data(), static_cast<DWORD>(w.size()), ini.c_str());
+        if (static_cast<size_t>(got) + 1 < w.size() || w.size() >= kMaxProfileChars) break; // not cut, or as big as it gets
+        w.resize(std::min(w.size() * 2, kMaxProfileChars + 1));
+    }
     if (w[0] == 1) return def;
-    char buf[4096] = {};
-    WideCharToMultiByte(CP_UTF8, 0, w, -1, buf, sizeof(buf), nullptr, nullptr);
-    return buf;
+    const int bytes = WideCharToMultiByte(CP_UTF8, 0, w.data(), -1, nullptr, 0, nullptr, nullptr);
+    if (bytes <= 1) return std::string();
+    std::string out(static_cast<size_t>(bytes), '\0'); // the count includes the terminating NUL
+    WideCharToMultiByte(CP_UTF8, 0, w.data(), -1, &out[0], bytes, nullptr, nullptr);
+    out.resize(static_cast<size_t>(bytes - 1));
+    return out;
 }
 int readInt(const std::wstring& ini, const wchar_t* sec, const wchar_t* key, int def) {
     return static_cast<int>(GetPrivateProfileIntW(sec, key, def, ini.c_str()));
@@ -360,9 +372,12 @@ void applyPending() {
     if (!persist) return;
     const std::wstring ini = g_dir + L"mecmp.ini";
     auto put = [&](const wchar_t* sec, const wchar_t* key, const std::string& v) {
-        wchar_t w[2048] = {};
-        MultiByteToWideChar(CP_UTF8, 0, v.c_str(), -1, w, 2048);
-        WritePrivateProfileStringW(sec, key, w, ini.c_str());
+        // Sized to the value: a fixed buffer that is too small makes the conversion fail, and the value is
+        // then written empty.
+        const int chars = MultiByteToWideChar(CP_UTF8, 0, v.c_str(), -1, nullptr, 0);
+        std::vector<wchar_t> w(chars > 0 ? static_cast<size_t>(chars) : 1, L'\0');
+        if (chars > 0) MultiByteToWideChar(CP_UTF8, 0, v.c_str(), -1, w.data(), chars);
+        WritePrivateProfileStringW(sec, key, w.data(), ini.c_str());
     };
     put(L"player", L"name", snapshot->name);
     put(L"net", L"join", snapshot->join);

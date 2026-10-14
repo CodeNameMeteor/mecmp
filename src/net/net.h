@@ -89,6 +89,16 @@ struct PingStyle {
 // marker close to one of ours moves that one; over the limit, the oldest goes.
 void sendPing(const float pos[3], const PingStyle& style, int limit);
 bool clearPing();          // removes all of ours, here and for everyone; false if there were none
+// A quick answer ("On my way") to the marker in cell `cell` of the player whose session id is `target`
+// (PingInfo::owner / ::index); `markerTitle` is the marker's title as seen here. Any thread.
+void sendReact(uint32_t target, uint8_t cell, const std::string& markerTitle, const std::string& text);
+// Answers other players sent to our markers since the last call, oldest first.
+struct ReactionInfo {
+    std::string from;  // the answering player's name
+    std::string text;  // the answer
+    std::string title; // our marker's title, as they saw it; may be empty
+};
+std::vector<ReactionInfo> takeReactions();
 // One of ours, by its cell (PingInfo::index). move, rename and renew start its time again, as placing
 // it anew would (renew does nothing else, and the marker does not flash again); they return false if
 // that cell holds no marker now.

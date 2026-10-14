@@ -40,6 +40,10 @@
   `--mirror` still mirrors you, with any build.
 
 ### Fixes
+- **Joining works with a server on the same PC.** A mecmp_server (or a second game) on this PC holds
+  UDP 47800, so the mod could not start at all ("cannot use UDP port 47800"). A joiner now uses any free
+  port when its own is taken; hosting still needs the configured port, and the message now says what
+  is using it and how to change it.
 - **A joiner listens only to its host.** Everything in a session reaches a joiner through the host (or the
   server), so packets from any other address are now ignored. Before, someone who knew a player's address
   could send it chat, markers or a summon that appeared to come from the host.

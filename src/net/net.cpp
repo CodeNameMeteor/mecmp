@@ -1056,8 +1056,32 @@ bool start(uint16_t port, const std::string& join, float loopbackOffset, const s
     local.sin_family = AF_INET;
     local.sin_port = htons(g_port);
     local.sin_addr.s_addr = htonl(INADDR_ANY);
-    if (bind(g_sock, reinterpret_cast<sockaddr*>(&local), sizeof(local)) == SOCKET_ERROR) {
-        MLOG("net: cannot use UDP port %u (error %d); is another copy running?", g_port, WSAGetLastError());
+    bool bound = bind(g_sock, reinterpret_cast<sockaddr*>(&local), sizeof(local)) != SOCKET_ERROR;
+    int bindError = bound ? 0 : WSAGetLastError();
+    if (!bound && !join.empty() && bindError == WSAEADDRINUSE) {
+        // A joiner only talks to its host, which answers whatever port the packets come from, so any free
+        // port works. The usual reason the configured one is taken: mecmp_server (or a second game) runs
+        // on this PC with the same port.
+        local.sin_port = 0;
+        bound = bind(g_sock, reinterpret_cast<sockaddr*>(&local), sizeof(local)) != SOCKET_ERROR;
+        if (bound) {
+            sockaddr_in got{};
+            int len = sizeof(got);
+            const uint16_t wanted = g_port;
+            if (getsockname(g_sock, reinterpret_cast<sockaddr*>(&got), &len) == 0) g_port = ntohs(got.sin_port);
+            MLOG("net: UDP port %u is in use by another program (mecmp_server?); joining from port %u instead",
+                 wanted, g_port);
+        } else {
+            bindError = WSAGetLastError();
+        }
+    }
+    if (!bound) {
+        if (bindError == WSAEADDRINUSE)
+            MLOG("net: cannot use UDP port %u: another program uses it (a mecmp_server or a second game on this "
+                 "PC?). To host here, stop it or set port= in mecmp.ini to another number (and forward that one)",
+                 g_port);
+        else
+            MLOG("net: cannot use UDP port %u (error %d)", g_port, bindError);
         closesocket(g_sock);
         g_sock = INVALID_SOCKET;
         WSACleanup();

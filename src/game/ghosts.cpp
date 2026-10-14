@@ -330,6 +330,38 @@ bool applyLook(void* ch, const std::string& key, std::string* used = nullptr) {
 // look list that just arrived (retryLooksNow) are tried at once.
 DWORD lookRetryMs(const std::string& key) { return key.rfind("echo:", 0) == 0 ? 15000 : 2000; }
 
+// The game asks this spawner for its *last* spawned character (ServerSpawnEntity_getLastSpawnedCharacter
+// 0x143381080), e.g. for the pause menu's "Your Echo" preview, which shows the character the city-ghost
+// spawner made at level load. Our ghosts come from the same spawner, so after a spawn ours was last and
+// the preview showed our ghost (moving like the player, in their look; invisible as Faith). The list
+// (+0x148/+0x150) is reordered so the game's own characters stay at the end, in their order; ours go
+// first. Only pointers inside the list move.
+void keepGameCharacterLast(void* spawner) {
+    uintptr_t list[2] = {};
+    const uintptr_t sp = reinterpret_cast<uintptr_t>(spawner);
+    if (!sp || !mem::read(sp + Spawner_Spawned, list, sizeof(list)) || list[1] <= list[0] || (list[1] - list[0]) / 8 > 64)
+        return;
+    const size_t n = (list[1] - list[0]) / 8;
+    std::vector<uintptr_t> items(n);
+    if (!mem::read(list[0], items.data(), n * 8)) return;
+    std::vector<uintptr_t> ours, theirs;
+    {
+        std::lock_guard<std::mutex> lock(g_m);
+        for (uintptr_t c : items) {
+            bool mine = false;
+            for (const auto& g : g_ghosts) mine = mine || reinterpret_cast<uintptr_t>(g.character) == c;
+            (mine ? ours : theirs).push_back(c);
+        }
+    }
+    if (ours.empty() || theirs.empty()) return;
+    std::vector<uintptr_t> order = ours;
+    order.insert(order.end(), theirs.begin(), theirs.end());
+    if (order != items) {
+        poke(list[0], order.data(), n * 8);
+        VLOG("ghost: spawner %p list reordered: the game's own character is last again", spawner);
+    }
+}
+
 void* spawnGhost(uint32_t peer, const std::string& name, uint32_t look, uint8_t outfit, const net::PlayerState& st) {
     void* spawner = level::ghostSpawner();
     if (!level::spawnerAlive(spawner)) return nullptr;
@@ -381,6 +413,7 @@ void* spawnGhost(uint32_t peer, const std::string& name, uint32_t look, uint8_t 
         g_ghostCharData = d;
     }
     setTransform(ch, info.transform);
+    keepGameCharacterLast(spawner);
     std::string used;
     const std::string key = desiredLook(look, outfit);
     const bool done = applyLook(ch, key, &used);
@@ -506,6 +539,7 @@ void beforeClientReplayUpdate() {
 }
 
 void renderFrame() {
+    if (!level::serverWorld() || level::inFrontEnd()) return; // no ghosts outside a playable level
     struct Target { uint32_t peer; void* comp; void* ch; };
     Target targets[kMaxGhosts];
     size_t n = 0;
@@ -628,7 +662,10 @@ void tick(uint64_t tick, uint64_t ticksInLevel) {
     const bool playerSettled = playerChar && ticksInLevel - playerSince >= kPlayerSettleTicks;
 
     // Every present player needs a ghost: hand them a free one, else spawn (one per kSpawnGapMs).
+    // Never in the main menu: its "Your Echo" preview is spawned from a projection spawner there, and a
+    // ghost of ours from it took the preview's place (and its look).
     const bool canSpawn = g_enabled && !g_paused && config::get()->autoSpawn && ticksInLevel >= kSettleTicks &&
+                          !level::inFrontEnd() &&
                           level::spawnerAlive(level::ghostSpawner()) && playerSettled;
     if (canSpawn) {
         level::BoneSetup ref;

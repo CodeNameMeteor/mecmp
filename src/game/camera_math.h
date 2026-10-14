@@ -7,6 +7,7 @@
 // in game, where using +forward drew points behind the player in front of them. The field of view is
 // vertical, in degrees.
 
+#include <algorithm>
 #include <cmath>
 
 namespace mecmp::game {
@@ -55,6 +56,51 @@ inline int radialSlot(float dx, float dy, float deadZone, int n) {
     if (a < 0.f) a += twoPi;
     const int i = static_cast<int>(a / (twoPi / static_cast<float>(n)) + 0.5f);
     return i % n;
+}
+
+// The marker nearest the middle of the screen (where the crosshair is): the index of the point in
+// `pts` (pixels) closest to (cx, cy), if it is within `radius` of it; -1 when there is none.
+struct ScreenPoint { float x = 0.f, y = 0.f; };
+inline int nearestToCentre(const ScreenPoint* pts, int n, float cx, float cy, float radius) {
+    int best = -1;
+    float bestD2 = radius * radius;
+    for (int i = 0; i < n; ++i) {
+        const float dx = pts[i].x - cx, dy = pts[i].y - cy;
+        const float d2 = dx * dx + dy * dy;
+        if (std::isfinite(d2) && d2 <= bestD2) {
+            bestD2 = d2;
+            best = i;
+        }
+    }
+    return best;
+}
+
+// Marker titles that would sit on top of each other, or on another marker's icon. Boxes are pixels
+// (top-left corner and size). The first `fixed` boxes are the icons: they never move. The boxes after
+// them are titles in order of importance (the nearest marker's first): each stays where it is unless it
+// would cover an icon or an earlier title, and then it moves straight UP (never sideways or down) to
+// just above what it covered, and again if that is covered too. Moving only along one axis, always the
+// same way, keeps them from jumping about when markers sit on top of each other.
+struct LabelBox { float x = 0.f, y = 0.f, w = 0.f, h = 0.f; };
+inline void stackLabelsUp(LabelBox* boxes, int n, int fixed, float gap = 2.f) {
+    for (int i = fixed > 0 ? fixed : 0; i < n; ++i) {
+        for (int guard = 0; guard <= n; ++guard) {
+            bool hit = false;
+            float highest = boxes[i].y;
+            for (int j = 0; j < i; ++j) {
+                const LabelBox& a = boxes[i];
+                const LabelBox& b = boxes[j];
+                const float ox = std::min(a.x + a.w, b.x + b.w) - std::max(a.x, b.x);
+                const float oy = std::min(a.y + a.h, b.y + b.h) - std::max(a.y, b.y) + gap;
+                if (ox <= 0.f || oy <= 0.f) continue;
+                const float above = b.y - a.h - gap; // the box's top edge when it sits just above `b`
+                if (!hit || above < highest) highest = above;
+                hit = true;
+            }
+            if (!hit) break;
+            boxes[i].y = highest;
+        }
+    }
 }
 
 // The flash a marker makes when it arrives, so a new or moved one is noticed: the marker blinks

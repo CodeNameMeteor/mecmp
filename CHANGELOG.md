@@ -40,6 +40,27 @@
   answer, hold for the answers wheel. The owner sees `Name reacted "On my way" to your "Here" marker`.
   Needs the new packet type, so a dedicated server must be updated as well.
 
+### Summon
+- **Call players to where you stand.** Tap **G** to call everyone, or tick players in the Players tab
+  and press *Summon selected*. Each player sees a *Summon point* marker at your spot and a panel at the
+  top: hold **1** for a second to go there, hold **2** to say no (nothing is done by itself; the call
+  closes after a minute). On a gamepad: D-pad left / right, hidden from the game while the panel is up.
+- **You hear back.** One player called: `Name accepted / declined your summon`. Several (or everyone):
+  `Summon: 3 of 4 teleported`. Hold **G** for a second while your call is open to withdraw it; the
+  markers disappear for everyone.
+- **Go back.** After a summon took you somewhere, hold **2** for 3 seconds within a minute and you are
+  where you stood.
+- **Hard summon** (hold **G** for a second, or *Pull in* in the Players tab): the players who allowed
+  it are taken to you after a 5 second countdown they can cancel (hold **2**) or skip (hold **1**). Off
+  unless the player ticks *Allow being pulled in* (Controls tab, `allow_forced_summon`). Only the host
+  can pull players in; the host's *Members may pull players in* (`members_may_hard_summon`) lets members
+  do it too. Nobody can vouch for themselves: the host replaces any vouch written into a packet, and
+  behind a dedicated server nobody is trusted at all (there a hard summon only asks).
+- New keys on the Controls tab: `summon_key`, `summon_accept_key`, `summon_decline_key` (digits are
+  allowed now) and `summon_accept_pad` / `summon_decline_pad`; `hard_summon_grace_ms` sets the countdown.
+- Needs the new packet types 7 and 8 (protocol number unchanged), so a dedicated server must be
+  updated as well; older versions ignore them.
+
 ### Gamepad
 - **PlayStation names** for the buttons in hints (Controls tab, `pad_labels`). Settings keep Xbox names.
 - Tool bag now has a tooltip like MagRope and GridLink.

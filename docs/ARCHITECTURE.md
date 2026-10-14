@@ -212,6 +212,38 @@ phase runs 4 s over (the server tick can stop while the game handles a death), s
 stays black. The target's own state is not checked: a player who is dead may stand somewhere deadly. Before the first use
 the function's bytes are checked; if they differ, *Go to* is off (logged), the rest of the mod runs.
 
+The same sequence serves **Summon** (`teleport::requestToPos`: a fixed place and yaw that came in the
+packet, not a player's live position) and **going back** (`requestReturn`: the transform the character
+had before the summon took it, kept 60 s, dropped when the level changes or the character is another
+one). Both use the one state machine, so only one teleport runs at a time.
+
+## Summon (`net/summon_policy.h`, `ui/summon.cpp`)
+
+Packets: SUMMON (type 7: id, place, yaw, flags hard / vouched / cancel, optional list of called session
+ids; none = everyone) and SUMMON_REPLY (type 8: summon id, caller, result). Both are sent 3 times like
+PING and deduplicated by id; only the called players act on a SUMMON and only the caller shows a reply.
+The call stays open 60 s for its receivers and the caller collects answers for 65 s.
+
+Hard is the part that takes control of a player, so it is checked three times:
+1. **A player-host's relay** (`net.cpp::handlePacket`, `protocol::applyHostPolicy`) replaces the vouched
+   bit of every joiner's SUMMON: set when the host's `members_may_hard_summon` allows it, cleared (and the
+   hard bit with it) when not. The same patched bytes are forwarded and processed by the host. A joiner
+   talks only to the host, so it cannot get round this.
+2. **The receiver** (`summon::decide`) goes hard only for a sender that is the host (the HELLO flag) or
+   a vouched member, and only with `allow_forced_summon`; anything else is a plain summon. Behind a
+   dedicated server (which forwards bytes unchanged, so a vouch means nothing) nobody is trusted, and
+   until the host's HELLO is heard nobody is either.
+3. **The countdown** (`hard_summon_grace_ms`, 5 s): a visible panel, cancelable with the decline key;
+   it waits while a menu is up.
+The host announces `members_may_hard_summon` in its HELLO (flag 4, cleared from forwarded copies) so a
+member's menu can say whether holding the key will pull anyone in.
+
+UI: `ui/summon.cpp` keeps the open summons (at most 4; a new one from the same player replaces the
+old), draws the panel and the *Summon point* markers (a ring and a chevron, drawn from the summon, not
+through PING cells), and reads hold gestures from `summon::Input` filled by the overlay each frame
+(keys through `GetAsyncKeyState`, the pad through `gamepad::held`). While a summon waits, the accept
+key (and the decline key, also during "Go back?") is kept from the game as the wheel's keys are.
+
 ## Positional voice (`game/mumble_link.cpp`)
 
 Mumble's Link plugin reads the shared memory `MumbleLink` (`LinkedMem`, version 2). Each rendered frame
@@ -251,6 +283,8 @@ UDP, one socket. Sessions have one host and any number of joiners (up to 16).
   answer with name, players, max players; the header echoes the question's seq for the round trip).
   INFO is not a session packet (not in `knownType`), and a server answers whatever the protocol, so
   the list can say "other version". Addresses are looked up on that thread.
+- Packet types: 1 STATE, 2 HELLO, 3 CHAT, 4 PING, 5 INFO (not a session packet), 6 REACT, 7 SUMMON,
+  8 SUMMON_REPLY (see `net/protocol.h`).
 - Packets: STATE 30 Hz and HELLO (name and look: u32, 0 = Faith, else the echo hash) ~1 Hz. Remote players are keyed by the random session id
   in each packet. Pose compression: rotations smallest-three 32-bit, translations i16 at 1/1024 m,
   only for bones that changed since the last full packet (one per second); about 150 bytes.

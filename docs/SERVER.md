@@ -144,7 +144,9 @@ changes can come back. There are no accounts to ban instead.
   another player's id are dropped, so nobody can move or speak as someone else. A restarted game
   (new id, same address) is accepted with its HELLO.
 - At most 80 packets a second per player (bursts up to 160); a client sends about 31.
-- Only the server may say it hosts: the host and server flags are cleared from forwarded HELLOs.
+- Only the server may say it hosts: the host, server and members-may-pull-in flags are cleared from
+  forwarded HELLOs. Summons are forwarded as they are, and players do not trust a summon's "vouched"
+  flag from a server, so there a hard summon only asks.
 - A player silent for 10 s is dropped.
 - At most `max_per_ip` players from one IP address; banned addresses get nothing but the notice.
 

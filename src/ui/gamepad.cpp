@@ -33,6 +33,7 @@ struct Pad {
     std::atomic<uint16_t> wheelButtons{0}; // LB/RB pressed for the marker wheel: hidden until released
 };
 Pad g_pads[XUSER_MAX_COUNT];
+std::atomic<bool> g_hideAccept{false}, g_hideDecline{false}; // the summon panel's buttons are hidden from the game
 std::atomic<int> g_wheelPad{-1}; // the controller whose marker buttons are held (it drives the marker wheel)
 std::atomic<int> g_wheelAction{static_cast<int>(Action::Ping)}; // which buttons it is: Ping or React
 std::atomic<DWORD> g_fakePacket{1};
@@ -107,6 +108,9 @@ DWORD WINAPI getState(DWORD user, XINPUT_STATE* st) {
         if (pad.swallow[a] && !(now & bind)) pad.swallow[a] = false;
         if (pad.swallow[a]) hidden = static_cast<uint16_t>(hidden | bind);
     }
+    // A summon waits (or "Go back?" shows): its buttons are the panel's, not the game's.
+    if (g_hideAccept.load()) hidden = static_cast<uint16_t>(hidden | g_binding[static_cast<int>(Action::SummonAccept)].load());
+    if (g_hideDecline.load()) hidden = static_cast<uint16_t>(hidden | g_binding[static_cast<int>(Action::SummonDecline)].load());
     // The marker wheel: this pad's right stick points at a slot and LB/RB switch wheel while it is open.
     bool wheelOpen = false;
     if ((pingPressed || reactPressed) && g_wheelPad.load() < 0) {
@@ -209,6 +213,18 @@ std::string labelCombo(const std::string& combo) {
 
 void setBinding(uint16_t buttons, Action action) {
     if (action != Action::Count) g_binding[static_cast<int>(action)] = buttons;
+}
+bool held(Action action) {
+    if (action == Action::Count || g_capture.load() != 0) return false;
+    const uint16_t bind = g_binding[static_cast<int>(action)].load();
+    if (!bind) return false;
+    for (const Pad& p : g_pads)
+        if ((p.held.load() & bind) == bind) return true;
+    return false;
+}
+void setSummonHidden(bool accept, bool decline) {
+    g_hideAccept = accept;
+    g_hideDecline = decline;
 }
 void beginCapture() { g_captured = 0; g_capture = 1; }
 bool captureDone(uint16_t& buttons) {

@@ -28,6 +28,7 @@
 #include "ui/nametags.h"
 #include "ui/notices.h"
 #include "ui/radial.h"
+#include "ui/summon.h"
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND, UINT, WPARAM, LPARAM);
 
@@ -55,6 +56,7 @@ std::atomic<int> g_chatKey{'T'};
 std::atomic<int> g_pingKey{0}; // 0 = none
 std::atomic<int> g_reactKey{0}; // the quick answers key; 0 = none
 std::atomic<int> g_altKey{0}, g_hideKey{0}, g_prevKey{0}, g_nextKey{0}; // the other keys; 0 = none
+std::atomic<int> g_summonKey{0}, g_summonAcceptKey{0}, g_summonDeclineKey{0}; // summon (ui/summon.h); 0 = none
 std::atomic<bool> g_hidden{false};       // the overlay is hidden (see overlayHidden)
 std::atomic<DWORD> g_hiddenNoteAt{0};    // when it was last switched: a short note says so
 std::atomic<int> g_pingClearKey{0}; // a key, or VK_MBUTTON / VK_XBUTTON1 / VK_XBUTTON2; 0 = none
@@ -290,6 +292,19 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
             return 0;
         }
     }
+    // Summon: while a summon waits, its accept key (and the decline key, also while "Go back?" shows)
+    // belongs to the panel. Presses stay away from the game; releases reach it, so no key is ever left
+    // "down" there (as with the wheel's keys).
+    if (!g_open.load() && !chat::isOpen() && g_ready) {
+        const int accept = g_summonAcceptKey.load(), decline = g_summonDeclineKey.load();
+        auto taken = [&](int vk) {
+            return vk != 0 && ((vk == accept && summon::takesAcceptKey()) || (vk == decline && summon::takesDeclineKey()));
+        };
+        if (msg == WM_KEYDOWN && taken(static_cast<int>(w))) return 0;
+        int vk = 0;
+        bool press = false;
+        if (msg == WM_INPUT && rawKey(l, vk, press) && press && taken(vk)) return DefWindowProcW(hwnd, msg, w, l);
+    }
     // Only the menu key toggles the menu, never Escape: Escape reaches ImGui below (it cancels a key
     // capture and closes combo boxes) and nothing else. The menu has no close button by design.
     if (msg == WM_KEYDOWN && static_cast<int>(w) != VK_ESCAPE && static_cast<int>(w) == g_toggleKey.load() &&
@@ -436,6 +451,17 @@ HRESULT STDMETHODCALLTYPE presentHook(IDXGISwapChain* sc, UINT sync, UINT flags)
         if (g_justOpened.exchange(false)) ImGui::SetWindowFocus("###mecmp");
         ImGui::GetIO().MouseDrawCursor = g_open.load();
         pollMouseBinds();
+        {
+            // Summon (ui/summon.h): held keys are read here, every frame, so tap and hold are told apart.
+            auto down = [](int vk) { return vk != 0 && (GetAsyncKeyState(vk) & 0x8000) != 0; };
+            summon::Input in;
+            in.canAct = gameFocused() && !g_open.load() && !chat::isOpen() && !game::hooks::gameMenuOpen() && !radial::engaged();
+            in.sendDown = down(g_summonKey.load());
+            in.acceptDown = down(g_summonAcceptKey.load()) || gamepad::held(gamepad::Action::SummonAccept);
+            in.declineDown = down(g_summonDeclineKey.load()) || gamepad::held(gamepad::Action::SummonDecline);
+            summon::update(in);
+            gamepad::setSummonHidden(summon::takesAcceptKey(), summon::takesDeclineKey());
+        }
         nametags::draw();
         markers::draw();
         radial::draw();
@@ -444,6 +470,7 @@ HRESULT STDMETHODCALLTYPE presentHook(IDXGISwapChain* sc, UINT sync, UINT flags)
             ImGui::GetForegroundDrawList()->AddRectFilled(ImVec2(0, 0), ImGui::GetIO().DisplaySize,
                                                           ImGui::GetColorU32(ImVec4(0, 0, 0, a)));
         notices::draw();
+        summon::draw();
         game::mumble::update();
         chat::draw();
         menu::draw(g_open.load());
@@ -491,8 +518,9 @@ const MenuKey* menuKeys(int& count) {
 void setMenuKey(const std::string& name) { g_toggleKey = keyFromName(name); }
 namespace {
 // Every key the mod listens to besides the menu key. A key does one job.
-std::atomic<int>* const kBound[] = {&g_pingKey, &g_pingClearKey, &g_chatKey, &g_reactKey,
-                                    &g_altKey,  &g_hideKey,      &g_prevKey, &g_nextKey};
+std::atomic<int>* const kBound[] = {&g_pingKey, &g_pingClearKey, &g_chatKey, &g_reactKey, &g_altKey,
+                                    &g_hideKey, &g_prevKey,      &g_nextKey, &g_summonKey, &g_summonAcceptKey,
+                                    &g_summonDeclineKey};
 
 // A key name from mecmp.ini. `mouse`: 0 = the keyboard only, 1 = also MOUSE4 / MOUSE5 (the side
 // buttons), 2 = also MOUSE3 (the middle button, which the "clear markers" key may be).
@@ -525,6 +553,9 @@ bool setAltKey(const std::string& name) { return setBind(g_altKey, name, 1); }
 bool setHideKey(const std::string& name) { return setBind(g_hideKey, name, 1); }
 bool setWheelPrevKey(const std::string& name) { return setBind(g_prevKey, name, 1); }
 bool setWheelNextKey(const std::string& name) { return setBind(g_nextKey, name, 1); }
+bool setSummonKey(const std::string& name) { return setBind(g_summonKey, name, 1); }
+bool setSummonAcceptKey(const std::string& name) { return setBind(g_summonAcceptKey, name, 1); }
+bool setSummonDeclineKey(const std::string& name) { return setBind(g_summonDeclineKey, name, 1); }
 
 bool overlayHidden() { return g_hidden.load(); }
 void setOverlayHidden(bool hidden) {
@@ -547,6 +578,7 @@ bool menuOpen() { return g_open.load(); }
 
 int actionKeyFromName(const std::string& n) {
     if (n.size() == 1 && isalpha(static_cast<unsigned char>(n[0]))) return toupper(static_cast<unsigned char>(n[0]));
+    if (n.size() == 1 && n[0] >= '0' && n[0] <= '9') return n[0]; // the number row (VK_0..VK_9 are the characters)
     if (_stricmp(n.c_str(), "ENTER") == 0) return VK_RETURN;
     for (const MenuKey& k : kMenuKeys)
         if (_stricmp(n.c_str(), k.name) == 0) return k.vk;
@@ -565,6 +597,11 @@ bool install() {
     setHideKey(config::get()->hideKey);
     setWheelPrevKey(config::get()->wheelPrevKey);
     setWheelNextKey(config::get()->wheelNextKey);
+    setSummonKey(config::get()->summonKey);
+    setSummonAcceptKey(config::get()->summonAcceptKey);
+    setSummonDeclineKey(config::get()->summonDeclineKey);
+    gamepad::setBinding(gamepad::parse(config::get()->summonAcceptPad), gamepad::Action::SummonAccept);
+    gamepad::setBinding(gamepad::parse(config::get()->summonDeclinePad), gamepad::Action::SummonDecline);
     gamepad::setBinding(gamepad::parse(config::get()->menuPad));
     gamepad::setBinding(gamepad::parse(config::get()->pingPad), gamepad::Action::Ping);
     gamepad::setBinding(gamepad::parse(config::get()->pingClearPad), gamepad::Action::PingClear);

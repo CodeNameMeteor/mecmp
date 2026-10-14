@@ -26,7 +26,17 @@ constexpr uint32_t kMaxAgeMs = 2000; // the target player must have been heard f
 enum Phase : int { Idle, FadeOut, Hold, FadeIn };
 std::atomic<int> g_phase{Idle};
 std::atomic<DWORD> g_phaseAt{0};
+enum Source : int { Peer, Fixed, Back };
+std::atomic<int> g_source{Peer};
 std::atomic<uint32_t> g_peer{0};
+// A summoned place (source Fixed), written before the phase leaves Idle so the game thread sees it.
+float g_fixedPos[3] = {0, 0, 0};
+float g_fixedYaw = 0;
+// Where a summon took us from (written by the game thread in tick; g_backAt = when, 0 = nothing to go back to).
+LinearTransform g_back{};
+void* g_backCharacter = nullptr;
+std::atomic<DWORD> g_backAt{0};
+constexpr DWORD kBackMs = 60000;  // how long going back stays possible
 std::atomic<int> g_available{-1}; // -1 unchecked, 0 no, 1 yes
 LinearTransform g_target{};       // game thread only
 void* g_character = nullptr;      // the character that was moved (game thread)
@@ -72,8 +82,32 @@ bool finite(const float* v, int n) {
 
 void requestGoTo(uint32_t peer) {
     if (g_phase != Idle || !available()) return;
+    g_source = Peer;
     g_peer = peer;
     setPhase(FadeOut);
+}
+
+bool requestToPos(const float pos[3], float yaw) {
+    if (g_phase != Idle || !available() || !finite(pos, 3) || !std::isfinite(yaw)) return false;
+    memcpy(g_fixedPos, pos, sizeof(g_fixedPos));
+    g_fixedYaw = yaw;
+    g_source = Fixed;
+    setPhase(FadeOut);
+    return true;
+}
+
+uint32_t returnLeftMs() {
+    const DWORD at = g_backAt.load();
+    if (!at) return 0;
+    const DWORD since = GetTickCount() - at;
+    return since >= kBackMs ? 0 : kBackMs - since;
+}
+
+bool requestReturn() {
+    if (g_phase != Idle || !available() || returnLeftMs() == 0) return false;
+    g_source = Back;
+    setPhase(FadeOut);
+    return true;
 }
 
 bool busy() { return g_phase != Idle; }
@@ -100,30 +134,68 @@ float fadeAlpha() {
 void levelChanged() {
     if (g_phase != Idle) MLOG("teleport: level changed; cancelled");
     g_phase = Idle;
+    g_backAt = 0; // the place it would go back to is another level now
 }
 
 void tick() {
     const int p = g_phase.load();
-    if (p == Idle) return;
+    if (p == Idle) {
+        // Going back is only for the character that was moved; it died, respawned or the level changed.
+        if (g_backAt.load() && returnLeftMs() == 0) g_backAt = 0;
+        else if (g_backAt.load() && level::playerCharacter() != g_backCharacter) g_backAt = 0;
+        return;
+    }
     const DWORD since = GetTickCount() - g_phaseAt.load();
     void* player = level::playerCharacter();
     if (p == FadeOut) {
         if (since < kFadeMs) return;
-        net::PlayerState st;
-        uint32_t age = 0;
-        if (!player || !checkFunction() || !net::remoteState(g_peer, st, age) || age > kMaxAgeMs || !finite(st.pos, 3) ||
-            !std::isfinite(st.yaw)) {
-            MLOG("teleport: player %08x is not available right now; cancelled", g_peer.load());
+        const int source = g_source.load();
+        if (!player || !checkFunction()) {
+            MLOG("teleport: the player character is not available right now; cancelled");
             setPhase(FadeIn);
             return;
         }
-        // On the player's own spot, facing their way: a ghost has no collision, and a spot beside them
-        // could be off a ledge or inside a wall.
-        g_target = transformFromYaw(st.pos, st.yaw);
+        if (source == Peer) {
+            net::PlayerState st;
+            uint32_t age = 0;
+            if (!net::remoteState(g_peer, st, age) || age > kMaxAgeMs || !finite(st.pos, 3) || !std::isfinite(st.yaw)) {
+                MLOG("teleport: player %08x is not available right now; cancelled", g_peer.load());
+                setPhase(FadeIn);
+                return;
+            }
+            // On the player's own spot, facing their way: a ghost has no collision, and a spot beside them
+            // could be off a ledge or inside a wall.
+            g_target = transformFromYaw(st.pos, st.yaw);
+            MLOG("teleport: to player %08x at %.1f %.1f %.1f", g_peer.load(), st.pos[0], st.pos[1], st.pos[2]);
+        } else if (source == Fixed) {
+            if (!finite(g_fixedPos, 3) || !std::isfinite(g_fixedYaw)) {
+                MLOG("teleport: the summoned place is not a place; cancelled");
+                setPhase(FadeIn);
+                return;
+            }
+            // Where we stood, so that a summon can be undone for a minute (returnLeftMs / requestReturn).
+            LinearTransform before{};
+            if (readEntityTransform(player, before)) {
+                g_back = before;
+                g_backCharacter = player;
+                g_backAt = GetTickCount() | 1; // never 0
+            }
+            g_target = transformFromYaw(g_fixedPos, g_fixedYaw);
+            MLOG("teleport: to a summoned place %.1f %.1f %.1f", g_fixedPos[0], g_fixedPos[1], g_fixedPos[2]);
+        } else { // Back
+            if (!g_backAt.load() || player != g_backCharacter) {
+                MLOG("teleport: nothing to go back to (the character changed); cancelled");
+                g_backAt = 0;
+                setPhase(FadeIn);
+                return;
+            }
+            g_target = g_back;
+            g_backAt = 0;
+            MLOG("teleport: back to where the summon took us from");
+        }
         g_retries = 0;
         g_character = player;
         teleportTo(player, g_target);
-        MLOG("teleport: to player %08x at %.1f %.1f %.1f", g_peer.load(), st.pos[0], st.pos[1], st.pos[2]);
         setPhase(Hold);
         return;
     }

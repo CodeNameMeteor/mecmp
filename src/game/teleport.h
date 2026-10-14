@@ -13,6 +13,15 @@
 namespace mecmp::game::teleport {
 
 void requestGoTo(uint32_t peer); // ignored while one is running
+// "Go to a place": the same fade and teleport, to where a summoner stood when it called (a summon
+// carries the place, not the player). Remembers where we were for returnLeftMs / requestReturn.
+// False (nothing happens) while one is running, when teleporting is off in this build, or for a place
+// that is not finite.
+bool requestToPos(const float pos[3], float yaw);
+// After requestToPos moved us: how long (ms) requestReturn still takes us back to where we stood
+// (0 = no longer possible: it ran out, the level changed, or the character died / respawned).
+uint32_t returnLeftMs();
+bool requestReturn();            // same rules as requestToPos; ignored when returnLeftMs() is 0
 bool busy();
 // 0..1, how black the screen should be now (the overlay draws it over everything).
 float fadeAlpha();

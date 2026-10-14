@@ -38,6 +38,11 @@ bool setAltKey(const std::string& name);        // place a marker the other way
 bool setHideKey(const std::string& name);       // show / hide the overlay
 bool setWheelPrevKey(const std::string& name);  // previous wheel, while the wheel is open
 bool setWheelNextKey(const std::string& name);  // next wheel
+// Summon (ui/summon.h). The call key; the keys that say yes / no to a summon (hold for a second; the
+// decline key also takes you back after a summon). Digits are allowed for these as for the others.
+bool setSummonKey(const std::string& name);
+bool setSummonAcceptKey(const std::string& name);
+bool setSummonDeclineKey(const std::string& name);
 // Names, markers, arrows, notices and chat lines are not drawn while this is on (a screenshot, a
 // recording). The menu, the chat line and the open wheel still are. Any thread.
 bool overlayHidden();

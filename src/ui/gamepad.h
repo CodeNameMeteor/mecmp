@@ -28,8 +28,14 @@ std::string format(uint16_t buttons);     // bits -> "LS+RS"
 // PingClear removes all your markers; it only acts on the pad whose Ping buttons are held.
 // React is the quick answers wheel: a short press sends the last answer to the marker you look at,
 // holding opens the answers wheel (the same stick and cancel rules as Ping).
-enum class Action { Menu, Ping, PingClear, React, Count };
+// SummonAccept / SummonDecline are held (not pressed) buttons that answer a summon (ui/summon.h);
+// they are read with held() and hidden from the game only while setSummonHidden asks for it.
+enum class Action { Menu, Ping, PingClear, React, SummonAccept, SummonDecline, Count };
 void setBinding(uint16_t buttons, Action action = Action::Menu); // 0 = none
+// True while all of the action's buttons are held on some pad (never while a binding is recorded).
+bool held(Action action);
+// The summon panel is up: the game does not see the accept / decline buttons (as for the open wheel).
+void setSummonHidden(bool accept, bool decline);
 
 // A button as the player's pad names it in hints: the Xbox name, or the PlayStation one when
 // [ui] pad_labels=playstation (A = Cross, B = Circle, X = Square, Y = Triangle, LB/RB = L1/R1,

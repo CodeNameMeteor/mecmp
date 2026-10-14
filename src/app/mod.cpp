@@ -7,6 +7,7 @@
 #include "app/diagnostics.h"
 #include "core/config.h"
 #include "core/log.h"
+#include "core/prof.h"
 #include "core/typeinfo.h"
 #include "game/camera_finder.h"
 #include "game/engine.h"
@@ -34,6 +35,7 @@ uint64_t g_levelStartTick = 0;
 
 // Server game thread, once per simulation tick.
 void onTick(void* world, float dt) {
+    prof::Scope scope(prof::GameTick);
     static void* lastWorld = nullptr;
     if (world != lastWorld) { // new level: everything of the old one is gone
         if (lastWorld) { game::ghosts::levelChanged(); game::teleport::levelChanged(); }
@@ -43,15 +45,20 @@ void onTick(void* world, float dt) {
     const uint64_t n = ++g_ticks;
     if (n == 1) VLOG("tick: first server tick (dt %.4f)", dt);
     static net::PlayerState local; // large; game thread only
-    if (game::local_player::capture(local)) {
+    bool captured;
+    {
+        prof::Scope s(prof::Capture);
+        captured = game::local_player::capture(local);
+    }
+    if (captured) {
         net::publishLocal(local);
         std::lock_guard<std::mutex> lock(g_localMotionM);
         g_localMotion.add(local);
     }
     game::ghosts::tick(n, n - g_levelStartTick);
-    game::teleport::tick();
-    game::ping::tick();
-    game::models::tick();
+    { prof::Scope s(prof::Teleport); game::teleport::tick(); }
+    { prof::Scope s(prof::Ping); game::ping::tick(); }
+    { prof::Scope s(prof::Models); game::models::tick(); }
 }
 
 // Waits until the engine has built its type list, then checks that this is the game build the
@@ -121,6 +128,7 @@ void monitorLoop() {
                  local = g_localMotion.report();
              }
              MLOG("status: net %s | %s | local capture %s", net::describe().c_str(), game::ghosts::status().c_str(), local.c_str());
+             MLOG("perf: %s", prof::report().c_str());
          }},
         {VK_F12, false, [] { game::ghosts::requestHideAll(); }},
         {VK_F10, false, [] { game::camera_finder::run(); }},

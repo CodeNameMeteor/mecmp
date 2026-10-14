@@ -15,6 +15,7 @@
 #include "core/config.h"
 #include "core/log.h"
 #include "core/mem.h"
+#include "core/prof.h"
 #include "game/ghosts.h"
 #include "game/hooks.h"
 #include "game/ping_point.h"
@@ -440,6 +441,7 @@ HRESULT STDMETHODCALLTYPE presentHook(IDXGISwapChain* sc, UINT sync, UINT flags)
     // (on the game's thread, just before it reads them); from here only until that hook is in.
     if (g_ready && sc == g_swapChain && !game::hooks::clientUpdateHooked()) game::ghosts::renderFrame();
     if (g_ready && sc == g_swapChain && g_rtv) {
+        prof::Scope scope(prof::Overlay);
         ImGui_ImplDX11_NewFrame();
         ImGui_ImplWin32_NewFrame();
         if (g_open && g_rawMouse) applyRawMouse(); // after the backend's own cursor read, so ours wins

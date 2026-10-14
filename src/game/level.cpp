@@ -139,7 +139,8 @@ void reset() {
     models::reset();
 }
 
-uintptr_t serverWorld() { return mem::readOr<uintptr_t>(rva(kServerGameWorld)); }
+// A global in the game image, so always readable: a plain load (this runs several times a frame).
+uintptr_t serverWorld() { return *reinterpret_cast<const volatile uintptr_t*>(rva(kServerGameWorld)); }
 
 std::string levelName() {
     const uintptr_t world = serverWorld();
@@ -198,23 +199,27 @@ bool characterAlive(void* character, void* spawner) {
 
 bool characterExists(void* character, uintptr_t expectedData) {
     const uintptr_t ch = reinterpret_cast<uintptr_t>(character);
-    uintptr_t vt = 0, data = 0;
-    return ch && mem::read(ch, vt) && vt == rva(Vtbl_PamServerCharacterEntity) && mem::read(ch + Character_Data, data) &&
-           (!expectedData || data == expectedData);
+    uintptr_t head[Character_Data / 8 + 1] = {}; // the vtable and the data in one read
+    return ch && mem::read(ch, head, sizeof(head)) && head[0] == rva(Vtbl_PamServerCharacterEntity) &&
+           (!expectedData || head[Character_Data / 8] == expectedData);
 }
 
 void* playerCharacter() {
     void* spawner = playerSpawner();
-    if (!spawnerAlive(spawner)) return nullptr;
-    const uintptr_t sp = reinterpret_cast<uintptr_t>(spawner);
-    uintptr_t list[2] = {};
-    if (!mem::read(sp + Spawner_Spawned, list, sizeof(list))) return nullptr;
-    const uintptr_t begin = list[0], end = list[1];
+    if (!spawner) return nullptr;
+    // The spawner's vtable (is it still a spawner?) and its list of characters, in one read.
+    uintptr_t head[Spawner_Spawned / 8 + 2];
+    if (!mem::read(reinterpret_cast<uintptr_t>(spawner), head, sizeof(head)) ||
+        (head[0] != rva(Vtbl_PamServerCharacterSpawnEntity) && head[0] != rva(Vtbl_ServerCharacterSpawnEntity)))
+        return nullptr;
+    const uintptr_t begin = head[Spawner_Spawned / 8], end = head[Spawner_Spawned / 8 + 1];
     if (!begin || end <= begin || (end - begin) / 8 > 64) return nullptr;
+    uintptr_t items[64];
+    const size_t count = (end - begin) / 8;
+    if (!mem::read(begin, items, count * 8)) return nullptr; // the whole list in one read
     void* fallback = nullptr;
-    for (uintptr_t it = end; it != begin;) { // newest first, prefer the one owned by a player
-        it -= 8;
-        void* c = reinterpret_cast<void*>(mem::readOr<uintptr_t>(it));
+    for (size_t i = count; i-- > 0;) { // newest first, prefer the one owned by a player
+        void* c = reinterpret_cast<void*>(items[i]);
         if (!c || !isKindOf(c, TI_ServerCharacterEntity)) continue;
         if (mem::readOr<uintptr_t>(reinterpret_cast<uintptr_t>(c) + Character_Player)) return c;
         if (!fallback) fallback = c;

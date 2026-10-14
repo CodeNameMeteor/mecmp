@@ -135,12 +135,29 @@ bool setClientVisible(void* ent, bool visible) {
     return true;
 }
 
-bool clientCompAlive(void* comp, void* owner) {
+// The fields of a ghost's client replay component that are used every tick and every frame, taken
+// with one read (each fault-tolerant read is a kernel call, so one large read beats several small ones).
+struct ClientCompView {
+    uint8_t raw[CRP_SkipRoot + 1];
+    template <class T> T at(size_t off) const {
+        T v;
+        memcpy(&v, raw + off, sizeof(T));
+        return v;
+    }
+    uintptr_t pose() const { return at<uintptr_t>(CRP_ReceivedPose); }
+    uint32_t bones() const { return at<uint32_t>(CRP_ExpectedBones); }
+    uintptr_t boneIndices() const { return at<uintptr_t>(CRP_Setup + 0x10); }
+};
+
+// Is the component still a client replay component of the same owner as when we claimed it (the memory
+// was not reused)? Reads its fields in the same go.
+bool readClientComp(void* comp, void* owner, ClientCompView& v) {
     const uintptr_t c = reinterpret_cast<uintptr_t>(comp);
-    uintptr_t vt = 0;
-    if (!c || !mem::read(c, vt) || vt != rva(Vtbl_PamClientReplayPlayerComponent)) return false;
-    // Same owner as when we claimed it (when the owner is known): the memory was not reused.
-    return !owner || componentOwner(c) == reinterpret_cast<uintptr_t>(owner);
+    if (!c || !mem::read(c, v.raw, sizeof(v.raw)) || v.at<uintptr_t>(0) != rva(Vtbl_PamClientReplayPlayerComponent))
+        return false;
+    if (!owner) return true;
+    const uintptr_t coll = v.at<uintptr_t>(Component_Collection);
+    return coll && mem::readOr<uintptr_t>(coll) == reinterpret_cast<uintptr_t>(owner);
 }
 
 // Is `data` a PamCharacterEntityData? Calls the object's getType (vtable slot 0) only after checking
@@ -248,17 +265,18 @@ void drive(Ghost& g, const net::PlayerState& st) {
 // transform. Stop its playback, let it place the body from the trajectory bone, and pin that
 // bone to the player's position (the client playback rewrites the received pose every frame).
 void fixClient(Ghost& g, const net::PlayerState& st) {
-    if (!clientCompAlive(g.clientComp, g.clientChar)) return;
+    thread_local ClientCompView v;
+    if (!readClientComp(g.clientComp, g.clientChar, v)) return;
     const uintptr_t c = reinterpret_cast<uintptr_t>(g.clientComp);
-    if (mem::readOr<uint32_t>(c + CRP_PlaybackState) != 0) poke<uint32_t>(c + CRP_PlaybackState, 0);
-    if (mem::readOr<uint8_t>(c + CRP_PlaybackForced) != 0) poke<uint8_t>(c + CRP_PlaybackForced, 0);
-    if (mem::readOr<uint8_t>(c + CRP_SkipRoot) != 0) poke<uint8_t>(c + CRP_SkipRoot, 0);
+    if (v.at<uint32_t>(CRP_PlaybackState) != 0) poke<uint32_t>(c + CRP_PlaybackState, 0);
+    if (v.at<uint8_t>(CRP_PlaybackForced) != 0) poke<uint8_t>(c + CRP_PlaybackForced, 0);
+    if (v.at<uint8_t>(CRP_SkipRoot) != 0) poke<uint8_t>(c + CRP_SkipRoot, 0);
     // Driven every rendered frame (renderFrame): the anchor is set there, for the frame's own moment.
     if (g.posing && GetTickCount() - g.posingSince > kReplicateMs) return;
-    const uintptr_t pose = mem::readOr<uintptr_t>(c + CRP_ReceivedPose);
-    const uint32_t n = mem::readOr<uint32_t>(c + CRP_ExpectedBones);
+    const uintptr_t pose = v.pose();
+    const uint32_t n = v.bones();
     uint32_t idx[kMaxBones];
-    const uintptr_t idxPtr = mem::readOr<uintptr_t>(c + CRP_Setup + 0x10);
+    const uintptr_t idxPtr = v.boneIndices();
     if (!pose || !n || n > kMaxBones || !idxPtr || !mem::read(idxPtr, idx, n * 4)) return;
     for (uint32_t i = 0; i < n; ++i) {
         if ((idx[i] & 0xff) != 1) continue;
@@ -273,10 +291,15 @@ void fixClient(Ghost& g, const net::PlayerState& st) {
 void setGhostShader(Ghost& ghost, bool enabled) {
     ghost.ghostShader = enabled;
     const uintptr_t client = reinterpret_cast<uintptr_t>(ghost.clientChar);
-    uint8_t current = 0;
-    if (!client || mem::readOr<uintptr_t>(client) != rva(Vtbl_PamClientCharacterEntity) ||
-        mem::readOr<uintptr_t>(client + Character_Data) != g_ghostCharData.load() ||
-        !mem::read(client + ClientChar_GhostShader, current) || current == static_cast<uint8_t>(enabled)) return;
+    // One read covers the vtable, the data and the flag.
+    thread_local uint8_t head[ClientChar_GhostShader + 1];
+    if (!client || !mem::read(client, head, sizeof(head))) return;
+    uintptr_t vt = 0, data = 0;
+    memcpy(&vt, head, sizeof(vt));
+    memcpy(&data, head + Character_Data, sizeof(data));
+    const uint8_t current = head[ClientChar_GhostShader];
+    if (vt != rva(Vtbl_PamClientCharacterEntity) || data != g_ghostCharData.load() || current == static_cast<uint8_t>(enabled))
+        return;
     // Character creation caches the definition's shader flag in each client entity.
     poke<uint8_t>(client + ClientChar_GhostShader, enabled ? 1 : 0);
 }
@@ -539,6 +562,9 @@ void beforeClientReplayUpdate() {
 }
 
 void renderFrame() {
+    // Both of the game's client replay updaters run every frame and each calls this first. Writing before
+    // both keeps the ghost smooth (skipping the second was visibly less smooth), and a write costs ~15 us.
+    prof::Scope scope(prof::RenderPose);
     if (!level::serverWorld() || level::inFrontEnd()) return; // no ghosts outside a playable level
     struct Target { uint32_t peer; void* comp; void* ch; };
     Target targets[kMaxGhosts];
@@ -553,19 +579,28 @@ void renderFrame() {
     thread_local net::PlayerState st; // large; render thread or client update thread
     for (size_t i = 0; i < n; ++i) {
         uint32_t age = 0;
-        if (!net::remoteState(targets[i].peer, st, age) || age >= kHideAfterMs) continue;
-        if (!clientCompAlive(targets[i].comp, targets[i].ch)) continue;
-        const uintptr_t c = reinterpret_cast<uintptr_t>(targets[i].comp);
-        const uintptr_t pose = mem::readOr<uintptr_t>(c + CRP_ReceivedPose);
-        const uint32_t bones = mem::readOr<uint32_t>(c + CRP_ExpectedBones);
+        {
+            prof::Scope s(prof::RenderState);
+            if (!net::remoteState(targets[i].peer, st, age) || age >= kHideAfterMs) continue;
+        }
+        thread_local ClientCompView v;
         uint32_t idx[kMaxBones];
-        const uintptr_t idxPtr = mem::readOr<uintptr_t>(c + CRP_Setup + 0x10);
-        if (!pose || bones != st.boneCount || !bones || bones > kMaxBones || !idxPtr || !mem::read(idxPtr, idx, bones * 4))
-            continue;
+        uintptr_t pose = 0;
+        uint32_t bones = 0;
+        {
+            prof::Scope s(prof::RenderRead);
+            if (!readClientComp(targets[i].comp, targets[i].ch, v)) continue;
+            pose = v.pose();
+            bones = v.bones();
+            const uintptr_t idxPtr = v.boneIndices();
+            if (!pose || bones != st.boneCount || !bones || bones > kMaxBones || !idxPtr || !mem::read(idxPtr, idx, bones * 4))
+                continue;
+        }
         float buf[kMaxBones][8];
         memcpy(buf, st.bones, bones * 0x20);
         for (uint32_t b = 0; b < bones; ++b)
             if ((idx[b] & 0xff) == 1) placeAnchor(&buf[0][0], static_cast<int>(b), st.pos); // the body's anchor
+        prof::Scope s(prof::RenderWrite);
         poke(pose, buf, bones * 0x20);
     }
 }
@@ -629,6 +664,7 @@ double nowUs() {
 } // namespace
 
 void tick(uint64_t tick, uint64_t ticksInLevel) {
+    prof::Scope scope(prof::Ghosts);
     (void)tick;
     const double t0 = nowUs();
     handleRequests();

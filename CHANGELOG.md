@@ -27,6 +27,12 @@
   `--mirror` still mirrors you, with any build.
 
 ### Fixes
+- **The overlay follows the game window's size again, and has a size setting.** The font was sized once,
+  from the window as it was when the overlay started. The game starts in a 1280x720 window and then goes
+  full screen, so on a 1440p or 4K screen the menu, markers and the wheel stayed at 720p size (the wheel
+  was about 17% of the screen's height, the labels a few pixels). The size now follows the window's height
+  all the time. *Interface size* (menu, Players tab; `[ui] ui_scale`, 0.5..2) scales it further.
+
 - **A joiner listens only to its host.** Everything in a session reaches a joiner through the host (or the
   server), so packets from any other address are now ignored. Before, someone who knew a player's address
   could send it chat, markers or a summon that appeared to come from the host.

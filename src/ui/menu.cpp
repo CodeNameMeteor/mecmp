@@ -500,6 +500,28 @@ void voiceStatus() {
 }
 
 void lookSection() {
+    static struct { float value = 1.f; bool editing = false; } g_scaleEdit; // saved when the slider is let go
+    ImGui::SeparatorText("Interface size");
+    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 10);
+    float scale = g_scaleEdit.editing ? g_scaleEdit.value : config::get()->uiScale;
+    if (ImGui::SliderFloat("##uiscale", &scale, 0.5f, 2.f, "%.2f x", ImGuiSliderFlags_AlwaysClamp)) {
+        g_scaleEdit.value = scale;
+        g_scaleEdit.editing = true;
+    }
+    if (ImGui::IsItemDeactivatedAfterEdit()) {
+        const float v = g_scaleEdit.value;
+        config::change([v](config::Settings& c) { c.uiScale = v; });
+    }
+    if (g_scaleEdit.editing && !ImGui::IsItemActive() && std::fabs(config::get()->uiScale - g_scaleEdit.value) < 0.001f)
+        g_scaleEdit.editing = false;
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Reset##uiscale")) {
+        g_scaleEdit.editing = false;
+        config::change([](config::Settings& c) { c.uiScale = 1.0f; });
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Size of the menu, markers, wheel and notices. 1.0 follows the game window's height.\n"
+                          "Applies when you let go of the slider.");
     ImGui::SeparatorText("Other players");
     bool showNames = config::get()->showNames;
     if (ImGui::Checkbox("Names above players", &showNames))

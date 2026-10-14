@@ -7,6 +7,7 @@
 
 #include "ui/overlay.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cctype>
 
@@ -382,33 +383,36 @@ int keyFromName(const std::string& n) {
     return VK_INSERT;
 }
 
-bool init(IDXGISwapChain* sc) {
-    DXGI_SWAP_CHAIN_DESC desc{};
-    if (FAILED(sc->GetDesc(&desc)) || !desc.OutputWindow) return false;
-    if (FAILED(sc->GetDevice(__uuidof(ID3D11Device), reinterpret_cast<void**>(&g_device))) || !g_device) return false;
-    g_device->GetImmediateContext(&g_context);
-    g_swapChain = sc;
-    g_window = desc.OutputWindow;
-    createRtv();
+// Font size and UI scale. The size follows the game window's height (so a window that starts at
+// 1280x720 and then goes full screen is not left with 720p text) times the user's ui_scale. The atlas
+// is baked at g_bakedPx; small differences are covered by FontGlobalScale, and a bigger one rebuilds
+// the atlas once the wanted size has held still for a moment (a slider drag does not rebuild per step).
+float g_bakedPx = 0.f;
+float g_wantPx = 0.f;
+DWORD g_wantSince = 0;
 
-    IMGUI_CHECKVERSION();
-    ImGui::CreateContext();
-    ImGuiIO& io = ImGui::GetIO();
-    io.IniFilename = nullptr; // no imgui.ini next to the game
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad;
-    // Readable on big screens: Segoe UI scaled with the window height. Without it, ImGui's built-in
-    // font at the same size (A-1: it used to stay at its 13 px default).
-    // Names, chat and marker titles are the players' own text, so the font carries more than Latin:
-    // Latin Extended, Greek and Cyrillic from Segoe UI, and the common Chinese characters from
-    // Microsoft YaHei where Windows has it. Anything else still shows as "?".
+float targetFontPx() {
     RECT rc{};
-    GetClientRect(g_window, &rc);
-    float px = (rc.bottom - rc.top) > 0 ? (rc.bottom - rc.top) / 55.f : 18.f;
+    float h = 0.f;
+    if (g_window && GetClientRect(g_window, &rc)) h = static_cast<float>(rc.bottom - rc.top);
+    if (h <= 0.f && g_wantPx > 0.f) return g_wantPx; // minimised: keep the size it had
+    float px = h > 0.f ? h / 55.f : 18.f;
     if (px < 16.f) px = 16.f;
+    px *= std::clamp(config::get()->uiScale, 0.5f, 2.f);
+    return std::clamp(px, 8.f, 96.f);
+}
+
+// Segoe UI at `px`. Names, chat and marker titles are the players' own text, so the font carries more
+// than Latin: Latin Extended, Greek and Cyrillic from Segoe UI, and the common Chinese characters from
+// Microsoft YaHei where Windows has it. Anything else still shows as "?".
+void buildFonts(float px) {
+    ImGuiIO& io = ImGui::GetIO();
+    io.Fonts->Clear();
     ImFont* font = nullptr;
     if (GetFileAttributesW(L"C:\\Windows\\Fonts\\segoeui.ttf") != INVALID_FILE_ATTRIBUTES) {
-        static ImVector<ImWchar> ranges; // the atlas reads it when it is built, on the first frame
+        static ImVector<ImWchar> ranges; // the atlas reads it when it is built, on the next frame
         static const ImWchar kMore[] = {0x0100, 0x024F, 0x0370, 0x03FF, 0x2000, 0x206F, 0};
+        ranges.clear();
         ImFontGlyphRangesBuilder builder;
         builder.AddRanges(io.Fonts->GetGlyphRangesDefault());
         builder.AddRanges(io.Fonts->GetGlyphRangesCyrillic());
@@ -426,6 +430,45 @@ bool init(IDXGISwapChain* sc) {
         fc.SizePixels = px;
         io.Fonts->AddFontDefault(&fc);
     }
+    g_bakedPx = px;
+    g_wantPx = px;
+    g_wantSince = GetTickCount();
+}
+
+// Render thread, before the backend's NewFrame (which creates the font texture again after a rebuild).
+void updateFontScale() {
+    const float want = targetFontPx();
+    const DWORD now = GetTickCount();
+    if (want != g_wantPx) {
+        g_wantPx = want;
+        g_wantSince = now;
+    }
+    const float ratio = want / g_bakedPx;
+    if ((ratio < 0.8f || ratio > 1.25f) && now - g_wantSince > 400) {
+        ImGui_ImplDX11_InvalidateDeviceObjects();
+        buildFonts(want);
+        MLOG("ui: font rebuilt at %.0f px (ui_scale %.2f)", want, config::get()->uiScale);
+    }
+    ImGui::GetIO().FontGlobalScale = want / g_bakedPx;
+}
+
+bool init(IDXGISwapChain* sc) {
+    DXGI_SWAP_CHAIN_DESC desc{};
+    if (FAILED(sc->GetDesc(&desc)) || !desc.OutputWindow) return false;
+    if (FAILED(sc->GetDevice(__uuidof(ID3D11Device), reinterpret_cast<void**>(&g_device))) || !g_device) return false;
+    g_device->GetImmediateContext(&g_context);
+    g_swapChain = sc;
+    g_window = desc.OutputWindow;
+    createRtv();
+
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO();
+    io.IniFilename = nullptr; // no imgui.ini next to the game
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad;
+    RECT rc{};
+    GetClientRect(g_window, &rc);
+    buildFonts(targetFontPx());
     menu::applyStyle();
     ImGui_ImplWin32_Init(g_window);
     ImGui_ImplDX11_Init(g_device, g_context);
@@ -442,6 +485,7 @@ HRESULT STDMETHODCALLTYPE presentHook(IDXGISwapChain* sc, UINT sync, UINT flags)
     if (g_ready && sc == g_swapChain && !game::hooks::clientUpdateHooked()) game::ghosts::renderFrame();
     if (g_ready && sc == g_swapChain && g_rtv) {
         prof::Scope scope(prof::Overlay);
+        updateFontScale();
         ImGui_ImplDX11_NewFrame();
         ImGui_ImplWin32_NewFrame();
         if (g_open && g_rawMouse) applyRawMouse(); // after the backend's own cursor read, so ours wins

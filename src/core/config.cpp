@@ -129,6 +129,9 @@ constexpr const char* kDefaultIniTail =
     "; open wheel moves per mouse movement (0.1..3; raise it for a low mouse sensitivity)\r\n"
     "ping_wheel_mode=hold\r\n"
     "wheel_sensitivity=1.0\r\n"
+    "; ui_scale = size of the overlay (menu, markers, wheel, notices) on top of the automatic size that follows\r\n"
+    "; the game window height: 0.5..2, 1.0 = automatic\r\n"
+    "ui_scale=1.0\r\n"
     "; quick answers: look at another player's marker; a tap sends your last answer, holding opens the\r\n"
     "; answers wheel. react_key as ping_key, react_pad as ping_pad (empty = none)\r\n"
     "react_key=C\r\n"
@@ -392,6 +395,10 @@ void load(const std::wstring& dir) {
         const float k = static_cast<float>(atof(readString(ini, L"ui", L"wheel_sensitivity", "1.0").c_str()));
         s.wheelSensitivity = std::isfinite(k) ? (k < 0.1f ? 0.1f : (k > 3.f ? 3.f : k)) : 1.0f;
     }
+    {
+        const float k = static_cast<float>(atof(readString(ini, L"ui", L"ui_scale", "1.0").c_str()));
+        s.uiScale = std::isfinite(k) ? (k < 0.5f ? 0.5f : (k > 2.f ? 2.f : k)) : 1.0f;
+    }
     s.reactKey = readString(ini, L"ui", L"react_key", "C");
     s.reactPad = readString(ini, L"ui", L"react_pad", "");
     s.altKey = readString(ini, L"ui", L"ping_alt_key", "B");
@@ -533,6 +540,8 @@ void applyPending() {
         char k[16];
         snprintf(k, sizeof(k), "%.2f", snapshot->wheelSensitivity);
         put(L"ui", L"wheel_sensitivity", k);
+        snprintf(k, sizeof(k), "%.2f", snapshot->uiScale);
+        put(L"ui", L"ui_scale", k);
     }
     put(L"ui", L"react_key", snapshot->reactKey);
     put(L"ui", L"react_pad", snapshot->reactPad);

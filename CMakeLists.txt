@@ -26,11 +26,14 @@ endif()
 
 # --- mecmp_server: dedicated server (Windows or Linux, no game needed) ---------------------------
 find_package(Threads REQUIRED)
-add_executable(mecmp_server tools/server/mecmp_server.cpp src/server/relay.cpp src/net/protocol.cpp src/net/joincode.cpp)
+add_executable(mecmp_server tools/server/mecmp_server.cpp src/server/relay.cpp src/server/discord.cpp src/net/protocol.cpp
+               src/net/joincode.cpp)
 target_include_directories(mecmp_server PRIVATE src)
 target_link_libraries(mecmp_server PRIVATE Threads::Threads)
 if(WIN32)
-  target_link_libraries(mecmp_server PRIVATE ws2_32)
+  target_link_libraries(mecmp_server PRIVATE ws2_32 winhttp) # winhttp: the Discord webhook
+else()
+  target_link_libraries(mecmp_server PRIVATE ${CMAKE_DL_LIBS}) # libcurl is loaded at run time for the webhook
 endif()
 
 # Everything else is the Windows mod. On other systems only the server is built.
@@ -58,6 +61,7 @@ add_library(mecmp SHARED
   src/game/local_player.cpp
   src/game/ping_point.cpp
   src/game/players_map.cpp
+  src/game/runs.cpp
   src/game/raycast.cpp
   src/net/net.cpp
   src/net/protocol.cpp

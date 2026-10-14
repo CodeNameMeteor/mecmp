@@ -11,6 +11,7 @@
 
 #include "core/config.h"
 #include "game/camera.h"
+#include "game/hooks.h"
 #include "game/camera_math.h"
 #include "game/ghosts.h"
 #include "imgui.h"
@@ -109,7 +110,8 @@ Focus focusedOther() {
 void draw() {
     const auto cfg = config::get();
     game::CameraView cam;
-    if ((!cfg->showPings && !cfg->showArrows) || overlayHidden() || !game::camera::read(cam)) {
+    // A game menu (the map above all) draws with its own camera: markers and arrows would point anywhere.
+    if ((!cfg->showPings && !cfg->showArrows) || overlayHidden() || game::hooks::gameMenuOpen() || !game::camera::read(cam)) {
         std::lock_guard<std::mutex> lock(g_focusM);
         g_own = g_other = Focus{}; // nothing is shown, so nothing is under the crosshair
         return;
@@ -309,8 +311,12 @@ void draw() {
             game::EdgeIndicator e;
             // "Off screen" only: a player hidden behind a wall but inside the view gets no arrow.
             if (!game::edgeIndicator(cam, head, screen.x, screen.y, margin, e) || e.onScreen) continue;
+            // Faded with distance like markers: no arrows to players across the map (or from the map
+            // screen, whose camera sits kilometres away).
+            const float a = 0.9f * game::distanceFade(e.distance, game::kMarkerFadeFullUntil, game::kMarkerFadeGoneAt);
+            if (a <= 0.f) continue;
             snprintf(text, sizeof(text), "%s  %.0f m", r.name.empty() ? "Runner" : r.name.c_str(), e.distance);
-            arrow(dl, font, e, unit * 0.55f, colour(white, 0.9f), text, nullptr, 0.9f, screen);
+            arrow(dl, font, e, unit * 0.55f, colour(white, a), text, nullptr, a, screen);
         }
     }
 }

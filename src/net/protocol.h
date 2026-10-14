@@ -34,6 +34,7 @@ constexpr uint16_t kTypePing = 4; // a world marker
 constexpr uint16_t kTypeReact = 6; // a quick answer to someone's marker (see REACT below)
 constexpr uint16_t kTypeSummon = 7; // "come to me" (see SUMMON below)
 constexpr uint16_t kTypeSummonReply = 8; // a summoned player's answer (see SUMMON_REPLY below)
+constexpr uint16_t kTypeResult = 9; // a finished dash or other run, with its time (see RESULT below)
 // type 5 INFO: a server list's question "who are you?" and a dedicated server's answer. Not a session
 // packet: it is not in knownType (never stored or forwarded), and a server answers it whatever the
 // protocol in the header, so a list can say "other version" instead of nothing.
@@ -47,7 +48,7 @@ constexpr size_t kInfoRequestSize = 80;
 // be forwarded, so a new type needs no protocol bump: older versions simply ignore it.
 constexpr bool knownType(uint16_t type) {
     return type == kTypeState || type == kTypeHello || type == kTypeChat || type == kTypePing || type == kTypeReact ||
-           type == kTypeSummon || type == kTypeSummonReply;
+           type == kTypeSummon || type == kTypeSummonReply || type == kTypeResult;
 }
 constexpr size_t kMaxChatBytes = 120; // UTF-8, after cleaning
 constexpr size_t kNameLen = 24;
@@ -370,5 +371,33 @@ bool readHello(const char* payload, size_t n, std::string& name, uint32_t& look,
 // Decodes a STATE payload (after the header). `full` tells whether to commit it as the new base.
 bool readState(const char* payload, size_t n, const Decoder& dec, PlayerState& out, bool& full);
 void commitBase(Decoder& dec, const PlayerState& s);
+
+
+// type 9 RESULT: u32 id | u32 contentId | u8 kind | u8 flags | i64 value | i64 delta | u8 titleLength | title.
+// The sender finished a run: one of the game's named challenges (a dash, a delivery, ...). `value` is the
+// main result in milliseconds, `delta` the improvement on the previous record (when kResultHadRecord).
+// `title` is the run's name as the sender's game shows it (UTF-8, cleaned, at most kMaxResultTitleBytes).
+// Shown to everyone (a notice) and posted by a server's Discord webhook. Sent a few times like PING; `id`
+// makes the repeats one event. The sender's own game reports it: nothing checks that it is true.
+enum ResultKind : uint8_t { kRunOther = 0, kRunDash = 1, kRunTimeTrial = 2, kRunDelivery = 3, kRunGridNode = 4,
+                            kRunBillboard = 5, kRunMetaGrid = 6, kRunAssault = 7 };
+constexpr uint8_t kResultNewRecord = 1; // better than the player's previous best
+constexpr uint8_t kResultHadRecord = 2; // there was a previous best (delta is meaningful)
+constexpr size_t kMaxResultTitleBytes = 64;
+struct Result {
+    uint32_t id = 0;
+    uint32_t contentId = 0;
+    uint8_t kind = kRunOther;
+    uint8_t flags = 0;
+    int64_t value = 0; // ms
+    int64_t delta = 0; // ms
+    std::string title;
+};
+size_t writeResult(char* buf, const Header& h, const Result& r);
+bool readResult(const char* payload, size_t n, Result& out); // false: short, damaged or a negative time
+const char* runKindName(uint8_t kind);    // "Dash", "Time trial", ... ("Run" for other)
+std::string formatRunTime(int64_t ms);    // "1:23.45", "12.07", "1:02:03.40"
+// "Meteor finished the dash The View in 1:23.45 (new record, 2.10 faster)" (plain text).
+std::string resultText(const std::string& player, const Result& r);
 
 } // namespace mecmp::net::protocol

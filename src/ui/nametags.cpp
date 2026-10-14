@@ -6,6 +6,7 @@
 #include "core/config.h"
 #include "game/camera.h"
 #include "game/ghosts.h"
+#include "game/hooks.h"
 #include "imgui.h"
 #include "net/net.h"
 #include "ui/overlay.h"
@@ -16,7 +17,7 @@ constexpr float kHeadHeight = 2.05f; // above the ghost's trajectory bone (its f
 } // namespace
 
 void draw() {
-    if (!config::get()->showNames || overlayHidden()) return;
+    if (!config::get()->showNames || overlayHidden() || game::hooks::gameMenuOpen()) return; // the map has its own camera
     const auto shown = game::ghosts::shownPeers();
     if (shown.empty()) return;
     game::CameraView cam;

@@ -9,14 +9,26 @@
 #include "core/log.h"
 #include "game/engine.h"
 #include "game/level.h"
+#include "game/raycast.h"
 #include "net/net.h"
 
 namespace mecmp::game::teleport {
 namespace {
 constexpr DWORD kFadeMs = 350;      // fade to black, and back
-constexpr DWORD kHoldMs = 1200;     // black while the target area streams in
-constexpr float kFallMargin = 2.f;  // below the target by this much during the hold: placed again
-constexpr int kMaxRetries = 3;
+// Black while the target area streams in. The hold lasts at least kHoldMs and ends once the ground
+// under the target has been found and the character stood on it for kSettleMs; with no ground by
+// kMaxHoldMs we go back to where we started (falling through a city that is not there kills).
+constexpr DWORD kHoldMs = 1200;
+constexpr DWORD kSettleMs = 400;
+constexpr DWORD kMaxHoldMs = 8000;
+// The ground probe: a ray straight down from a little above the target. Hits above kProbeAccept
+// over the target (the character's own capsule, a ceiling) are skipped by casting again below them.
+constexpr float kProbeUp = 1.0f, kProbeDown = 40.f, kProbeAccept = 0.6f;
+constexpr int kProbeCasts = 3;
+constexpr float kFarGround = 2.f;   // ground further below the target than this waits for kHoldMs
+constexpr float kLift = 0.05f;      // set down this much above the ground (the anchor can sit in a thin floor)
+constexpr float kFallMargin = 0.5f; // below the target by this much during the hold: placed again
+constexpr int kMaxRetries = 10;
 constexpr float kNearTarget = 30.f; // further than this (horizontally): respawned elsewhere, leave it
 // The screen must never stay black: a phase running this much longer than planned (the server tick
 // stopped, e.g. while the game handles a death) ends the whole thing, drawn or not.
@@ -41,6 +53,10 @@ std::atomic<int> g_available{-1}; // -1 unchecked, 0 no, 1 yes
 LinearTransform g_target{};       // game thread only
 void* g_character = nullptr;      // the character that was moved (game thread)
 int g_retries = 0;
+LinearTransform g_from{};         // where this teleport started (game thread)
+bool g_haveFrom = false;
+DWORD g_groundAt = 0;             // when the ground under the target was found (0 = not yet)
+DWORD g_steadyAt = 0;             // since when the character stands on it (0 = not)
 
 void setPhase(Phase p) {
     g_phaseAt = GetTickCount();
@@ -77,6 +93,24 @@ bool finite(const float* v, int n) {
     for (int i = 0; i < n; ++i)
         if (!std::isfinite(v[i]) || std::fabs(v[i]) > 100000.f) return false;
     return true;
+}
+
+// The height of the ground under `t` (false: nothing there yet, or no ray caster in this build).
+bool groundBelow(const LinearTransform& t, float& ground) {
+    if (!raycast::available()) return false;
+    float from[3] = {t.trans[0], t.trans[1] + kProbeUp, t.trans[2]};
+    const float to[3] = {t.trans[0], t.trans[1] - kProbeDown, t.trans[2]};
+    for (int i = 0; i < kProbeCasts; ++i) {
+        raycast::Hit hit;
+        if (!raycast::cast(from, to, hit)) return false;
+        if (hit.pos[1] <= t.trans[1] + kProbeAccept) {
+            ground = hit.pos[1];
+            return true;
+        }
+        from[1] = hit.pos[1] - 0.05f; // above the target: our own capsule or a ceiling, look below it
+        if (from[1] <= to[1]) return false;
+    }
+    return false;
 }
 } // namespace
 
@@ -118,7 +152,7 @@ float fadeAlpha() {
     const int p = g_phase.load();
     if (p == Idle) return 0.f;
     const DWORD since = GetTickCount() - g_phaseAt.load();
-    const DWORD planned = p == Hold ? kHoldMs : kFadeMs;
+    const DWORD planned = p == Hold ? kMaxHoldMs : kFadeMs;
     if (since > planned + kStuckMs) { // nothing moved it on: give the screen back
         int expected = p;
         if (g_phase.compare_exchange_strong(expected, Idle))
@@ -195,6 +229,8 @@ void tick() {
         }
         g_retries = 0;
         g_character = player;
+        g_haveFrom = source != Back && readEntityTransform(player, g_from);
+        g_groundAt = g_steadyAt = 0;
         teleportTo(player, g_target);
         setPhase(Hold);
         return;
@@ -210,14 +246,54 @@ void tick() {
         LinearTransform now{};
         const bool have = player && readEntityTransform(player, now);
         const float dx = now.trans[0] - g_target.trans[0], dz = now.trans[2] - g_target.trans[2];
-        // Falling through ground that has not streamed in yet: put back while the screen is black.
-        if (have && dx * dx + dz * dz < kNearTarget * kNearTarget && now.trans[1] < g_target.trans[1] - kFallMargin &&
-            g_retries < kMaxRetries) {
-            ++g_retries;
-            teleportTo(player, g_target);
-            VLOG("teleport: placed again (%.1f m below the target, attempt %d)", g_target.trans[1] - now.trans[1], g_retries);
+        if (have && dx * dx + dz * dz >= kNearTarget * kNearTarget) { // respawned elsewhere: leave it
+            setPhase(FadeIn);
+            return;
         }
-        if (since >= kHoldMs) setPhase(FadeIn);
+        const DWORD tickNow = GetTickCount();
+        if (!g_groundAt) {
+            // Until the ground under the target has streamed in, keep the character there (each
+            // teleport also zeroes its velocity), like a fly mode waiting for the city.
+            float ground = 0;
+            if (!raycast::available()) { // no probe in this build: the target's own height, as before
+                g_groundAt = tickNow | 1;
+            } else if (groundBelow(g_target, ground) && (ground >= g_target.trans[1] - kFarGround || since >= kHoldMs)) {
+                // Ground far below (the caller was in the air, or a floor near the target has not
+                // streamed in yet): only taken after the minimum hold, when that floor had time to appear.
+                VLOG("teleport: ground found %.2f m %s the target after %lu ms", std::fabs(ground - g_target.trans[1]),
+                     ground <= g_target.trans[1] ? "below" : "above", static_cast<unsigned long>(since));
+                g_target.trans[1] = ground + kLift;
+                g_groundAt = tickNow | 1;
+                teleportTo(player, g_target);
+            } else if (since < kMaxHoldMs) {
+                teleportTo(player, g_target);
+            } else {
+                if (g_haveFrom) {
+                    MLOG("teleport: no ground at the destination after %lu ms; went back", static_cast<unsigned long>(since));
+                    teleportTo(player, g_from);
+                } else {
+                    MLOG("teleport: no ground at the destination after %lu ms", static_cast<unsigned long>(since));
+                }
+                setPhase(FadeIn);
+            }
+            return;
+        }
+        // On the ground now: put back if falling (a floor too thin for the anchor, or still streaming).
+        if (have && now.trans[1] < g_target.trans[1] - kFallMargin) {
+            g_steadyAt = 0;
+            if (g_retries < kMaxRetries) {
+                ++g_retries;
+                teleportTo(player, g_target);
+                VLOG("teleport: placed again (%.1f m below the target, attempt %d)", g_target.trans[1] - now.trans[1], g_retries);
+            }
+        } else if (have && !g_steadyAt) {
+            g_steadyAt = tickNow | 1;
+        }
+        const bool settled = g_steadyAt && tickNow - g_steadyAt >= kSettleMs;
+        if ((since >= kHoldMs && settled) || since >= kMaxHoldMs) {
+            if (!settled) MLOG("teleport: the character did not settle at the destination (%d placements)", g_retries);
+            setPhase(FadeIn);
+        }
         return;
     }
     if (p == FadeIn && since >= kFadeMs) g_phase = Idle;

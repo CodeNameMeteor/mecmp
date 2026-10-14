@@ -26,6 +26,10 @@
   and are not announced. The time is what the player's own game reports.
 
 ### Discord
+- **Closing the server's window sets the live message to offline.** Closing the console window (its X), logging
+  off or shutting Windows down used to end the server at once, so Discord kept saying it was online; only
+  Ctrl+C or `quit` did it. The server now shuts down properly in the few seconds Windows allows, and the
+  "offline" edit goes out first. On Linux, closing the terminal (SIGHUP) does the same.
 - **A live "who's online" message in Discord**: one message, edited as players join and leave, with the
   player list and the address to join; "offline" when the server stops (`webhook_live`).
 - **Servers can post to Discord.** Set `webhook_url` in `mecmp_server.ini` and the server posts when it

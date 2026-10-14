@@ -11,6 +11,7 @@
 
 #include "core/config.h"
 #include "game/camera.h"
+#include "game/hooks.h"
 #include "game/camera_math.h"
 #include "game/ghosts.h"
 #include "imgui.h"
@@ -109,7 +110,8 @@ Focus focusedOther() {
 void draw() {
     const auto cfg = config::get();
     game::CameraView cam;
-    if ((!cfg->showPings && !cfg->showArrows) || overlayHidden() || !game::camera::read(cam)) {
+    // A game menu (the map above all) draws with its own camera: markers and arrows would point anywhere.
+    if ((!cfg->showPings && !cfg->showArrows) || overlayHidden() || game::hooks::gameMenuOpen() || !game::camera::read(cam)) {
         std::lock_guard<std::mutex> lock(g_focusM);
         g_own = g_other = Focus{}; // nothing is shown, so nothing is under the crosshair
         return;

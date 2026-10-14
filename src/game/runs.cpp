@@ -114,41 +114,48 @@ uintptr_t challengeData(uint32_t contentId) {
 }
 
 void onFinished(const uint8_t* m) {
-    uint32_t content = 0, delta = 0;
-    int64_t value = 0;
+    uint32_t content = 0;
+    int32_t delta = 0;
+    int64_t best = 0;
     memcpy(&content, m + Fin_ContentId, 4);
     memcpy(&delta, m + Fin_Delta, 4);
-    memcpy(&value, m + Fin_Value, 8);
+    memcpy(&best, m + Fin_Value, 8);
     const bool hadRecord = m[Fin_HadRecord] != 0, newRecord = m[Fin_NewRecord] != 0;
+    // The message carries a record and this run's difference to it, in hundredths of a second (seen in game:
+    // 2386 + 1177 and 2507 + 1056 for one 35.63 s run, one message per stat set). With a new record (or the
+    // first run) the value is already this run's time and the difference is new - old (negative).
+    const int64_t runCs = newRecord || !hadRecord ? best : best + delta;
+    const int64_t valueMs = runCs * 10;
     {
         std::lock_guard<std::mutex> lock(g_m);
         const uint32_t now = GetTickCount();
-        if (g_recent.content == content && g_recent.value == value && now - g_recent.at < 5000) return; // repeat
-        g_recent = {content, value, now};
+        // One run sends one message per stat set; the first (set 0, the player's own best) is the one shown.
+        if (g_recent.content == content && g_recent.value == runCs && now - g_recent.at < 5000) return;
+        g_recent = {content, runCs, now};
     }
     const uintptr_t data = challengeData(content);
     const std::string sid = data ? readString(mem::readOr<uintptr_t>(data + Data_Sid)) : std::string();
     const std::string stat = data ? readString(mem::readOr<uintptr_t>(data + Data_MainStatCode)) : std::string();
     uint32_t index = 0;
     memcpy(&index, m + 0x4c, 4);
-    MLOG("runs: finished content %08x ('%s', stat '%s'), set %u: value %lld, delta %d, had record %d, new record %d",
-         content, sid.c_str(), stat.c_str(), index, static_cast<long long>(value), static_cast<int32_t>(delta), hadRecord,
-         newRecord);
+    MLOG("runs: finished content %08x ('%s', stat '%s'), set %u: record %lld, difference %d, had record %d, new record %d",
+         content, sid.c_str(), stat.c_str(), index, static_cast<long long>(best), delta, hadRecord, newRecord);
     const uint8_t kind = kindOf(stat);
     // Only runs against the clock: a billboard hack's "time stamp" is when it was done, not how long.
     if (kind == proto::kRunBillboard || kind == proto::kRunAssault || (!stat.empty() && stat.find("_time") == std::string::npos)) {
         MLOG("runs: not a timed run; not announced");
         return;
     }
+    if (runCs <= 0) return;
     proto::Result r;
     r.contentId = content;
     r.kind = kind;
     r.flags = static_cast<uint8_t>((newRecord ? proto::kResultNewRecord : 0) | (hadRecord ? proto::kResultHadRecord : 0));
-    r.value = value;
-    r.delta = hadRecord ? static_cast<int64_t>(static_cast<int32_t>(delta) < 0 ? -static_cast<int32_t>(delta) : delta) : 0;
+    r.value = valueMs;
+    r.delta = newRecord && hadRecord && delta < 0 ? static_cast<int64_t>(-delta) * 10 : 0; // how much faster
     r.title = localise(sid);
     MLOG("runs: you finished the %s '%s' in %s%s", proto::runKindName(kind), r.title.c_str(),
-         proto::formatRunTime(value).c_str(), newRecord ? " (new record)" : "");
+         proto::formatRunTime(valueMs).c_str(), newRecord ? " (new record)" : "");
     net::sendResult(r);
 }
 

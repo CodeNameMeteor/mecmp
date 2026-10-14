@@ -7,7 +7,8 @@
   with their Runner Tag that follows them, with their profile name on hover. It uses the game's own
   friend markers (10 per level). Needs online services (Beat Revival): the Runner Tag is loaded from
   the online profile. *Players on the map* and *Share my EA profile* in the menu (`[ui] players_on_map`,
-  `[player] share_profile`, both on): sharing sends your EA online id and profile name to your session.
+  `[player] share_profile`): sharing is off by default; when on, it sends your EA online id and profile
+  name to your session, so you show on their maps.
 
 ### Performance
 - **Ghosts cost ~50x less per frame.** Writing a ghost's pose each frame took ~0.3 ms, almost all of it

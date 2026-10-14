@@ -58,6 +58,7 @@ webhook_name=Beat Link
 ; the address the "online" post tells players to join (default: the public address the server finds)
 public_address=play.example.com:47800
 ; 0 turns a kind of post off: players joining and leaving, server online / offline, finished runs
+; (dashes and other timed challenges, with the time the player's game reports)
 webhook_joins=1
 webhook_status=1
 webhook_results=1

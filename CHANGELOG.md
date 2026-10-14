@@ -2,10 +2,16 @@
 
 ## Unreleased
 
+### Finished runs
+- **When someone finishes a dash, everyone sees it**: "Meteor finished the dash The View in 1:23.45
+  (new record, 2.10 faster)". Deliveries, GridNodes and the MetaGrid too; billboard hacks are not timed
+  and are not announced. The time is what the player's own game reports.
+
 ### Discord
 - **Servers can post to Discord.** Set `webhook_url` in `mecmp_server.ini` and the server posts when it
   goes online (with the address to join) or offline, and when players join and leave, with the player
-  count. Posts are batched and rate-limit aware; names cannot ping anyone. See docs/SERVER.md.
+  count, and finished runs with their times (`webhook_results`). Posts are batched and rate-limit aware;
+  names cannot ping anyone. See docs/SERVER.md.
 
 ### Players on the map
 - **The session's players show on the game's map**, the way the game showed online friends: a marker

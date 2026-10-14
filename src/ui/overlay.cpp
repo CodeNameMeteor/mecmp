@@ -19,7 +19,6 @@
 #include "core/prof.h"
 #include "game/ghosts.h"
 #include "game/hooks.h"
-#include "game/map_marker.h"
 #include "game/ping_point.h"
 #include "game/teleport.h"
 #include "game/mumble_link.h"
@@ -60,7 +59,6 @@ std::atomic<int> g_pingKey{0}; // 0 = none
 std::atomic<int> g_reactKey{0}; // the quick answers key; 0 = none
 std::atomic<int> g_altKey{0}, g_hideKey{0}, g_prevKey{0}, g_nextKey{0}; // the other keys; 0 = none
 std::atomic<int> g_summonKey{0}, g_summonAcceptKey{0}, g_summonDeclineKey{0}; // summon (ui/summon.h); 0 = none
-std::atomic<int> g_mapMarkerKey{0}; // go to the game map's marker; 0 = none
 std::atomic<bool> g_hidden{false};       // the overlay is hidden (see overlayHidden)
 std::atomic<DWORD> g_hiddenNoteAt{0};    // when it was last switched: a short note says so
 std::atomic<int> g_pingClearKey{0}; // a key, or VK_MBUTTON / VK_XBUTTON1 / VK_XBUTTON2; 0 = none
@@ -509,21 +507,6 @@ HRESULT STDMETHODCALLTYPE presentHook(IDXGISwapChain* sc, UINT sync, UINT flags)
             in.declineDown = down(g_summonDeclineKey.load()) || gamepad::held(gamepad::Action::SummonDecline);
             summon::update(in);
             gamepad::setSummonHidden(summon::takesAcceptKey(), summon::takesDeclineKey());
-            // Go to the map marker: a tap on the game's map, a one-second hold in the city.
-            static DWORD heldSince = 0;
-            static bool fired = false;
-            const bool canGo = gameFocused() && !g_open.load() && !chat::isOpen() && !radial::engaged();
-            if (canGo && down(g_mapMarkerKey.load())) {
-                const DWORD now = GetTickCount();
-                if (!heldSince) heldSince = now | 1;
-                if (!fired && (game::hooks::gameMenuOpen() || now - heldSince >= 1000)) {
-                    fired = true;
-                    goToMapMarker();
-                }
-            } else {
-                heldSince = 0;
-                fired = false;
-            }
         }
         nametags::draw();
         markers::draw();
@@ -583,7 +566,7 @@ namespace {
 // Every key the mod listens to besides the menu key. A key does one job.
 std::atomic<int>* const kBound[] = {&g_pingKey, &g_pingClearKey, &g_chatKey, &g_reactKey, &g_altKey,
                                     &g_hideKey, &g_prevKey,      &g_nextKey, &g_summonKey, &g_summonAcceptKey,
-                                    &g_summonDeclineKey, &g_mapMarkerKey};
+                                    &g_summonDeclineKey};
 
 // A key name from mecmp.ini. `mouse`: 0 = the keyboard only, 1 = also MOUSE4 / MOUSE5 (the side
 // buttons), 2 = also MOUSE3 (the middle button, which the "clear markers" key may be).
@@ -619,18 +602,6 @@ bool setWheelNextKey(const std::string& name) { return setBind(g_nextKey, name, 
 bool setSummonKey(const std::string& name) { return setBind(g_summonKey, name, 1); }
 bool setSummonAcceptKey(const std::string& name) { return setBind(g_summonAcceptKey, name, 1); }
 bool setSummonDeclineKey(const std::string& name) { return setBind(g_summonDeclineKey, name, 1); }
-bool setMapMarkerKey(const std::string& name) { return setBind(g_mapMarkerKey, name, 1); }
-
-void goToMapMarker() {
-    float pos[3];
-    if (!game::teleport::available()) { notices::push("Go to the map marker: not available in this game build"); return; }
-    if (game::teleport::busy()) return;
-    if (!game::map_marker::position(pos)) {
-        notices::push("Place a marker on the map first");
-        return;
-    }
-    if (game::teleport::requestToMapMarker(pos)) notices::push("Going to your map marker");
-}
 
 bool overlayHidden() { return g_hidden.load(); }
 void setOverlayHidden(bool hidden) {
@@ -675,7 +646,6 @@ bool install() {
     setSummonKey(config::get()->summonKey);
     setSummonAcceptKey(config::get()->summonAcceptKey);
     setSummonDeclineKey(config::get()->summonDeclineKey);
-    setMapMarkerKey(config::get()->mapMarkerKey);
     gamepad::setBinding(gamepad::parse(config::get()->summonAcceptPad), gamepad::Action::SummonAccept);
     gamepad::setBinding(gamepad::parse(config::get()->summonDeclinePad), gamepad::Action::SummonDecline);
     gamepad::setBinding(gamepad::parse(config::get()->menuPad));

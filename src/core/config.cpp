@@ -155,9 +155,6 @@ constexpr const char* kDefaultIniTail =
     "summon_accept_pad=LEFT\r\n"
     "summon_decline_pad=RIGHT\r\n"
     "hard_summon_grace_ms=5000\r\n"
-    "; map_marker_key: tap it on the game's map (or hold it for a second in the city) to go to the marker\r\n"
-    "; you placed on the map.\r\n"
-    "map_marker_key=T\r\n"
     "; how gamepad buttons are named in hints: xbox or playstation (the settings above keep Xbox names)\r\n"
     "pad_labels=xbox\r\n"
     "; what a short press places: ping_tap=0 the marker you picked last, ping_tap=1 always the one in\r\n"
@@ -413,7 +410,6 @@ void load(const std::wstring& dir) {
     s.summonDeclineKey = readString(ini, L"ui", L"summon_decline_key", "2");
     s.summonAcceptPad = readString(ini, L"ui", L"summon_accept_pad", "LEFT");
     s.summonDeclinePad = readString(ini, L"ui", L"summon_decline_pad", "RIGHT");
-    s.mapMarkerKey = readString(ini, L"ui", L"map_marker_key", "T");
     s.hardSummonGraceMs = clampInt(readInt(ini, L"ui", L"hard_summon_grace_ms", 5000), 0, 15000);
     s.allowForcedSummon = readInt(ini, L"player", L"allow_forced_summon", 0) != 0;
     s.shareProfile = readInt(ini, L"player", L"share_profile", 0) != 0;
@@ -558,7 +554,6 @@ void applyPending() {
     put(L"ui", L"summon_decline_key", snapshot->summonDeclineKey);
     put(L"ui", L"summon_accept_pad", snapshot->summonAcceptPad);
     put(L"ui", L"summon_decline_pad", snapshot->summonDeclinePad);
-    put(L"ui", L"map_marker_key", snapshot->mapMarkerKey);
     put(L"ui", L"hard_summon_grace_ms", std::to_string(snapshot->hardSummonGraceMs));
     put(L"player", L"allow_forced_summon", snapshot->allowForcedSummon ? "1" : "0");
     put(L"player", L"share_profile", snapshot->shareProfile ? "1" : "0");

@@ -10,12 +10,6 @@
   updated as well).
 - **"typing..." above a player** whose chat box is open.
 
-### Map marker
-- **Go to the marker you placed on the game's map**: tap **T** while the map is open (or hold it for a second
-  in the city), or *Go to my map marker* on the Players tab (`map_marker_key`). The same fade and ground wait
-  as *Go to*; you land on the first surface under the marker (a rooftop). A marker placed before the mod was
-  loaded is only known once it is placed again. Hold **2** within a minute to go back, as after a summon.
-
 ### Injector
 - **The injector's window closes by itself** 10 seconds after a successful injection (a key closes it at
   once). After a failure it still waits for a key, so the error can be read.

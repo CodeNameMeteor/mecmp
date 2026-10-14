@@ -14,7 +14,6 @@
 #include "game/fingerprint.h"
 #include "game/ghosts.h"
 #include "game/players_map.h"
-#include "game/map_marker.h"
 #include "game/runs.h"
 #include "game/teleport.h"
 #include "game/hooks.h"
@@ -41,7 +40,7 @@ void onTick(void* world, float dt) {
     prof::Scope scope(prof::GameTick);
     static void* lastWorld = nullptr;
     if (world != lastWorld) { // new level: everything of the old one is gone
-        if (lastWorld) { game::ghosts::levelChanged(); game::teleport::levelChanged(); game::map_marker::levelChanged(); game::runs::levelChanged(); }
+        if (lastWorld) { game::ghosts::levelChanged(); game::teleport::levelChanged(); game::runs::levelChanged(); }
         lastWorld = world;
         g_levelStartTick = g_ticks.load();
     }
@@ -62,10 +61,7 @@ void onTick(void* world, float dt) {
     { prof::Scope s(prof::Teleport); game::teleport::tick(); }
     { prof::Scope s(prof::Ping); game::ping::tick(); }
     { prof::Scope s(prof::Models); game::models::tick(); }
-    if (n % 30 == 0) { // registers our listeners once the server context exists
-        game::runs::serverTick();
-        game::map_marker::serverTick();
-    }
+    if (n % 30 == 0) game::runs::serverTick(); // registers our run listener once the server context exists
     if (n % 60 == 0) game::players_map::publishOwnProfile(); // every ~2 s: online id (Beat Revival) and the setting
 }
 

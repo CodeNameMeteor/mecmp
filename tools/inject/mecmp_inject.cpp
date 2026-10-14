@@ -109,18 +109,38 @@ int fail(const wchar_t* what) {
     return 1;
 }
 
-// Started by double-clicking, the console window closes with us: keep it open until a key is pressed.
+// Started by double-clicking, the console window closes with us. After a success it stays up for 10 s (a
+// key closes it at once); after a failure it waits for a key, so the error can be read.
+constexpr DWORD kCloseAfterMs = 10000;
+
 int finish(int code) {
     DWORD list[2];
-    if (GetConsoleProcessList(list, 2) == 1) {
-        wprintf(L"\nPress any key to close this window.\n");
-        HANDLE in = GetStdHandle(STD_INPUT_HANDLE);
-        FlushConsoleInputBuffer(in);
+    if (GetConsoleProcessList(list, 2) != 1) return code;
+    HANDLE in = GetStdHandle(STD_INPUT_HANDLE);
+    FlushConsoleInputBuffer(in);
+    const bool timed = code == 0;
+    if (!timed) wprintf(L"\nPress any key to close this window.\n");
+    const ULONGLONG end = GetTickCount64() + kCloseAfterMs;
+    int shown = -1;
+    for (;;) {
+        DWORD wait = INFINITE;
+        if (timed) {
+            const ULONGLONG now = GetTickCount64();
+            if (now >= end) break;
+            const int left = static_cast<int>((end - now + 999) / 1000);
+            if (left != shown) {
+                shown = left;
+                wprintf(L"\rThis window closes in %2d s (any key closes it now). ", left);
+            }
+            wait = static_cast<DWORD>((end - now) % 1000 + 1);
+        }
+        if (WaitForSingleObject(in, wait) != WAIT_OBJECT_0) continue;
         INPUT_RECORD rec;
         DWORD n = 0;
-        while (ReadConsoleInputW(in, &rec, 1, &n) && n)
-            if (rec.EventType == KEY_EVENT && rec.Event.KeyEvent.bKeyDown) break;
+        if (!ReadConsoleInputW(in, &rec, 1, &n) || !n) break;
+        if (rec.EventType == KEY_EVENT && rec.Event.KeyEvent.bKeyDown) break;
     }
+    if (timed) wprintf(L"\n");
     return code;
 }
 

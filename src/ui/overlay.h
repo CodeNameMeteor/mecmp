@@ -43,6 +43,9 @@ bool setWheelNextKey(const std::string& name);  // next wheel
 bool setSummonKey(const std::string& name);
 bool setSummonAcceptKey(const std::string& name);
 bool setSummonDeclineKey(const std::string& name);
+bool setMapMarkerKey(const std::string& name); // go to the marker placed on the game's map
+// "Go to the map marker" (the key, or the menu's button): teleports there, or says why not (a notice).
+void goToMapMarker();
 // Names, markers, arrows, notices and chat lines are not drawn while this is on (a screenshot, a
 // recording). The menu, the chat line and the open wheel still are. Any thread.
 bool overlayHidden();

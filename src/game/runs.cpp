@@ -25,7 +25,11 @@ constexpr uintptr_t Vtbl_PamServerNamedChallengeEntity = 0x141c7ec70;
 
 constexpr uint32_t kCategorySocialPlay = 0x54776fc6; // PamSocialPlayNamedChallenge*Message
 constexpr uint32_t kTypeFinished = 0xd71d027f;       // ...FinishedMessage
-constexpr uint32_t kTypeStarted = 0xc164590c;        // ...StartedMessage (logged only)
+constexpr uint32_t kTypeStarted = 0xc164590c;        // ...StartedMessage: +0x48 ContentId
+constexpr uint32_t kTypeCancelled = 0x9a9a27c6;      // ...CancelledMessage (left the run or failed it)
+// A player-made time trial: PamSocialPlayStartChallengeMessage / ...RestartChallengeMessage, +0x48 the trial's
+// content id (the marker entity compares the same 24 bytes, PamServerChallengeMarkerEntity_onMessage).
+constexpr uint32_t kTypeStartChallenge = 0x1cca484e, kTypeRestartChallenge = 0x72f865f9;
 // Message type ids are the djb2-xor hash of the message class name (checked against these).
 constexpr uint32_t kTypeChallengeFinished = 0x9b35497c; // PamSocialPlayChallengeFinishedMessage: a player-made time trial
 // Its fields (seen in game, three finishes 3-4 s after starting): +0x48 the time trial's GUID, +0x60 u32 the
@@ -154,7 +158,48 @@ uintptr_t challengeData(uint32_t contentId) {
     return 0;
 }
 
+// The run we are in now, for the others' name tags (net::setActivity). Ends with its finish, a cancel, the
+// next run, a level change, or after kActivityMaxMs (a time trial left without finishing sends nothing we
+// know of yet).
+constexpr DWORD kActivityMaxMs = 30 * 60 * 1000;
+uint8_t g_activeKind = proto::kActivityNone; // under g_m
+DWORD g_activeAt = 0;
+
+void beginActivity(uint8_t kind, const std::string& title) {
+    {
+        std::lock_guard<std::mutex> lock(g_m);
+        g_activeKind = kind;
+        g_activeAt = GetTickCount();
+    }
+    net::setActivity(kind, GetTickCount(), title);
+    MLOG("runs: started the %s '%s'", proto::runKindName(kind), title.c_str());
+}
+
+void endActivity(const char* why) {
+    {
+        std::lock_guard<std::mutex> lock(g_m);
+        if (g_activeKind == proto::kActivityNone) return;
+        g_activeKind = proto::kActivityNone;
+    }
+    net::setActivity(proto::kActivityNone, 0, {});
+    VLOG("runs: the run ended (%s)", why);
+}
+
+void onStarted(const uint8_t* m) {
+    uint32_t content = 0;
+    memcpy(&content, m + 0x48, 4);
+    const uintptr_t data = challengeData(content);
+    const std::string sid = data ? readString(mem::readOr<uintptr_t>(data + Data_Sid)) : std::string();
+    const std::string stat = data ? readString(mem::readOr<uintptr_t>(data + Data_MainStatCode)) : std::string();
+    VLOG("runs: started content %08x ('%s', stat '%s')", content, sid.c_str(), stat.c_str());
+    const uint8_t kind = kindOf(stat);
+    if (kind == proto::kRunBillboard || kind == proto::kRunAssault || (!stat.empty() && stat.find("_time") == std::string::npos))
+        return; // not against the clock
+    beginActivity(kind, localise(sid));
+}
+
 void onFinished(const uint8_t* m) {
+    endActivity("finished");
     uint32_t content = 0;
     int32_t delta = 0;
     int64_t best = 0;
@@ -203,6 +248,7 @@ void onFinished(const uint8_t* m) {
 // Research: what the other messages of this category hold (a player-made time trial's finish is one of
 // them). Each type is dumped the first few times it is seen.
 void onTimeTrialFinished(const uint8_t* m) {
+    endActivity("time trial finished");
     uint32_t cs = 0;
     memcpy(&cs, m + Tt_Time, 4);
     uint32_t guidHead = 0;
@@ -250,10 +296,19 @@ void onMessage(Listener* self, const void* message) {
     dumpMessage(m, type);
     if (type == kTypeFinished) onFinished(m);
     else if (type == kTypeChallengeFinished) onTimeTrialFinished(m);
-    else if (type == kTypeStarted) {
-        uint32_t content = 0;
-        memcpy(&content, m + 0x48, 4);
-        VLOG("runs: started content %08x", content);
+    else if (type == kTypeStarted) onStarted(m);
+    else if (type == kTypeCancelled) endActivity("cancelled");
+    else if (type == kTypeStartChallenge || type == kTypeRestartChallenge) {
+        // Both managers may dispatch it: the same trial again within a moment is one start.
+        static uint32_t lastHead = 0;
+        static DWORD lastAt = 0;
+        uint32_t head = 0;
+        memcpy(&head, m + Tt_Guid, 4);
+        const DWORD now = GetTickCount();
+        if (type == kTypeStartChallenge && head == lastHead && now - lastAt < 1000) return;
+        lastHead = head;
+        lastAt = now;
+        beginActivity(proto::kRunTimeTrial, timeTrialName(m + Tt_Guid));
     }
 }
 
@@ -272,7 +327,17 @@ void onChallengeMarker(void* entity) {
 }
 
 void clientTick() { registerOn(kClientGameContext, g_clientListener, g_clientRegistered); }
-void serverTick() { registerOn(kServerGameContext, g_serverListener, g_serverRegistered); }
+void serverTick() {
+    registerOn(kServerGameContext, g_serverListener, g_serverRegistered);
+    bool stale = false;
+    {
+        std::lock_guard<std::mutex> lock(g_m);
+        stale = g_activeKind != proto::kActivityNone && GetTickCount() - g_activeAt > kActivityMaxMs;
+    }
+    if (stale) endActivity("too long");
+}
+
+void levelChanged() { endActivity("level changed"); }
 
 
 } // namespace mecmp::game::runs

@@ -19,6 +19,7 @@
 #include "game/ghosts.h"
 #include "game/ping_point.h"
 #include "game/raycast.h"
+#include "game/map_marker.h"
 #include "game/teleport.h"
 #include "game/models.h"
 #include "imgui.h"
@@ -326,6 +327,18 @@ void playersSection() {
         ImGui::EndTable();
     }
     summonControls(remotes);
+    // The marker placed on the game's map (game/map_marker.h).
+    {
+        float pos[3];
+        const bool have = game::map_marker::position(pos);
+        const bool can = have && game::teleport::available() && !game::teleport::busy();
+        ImGui::BeginDisabled(!can);
+        if (ImGui::Button("Go to my map marker")) ui::goToMapMarker();
+        ImGui::EndDisabled();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip(have ? "Travel to the marker you placed on the game's map"
+                                   : "Place a marker on the game's map first (one placed before the mod loaded is not known)");
+    }
 }
 
 // Colour swatches for the echo colour names (the game's own colours are shader parameters).
@@ -684,7 +697,7 @@ struct KeyBind {
     bool (*set)(const std::string&);
     int mouse;  // 0 = the keyboard only, 1 = also Mouse 4 / 5, 2 = also the middle button
 };
-const KeyBind kKeyBinds[11] = {
+const KeyBind kKeyBinds[12] = {
     {"Tap to place a marker. Hold to open the marker wheel.", &config::Settings::pingKey, &ui::setPingKey, 1},
     {"Tap twice to remove the marker you look at (or stand at). Hold for a moment to remove all your markers.",
      &config::Settings::pingClearKey, &ui::setPingClearKey, 2},
@@ -708,6 +721,9 @@ const KeyBind kKeyBinds[11] = {
     {"While a summon is shown to you: hold for a second to say no. After a summon took you somewhere, hold it "
      "for 3 seconds within a minute to go back.",
      &config::Settings::summonDeclineKey, &ui::setSummonDeclineKey, 1},
+    {"Takes you to the marker you placed on the game's map: tap it while the map is open, or hold it for a "
+     "second in the city.",
+     &config::Settings::mapMarkerKey, &ui::setMapMarkerKey, 1},
 };
 
 void keyRow(const config::Settings& cfg, int which) {
@@ -1373,6 +1389,12 @@ void controlsSection() {
         ImGui::SetTooltip("Off: every summon only asks you.\n"
                           "On: when the host (or a member the host allows) pulls you in, you are taken to them after a\n"
                           "countdown. You can cancel it in that time. Never from anyone else.");
+
+    ImGui::SeparatorText("Map marker");
+    ImGui::TextUnformatted("Go to the marker you placed on the map");
+    ImGui::Indent();
+    keyRow(*cfg, 11);
+    ImGui::Unindent();
 
     ImGui::SeparatorText("Overlay");
     ImGui::TextUnformatted("Show / hide names, markers, arrows, notices and chat");

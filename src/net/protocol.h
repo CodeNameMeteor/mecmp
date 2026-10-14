@@ -35,6 +35,7 @@ constexpr uint16_t kTypeReact = 6; // a quick answer to someone's marker (see RE
 constexpr uint16_t kTypeSummon = 7; // "come to me" (see SUMMON below)
 constexpr uint16_t kTypeSummonReply = 8; // a summoned player's answer (see SUMMON_REPLY below)
 constexpr uint16_t kTypeResult = 9; // a finished dash or other run, with its time (see RESULT below)
+constexpr uint16_t kTypeActivity = 10; // the run the sender is in now, with its clock (see ACTIVITY below)
 // type 5 INFO: a server list's question "who are you?" and a dedicated server's answer. Not a session
 // packet: it is not in knownType (never stored or forwarded), and a server answers it whatever the
 // protocol in the header, so a list can say "other version" instead of nothing.
@@ -48,7 +49,7 @@ constexpr size_t kInfoRequestSize = 80;
 // be forwarded, so a new type needs no protocol bump: older versions simply ignore it.
 constexpr bool knownType(uint16_t type) {
     return type == kTypeState || type == kTypeHello || type == kTypeChat || type == kTypePing || type == kTypeReact ||
-           type == kTypeSummon || type == kTypeSummonReply || type == kTypeResult;
+           type == kTypeSummon || type == kTypeSummonReply || type == kTypeResult || type == kTypeActivity;
 }
 constexpr size_t kMaxChatBytes = 120; // UTF-8, after cleaning
 constexpr size_t kNameLen = 24;
@@ -399,5 +400,19 @@ const char* runKindName(uint8_t kind);    // "Dash", "Time trial", ... ("Run" fo
 std::string formatRunTime(int64_t ms);    // "1:23.45", "12.07", "1:02:03.40"
 // "Meteor finished the dash The View in 1:23.45 (new record, 2.10 faster)" (plain text).
 std::string resultText(const std::string& player, const Result& r);
+
+// type 10 ACTIVITY: u8 kind | u32 elapsedMs | u8 titleLength | title.
+// What the sender is doing now: kind kRunDash, kRunTimeTrial, ... while in a run (elapsedMs = how long it has
+// been going when the packet left, title = its name), or kActivityNone once it ended. Sent about once a
+// second while in a run and a few times after it ends; receivers count the clock on from the last packet
+// and forget it when none arrived for a few seconds. Name tags show it ("Dash: The View 0:12.4").
+constexpr uint8_t kActivityNone = 0xff;
+struct Activity {
+    uint8_t kind = kActivityNone;
+    uint32_t elapsedMs = 0;
+    std::string title;
+};
+size_t writeActivity(char* buf, const Header& h, const Activity& a);
+bool readActivity(const char* payload, size_t n, Activity& out); // false: short or damaged
 
 } // namespace mecmp::net::protocol

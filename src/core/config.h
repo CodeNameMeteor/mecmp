@@ -109,6 +109,9 @@ struct Settings {
     std::string summonDeclineKey = "2";   // also "go back" after a summon took you somewhere
     std::string summonAcceptPad = "LEFT"; // gamepad buttons (as menu_pad); empty = none
     std::string summonDeclinePad = "RIGHT";
+    // "Go to the map marker": a tap while the game's map is open (hold it for a second elsewhere) takes you to
+    // the marker you placed on the map.
+    std::string mapMarkerKey = "T";       // as ping_key; empty = none
     int hardSummonGraceMs = 5000;         // a hard summon counts down this long before it takes you (0..15000)
     bool padPlayStation = false;          // gamepad buttons are named as on a PlayStation pad in hints
     int pingWheel = 0;                    // the wheel that opens (the one used last)

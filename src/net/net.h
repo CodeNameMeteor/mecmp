@@ -99,6 +99,37 @@ struct ReactionInfo {
     std::string title; // our marker's title, as they saw it; may be empty
 };
 std::vector<ReactionInfo> takeReactions();
+
+// Summon ("come to me"; packets in protocol.h, rules in net/summon_policy.h). Any thread.
+// Calls the players whose session ids are in `targets` (empty = everyone heard from) to `pos`/`yaw`.
+// `hard` pulls them in after a countdown, and only works for those who allow it: the lobby host may
+// always ask, a member only while canHardSummon(). False when nobody can be called, the position is
+// not sane, or our last summon was too recent (summon::kSendCooldownMs).
+bool sendSummon(const float pos[3], float yaw, const std::vector<uint32_t>& targets, bool hard);
+bool summonOpen();    // our summon still waits for answers
+uint32_t summonCooldownLeftMs(); // until sendSummon may be used again (0 = now)
+void cancelSummon();  // withdraws our open summon (the markers at the others disappear)
+// True when asking for a hard summon is worth it: we host, or the host allows members to (its
+// config setting members_may_hard_summon, announced in its HELLO).
+bool canHardSummon();
+// Summons other players sent to us that we should show, oldest first. `hard` = the sender is trusted
+// and we opted in (the UI still counts down and lets the player cancel). `cancel` = the sender
+// withdrew summon `id` (only `id`, `from` and `name` are set).
+struct SummonInfo {
+    uint32_t id = 0;
+    uint32_t from = 0; // the summoner's session id
+    std::string name;
+    float pos[3] = {0, 0, 0};
+    float yaw = 0;
+    bool hard = false;
+    bool cancel = false;
+};
+std::vector<SummonInfo> takeSummons();
+// Answers summon `id` of player `to` (protocol::SummonResult).
+void sendSummonReply(uint32_t id, uint32_t to, uint8_t result);
+// What happened to our summon, as sentences for the notices: one line once everyone called answered
+// or the time ran out.
+std::vector<std::string> takeSummonReports();
 // One of ours, by its cell (PingInfo::index). move, rename and renew start its time again, as placing
 // it anew would (renew does nothing else, and the marker does not flash again); they return false if
 // that cell holds no marker now.

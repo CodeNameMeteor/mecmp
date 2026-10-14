@@ -25,6 +25,7 @@
 #include "net/host_guard.h"
 #include "net/joincode.h"
 #include "net/protocol.h"
+#include "net/summon_policy.h"
 #include "net/upnp.h"
 
 namespace mecmp::net {
@@ -87,6 +88,12 @@ struct Remote {
     proto::RecentIds<16> reactSeen; // quick answers already shown
     DWORD reactBurstAt = 0;         // flood limit
     int reactBurst = 0;
+    proto::RecentIds<16> summonSeen;       // summons already handled
+    proto::RecentIds<16> summonCancelSeen; // withdrawals already handled
+    DWORD summonBurstAt = 0;               // flood limit
+    int summonBurst = 0;
+    DWORD lastSummonAt = 0;                // the last summon of theirs that reached us (summon::kMinGapMs)
+    bool haveSummon = false;
     Snap snaps[kSnapCount];
     int head = 0, fill = 0;
 };
@@ -124,6 +131,8 @@ std::thread g_thread;
 SOCKET g_sock = INVALID_SOCKET;
 uint32_t g_session = 0;
 std::atomic<uint32_t> g_hostSession{0}; // JOIN: the host's session id, from its HELLO (0 until heard)
+
+std::atomic<bool> g_hostAllowsMembers{false}; // JOIN: what the host's HELLO said about the same
 std::string g_serverName;                // JOIN: the dedicated server's name (empty: a player hosts); under g_m
 float g_loopbackOffset = 3.0f;
 uint16_t g_port = 47800;
@@ -266,8 +275,12 @@ void sendHello() {
         std::lock_guard<std::mutex> lock(g_m);
         name = g_name;
     }
-    sendAll(buf, proto::writeHello(buf, header(proto::kTypeHello), name.c_str(), g_look.load(),
-                                   g_role == Role::Host ? proto::kHelloHost : 0, g_outfit.load()));
+    uint8_t flags = 0;
+    if (g_role == Role::Host) {
+        flags = proto::kHelloHost;
+        if (config::get()->membersMayHardSummon) flags = static_cast<uint8_t>(flags | proto::kHelloMembersHard);
+    }
+    sendAll(buf, proto::writeHello(buf, header(proto::kTypeHello), name.c_str(), g_look.load(), flags, g_outfit.load()));
 }
 
 // Player names are shown in the menu and written to the log: keep bytes that can be shown, drop control
@@ -485,6 +498,81 @@ void receiveReact(Remote& r, bool own, const char* payload, size_t len) { // cal
     while (g_reactions.size() > 16) g_reactions.pop_front();
 }
 
+// --- Summon ----------------------------------------------------------------------------------------
+constexpr int kSummonBurst = 6; // at most this many summons / withdrawals from one player per kChatBurstMs
+std::deque<SummonInfo> g_summons; // summons to show, not yet taken; guarded by g_m
+// Our own open summon: who has answered and how.
+struct MySummon {
+    bool open = false;
+    uint32_t id = 0;
+    DWORD at = 0;
+    std::vector<uint32_t> targets; // empty = everyone
+    std::vector<uint32_t> answered;
+    summon::Tally tally;
+};
+MySummon g_mySummon;                          // guarded by g_m
+DWORD g_lastSummonSent = 0;                   // guarded by g_m; 0 = never
+std::vector<std::string> g_summonReports;     // guarded by g_m
+
+void finishMySummon() { // caller holds g_m
+    if (!g_mySummon.open) return;
+    g_summonReports.push_back(summon::reportText(g_mySummon.tally));
+    g_mySummon.open = false;
+}
+
+// `senderIsHost` / `vouchTrusted`: see summon::Input. Caller holds g_m.
+void receiveSummon(Remote& r, bool own, bool senderIsHost, bool vouchTrusted, const char* payload, size_t len) {
+    proto::Summon s;
+    if (!proto::readSummon(payload, len, s)) { ++g_dropped; return; }
+    if (own) return; // solo test: our own summon
+    const DWORD now = GetTickCount();
+    const bool cancel = (s.flags & proto::kSummonCancel) != 0;
+    if (!(cancel ? r.summonCancelSeen : r.summonSeen).add(s.id)) return; // a repeat
+    if (now - r.summonBurstAt > kChatBurstMs) { r.summonBurstAt = now; r.summonBurst = 0; }
+    if (++r.summonBurst > kSummonBurst) return;
+    SummonInfo info;
+    info.id = s.id;
+    info.from = r.id;
+    info.name = r.name.empty() ? std::string("Runner") : r.name;
+    if (cancel) {
+        info.cancel = true;
+    } else {
+        summon::Input in;
+        in.calledMe = proto::summonCalls(s, g_session);
+        in.hardRequested = (s.flags & proto::kSummonHard) != 0;
+        in.senderIsHost = senderIsHost;
+        in.vouched = (s.flags & proto::kSummonVouched) != 0;
+        in.vouchTrusted = vouchTrusted;
+        in.optedIn = config::get()->allowForcedSummon;
+        in.sinceLastFromSenderMs = r.haveSummon ? now - r.lastSummonAt : 0xffffffffu;
+        const summon::Action a = summon::decide(in);
+        if (a == summon::Action::Ignore) return;
+        r.lastSummonAt = now;
+        r.haveSummon = true;
+        memcpy(info.pos, s.pos, sizeof(info.pos));
+        info.yaw = s.yaw;
+        info.hard = a == summon::Action::Hard;
+    }
+    g_summons.push_back(info);
+    while (g_summons.size() > 16) g_summons.pop_front();
+}
+
+void receiveSummonReply(Remote& r, bool own, const char* payload, size_t len) { // caller holds g_m
+    proto::SummonReply re;
+    if (!proto::readSummonReply(payload, len, re)) { ++g_dropped; return; }
+    if (own || re.target != g_session) return; // not about us
+    MySummon& m = g_mySummon;
+    if (!m.open || m.id != re.id) return;
+    if (!m.targets.empty() && std::find(m.targets.begin(), m.targets.end(), r.id) == m.targets.end()) return;
+    if (std::find(m.answered.begin(), m.answered.end(), r.id) != m.answered.end()) return; // a repeat
+    m.answered.push_back(r.id);
+    if (re.result == proto::kSummonTeleporting) ++m.tally.teleporting;
+    else if (re.result == proto::kSummonBusy) ++m.tally.busy;
+    else ++m.tally.declined;
+    if (m.tally.expected <= 1) m.tally.singleName = r.name;
+    if (summon::complete(m.tally)) finishMySummon();
+}
+
 void handlePacket(const char* buf, int n, const sockaddr_in& from) {
     proto::Header h;
     if (n < static_cast<int>(sizeof(h))) { ++g_dropped; return; }
@@ -503,6 +591,10 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
     // Only the packet types we know may create state or be forwarded to other players.
     if (!proto::knownType(h.type)) { ++g_dropped; return; }
     const bool own = h.session == g_session;
+    // What this host changed in the packet (a joiner's HELLO flags, a summon's flags): what is forwarded is
+    // also what is processed here, so the host sees exactly what the others see.
+    char relay[proto::kMaxPacket + 64];
+    const char* data = buf;
     std::unique_lock<std::mutex> lock(g_m);
     if (g_role == Role::Host) {
         // Nothing of ours comes back to the host, so a packet that claims our session id is forged.
@@ -519,13 +611,29 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
         }
         if (!m->bucket.take(GetTickCount())) { ++g_dropped; return; } // flooding: not forwarded, not processed
         // A joiner's HELLO goes on without the "I host" flag: only the host's own HELLO may set it.
-        char relay[proto::kMaxPacket + 64];
         const char* out = buf;
         if (h.type == proto::kTypeHello && n > static_cast<int>(sizeof(h) + proto::kHelloFlagsOffset)) {
             memcpy(relay, buf, static_cast<size_t>(n));
-            relay[sizeof(h) + proto::kHelloFlagsOffset] = static_cast<char>(relay[sizeof(h) + proto::kHelloFlagsOffset] & ~proto::kHelloHost);
+            relay[sizeof(h) + proto::kHelloFlagsOffset] =
+                static_cast<char>(relay[sizeof(h) + proto::kHelloFlagsOffset] & ~(proto::kHelloHost | proto::kHelloMembersHard));
             out = relay;
         }
+        // A joiner's summon is vouched for by this host, or not: whatever the joiner wrote is replaced by the
+        // lobby's rule (protocol::applyHostPolicy). Players only ever hear a joiner through the host.
+        if (h.type == proto::kTypeSummon) {
+            proto::Summon s;
+            if (n > static_cast<int>(sizeof(h)) && static_cast<size_t>(n) <= sizeof(relay) &&
+                proto::readSummon(buf + sizeof(h), static_cast<size_t>(n) - sizeof(h), s)) {
+                memcpy(relay, buf, static_cast<size_t>(n));
+                proto::applyHostPolicy(s, false, config::get()->membersMayHardSummon);
+                proto::patchSummonFlags(relay, static_cast<size_t>(n), s.flags);
+                out = relay;
+            } else {
+                ++g_dropped;
+                return;
+            }
+        }
+        data = out;
         // The sends run without g_m: the socket does not block, and only this thread changes the member list.
         std::vector<sockaddr_in> to;
         for (const auto& other : g_members)
@@ -566,7 +674,7 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
     r.lastSeq = h.seq;
     r.haveSeq = true;
     ++g_recv;
-    const char* payload = buf + sizeof(h);
+    const char* payload = data + sizeof(h);
     const size_t len = static_cast<size_t>(n) - sizeof(h);
     if (h.type == proto::kTypeHello) {
         std::string raw;
@@ -577,6 +685,7 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
         // Accepted only straight from the host (forwarded copies come from the host's address too, but have the flag cleared).
         if ((flags & proto::kHelloHost) && !own && g_role == Role::Join && sameAddr(from, g_hostAddr)) {
             g_hostSession = h.session;
+            g_hostAllowsMembers = (flags & proto::kHelloMembersHard) != 0 && !(flags & proto::kHelloServer);
             // A dedicated server: not a player (it sends no state, so it never gets a ghost or a list entry).
             if (flags & proto::kHelloServer) {
                 const std::string serverName = cleanName(raw.data(), raw.size());
@@ -613,6 +722,19 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
     }
     if (h.type == proto::kTypeReact) {
         receiveReact(r, own, payload, len);
+        return;
+    }
+    if (h.type == proto::kTypeSummon || h.type == proto::kTypeSummonReply) {
+        if (h.type == proto::kTypeSummonReply) {
+            receiveSummonReply(r, own, payload, len);
+            return;
+        }
+        // The lobby's host (a player, not a dedicated server) may pull players in; so may a member it
+        // vouched for. Behind a dedicated server nobody is trusted: it forwards bytes as they are, so a
+        // vouch in them proves nothing, and until the host's HELLO is heard we do not know which it is.
+        const bool playerHost = g_role == Role::Host || (g_hostSession.load() != 0 && g_serverName.empty());
+        const bool senderIsHost = g_role == Role::Join && playerHost && h.session == g_hostSession.load();
+        receiveSummon(r, own, senderIsHost, playerHost, payload, len);
         return;
     }
     if (h.type != proto::kTypeState) return;
@@ -851,6 +973,11 @@ bool start(uint16_t port, const std::string& join, float loopbackOffset, const s
         g_name = name;
         g_outBurst.clear();
         for (PingCell& c : g_myPings) c = PingCell{};
+        g_summons.clear();
+        g_mySummon = MySummon{};
+        g_lastSummonSent = 0;
+        g_summonReports.clear();
+        g_hostAllowsMembers = false;
     }
     g_stunIp = 0;
     {
@@ -995,6 +1122,111 @@ std::vector<ReactionInfo> takeReactions() {
     std::lock_guard<std::mutex> lock(g_m);
     std::vector<ReactionInfo> out(g_reactions.begin(), g_reactions.end());
     g_reactions.clear();
+    return out;
+}
+
+bool canHardSummon() {
+    if (!g_run) return false;
+    if (g_role == Role::Host) return true;
+    std::lock_guard<std::mutex> lock(g_m);
+    return g_hostSession.load() != 0 && g_serverName.empty() && g_hostAllowsMembers.load();
+}
+
+bool sendSummon(const float pos[3], float yaw, const std::vector<uint32_t>& targets, bool hard) {
+    if (!proto::sanePosition(pos) || !std::isfinite(yaw) || !g_run) return false;
+    const bool canHard = canHardSummon(); // before g_m: it takes the lock itself
+    std::lock_guard<std::mutex> lock(g_m);
+    const DWORD now = GetTickCount();
+    if (g_lastSummonSent && now - g_lastSummonSent < summon::kSendCooldownMs) return false;
+    proto::Summon s;
+    s.id = nextBurstId();
+    memcpy(s.pos, pos, sizeof(s.pos));
+    s.yaw = yaw;
+    s.flags = hard && canHard ? proto::kSummonHard : 0;
+    MySummon m;
+    m.open = true;
+    m.id = s.id;
+    m.at = now;
+    if (targets.empty()) {
+        for (const auto& kv : g_remotes) {
+            const Remote& r = kv.second;
+            if (r.fill && !r.loopback && now - r.lastTick <= 5000) {
+                ++m.tally.expected;
+                m.tally.singleName = r.name;
+            }
+        }
+    } else {
+        for (uint32_t t : targets) {
+            if (static_cast<int>(m.targets.size()) >= proto::kMaxSummonTargets || t == g_session) continue;
+            if (std::find(m.targets.begin(), m.targets.end(), t) != m.targets.end()) continue;
+            m.targets.push_back(t);
+        }
+        m.tally.expected = static_cast<int>(m.targets.size());
+        if (m.targets.size() == 1) {
+            auto it = g_remotes.find(m.targets[0]);
+            if (it != g_remotes.end()) m.tally.singleName = it->second.name;
+        }
+    }
+    if (m.tally.expected == 0) return false; // nobody to call
+    s.targetCount = static_cast<uint8_t>(m.targets.size());
+    for (size_t i = 0; i < m.targets.size(); ++i) s.targets[i] = m.targets[i];
+    char buf[proto::kMaxPacket];
+    const size_t n = proto::writeSummon(buf, proto::Header{}, s);
+    g_outBurst.push_back({proto::kTypeSummon, std::vector<char>(buf + sizeof(proto::Header), buf + n), kChatSends});
+    g_mySummon = m;
+    g_lastSummonSent = now;
+    return true;
+}
+
+bool summonOpen() {
+    std::lock_guard<std::mutex> lock(g_m);
+    return g_mySummon.open;
+}
+
+uint32_t summonCooldownLeftMs() {
+    std::lock_guard<std::mutex> lock(g_m);
+    if (!g_lastSummonSent) return 0;
+    const DWORD since = GetTickCount() - g_lastSummonSent;
+    return since >= summon::kSendCooldownMs ? 0 : summon::kSendCooldownMs - since;
+}
+
+void cancelSummon() {
+    std::lock_guard<std::mutex> lock(g_m);
+    if (!g_mySummon.open) return;
+    proto::Summon s;
+    s.id = g_mySummon.id; // the summon withdrawn
+    s.flags = proto::kSummonCancel;
+    g_mySummon.open = false;
+    g_lastSummonSent = 0; // withdrawing frees the cooldown: a mistaken call can be redone at once
+    char buf[proto::kMaxPacket];
+    const size_t n = proto::writeSummon(buf, proto::Header{}, s);
+    g_outBurst.push_back({proto::kTypeSummon, std::vector<char>(buf + sizeof(proto::Header), buf + n), kChatSends});
+}
+
+std::vector<SummonInfo> takeSummons() {
+    std::lock_guard<std::mutex> lock(g_m);
+    std::vector<SummonInfo> out(g_summons.begin(), g_summons.end());
+    g_summons.clear();
+    return out;
+}
+
+void sendSummonReply(uint32_t id, uint32_t to, uint8_t result) {
+    proto::SummonReply re;
+    re.id = id;
+    re.target = to;
+    re.result = result;
+    std::lock_guard<std::mutex> lock(g_m);
+    if (!g_run) return;
+    char buf[proto::kMaxPacket];
+    const size_t n = proto::writeSummonReply(buf, proto::Header{}, re);
+    g_outBurst.push_back({proto::kTypeSummonReply, std::vector<char>(buf + sizeof(proto::Header), buf + n), kChatSends});
+}
+
+std::vector<std::string> takeSummonReports() {
+    std::lock_guard<std::mutex> lock(g_m);
+    if (g_mySummon.open && GetTickCount() - g_mySummon.at >= summon::kReportWindowMs) finishMySummon();
+    std::vector<std::string> out;
+    out.swap(g_summonReports);
     return out;
 }
 

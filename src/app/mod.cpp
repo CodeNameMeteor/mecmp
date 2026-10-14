@@ -13,6 +13,7 @@
 #include "game/engine.h"
 #include "game/fingerprint.h"
 #include "game/ghosts.h"
+#include "game/players_map.h"
 #include "game/teleport.h"
 #include "game/hooks.h"
 #include "game/level.h"
@@ -59,6 +60,7 @@ void onTick(void* world, float dt) {
     { prof::Scope s(prof::Teleport); game::teleport::tick(); }
     { prof::Scope s(prof::Ping); game::ping::tick(); }
     { prof::Scope s(prof::Models); game::models::tick(); }
+    if (n % 60 == 0) game::players_map::publishOwnProfile(); // every ~2 s: online id (Beat Revival) and the setting
 }
 
 // Waits until the engine has built its type list, then checks that this is the game build the

@@ -211,6 +211,19 @@ static void testHelloLook() {
     CHECK(protocol::readHello(buf + sizeof(h), protocol::kNameLen, name, look) && look == 0 && name == "Meteor");
     // A short packet keeps what is there.
     CHECK(protocol::readHello(buf + sizeof(h), 3, name, look) && name == "Met" && look == 0);
+    // The shared EA profile (map markers): appended, absent from older senders and when not shared.
+    protocol::OnlineProfile mine;
+    mine.id = 0x0123456789abcdefull;
+    snprintf(mine.name, sizeof(mine.name), "codename\x01x");
+    const size_t np = protocol::writeHello(buf, h, "Meteor", 7, 0, 0, &mine);
+    CHECK(np == no + 8 + protocol::kProfileLen);
+    protocol::OnlineProfile got;
+    CHECK(protocol::readHello(buf + sizeof(h), np - sizeof(h), name, look, &flags, &wear, &got) && look == 7 &&
+          got.id == mine.id && std::string(got.name) == "codename"); // stops at the first unprintable byte
+    CHECK(protocol::readHello(buf + sizeof(h), np - sizeof(h) - 1, name, look, &flags, &wear, &got) && got.id == 0);
+    protocol::OnlineProfile none;
+    CHECK(protocol::writeHello(buf, h, "Meteor", 7, 0, 0, &none) == no); // id 0: not sent
+    CHECK(protocol::readHello(buf + sizeof(h), no - sizeof(h), name, look, &flags, &wear, &got) && got.id == 0);
 }
 
 static void testChat() {

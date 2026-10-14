@@ -60,6 +60,7 @@ struct Settings {
     std::string servers;                  // the menu's server list: addresses, comma separated
     bool membersMayHardSummon = false;    // when you host: members may pull players in (a hard summon)
     // [player]
+    bool shareProfile = true;             // send your EA online id and profile name, so others' maps show your Runner Tag
     bool allowForcedSummon = false;       // a hard summon from the host (or a member it allows) takes you after a countdown
     std::string name = "Runner";
     std::string look = "faith";           // how you look to others: faith, or echo:<hash> (a ghost style + colour)

@@ -8,6 +8,10 @@ INSTALL
    next to mecmp.dll; the first run also creates mecmp.ini there.
 4. Load into free roam.
 
+Without the injector (optional): copy version.dll and mecmp.dll into the game's folder, the one
+with MirrorsEdgeCatalyst.exe, and start the game as usual. version.dll loads mecmp.dll with the game.
+The log and mecmp.ini are then in the game's folder. Remove both files to go back to normal.
+
 PLAY
 - Press INSERT (or click both sticks on a gamepad) for the MECMP menu.
 - Session tab:

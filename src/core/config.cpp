@@ -44,8 +44,14 @@ constexpr const char* kDefaultIni =
     "servers=\r\n"
     "; solo test only: how far the mirrored ghost stands from you, along the world X axis (metres)\r\n"
     "loopback_offset=3.0\r\n"
+    "; HOST: 1 = members of your session may pull players in with a hard summon (you always may). Players\r\n"
+    "; still have to allow it themselves (allow_forced_summon in [player]); otherwise they are only asked.\r\n"
+    "members_may_hard_summon=0\r\n"
     "\r\n"
     "[player]\r\n"
+    "; 1 = a hard summon (from the host, or a member the host allows) takes you to the caller after a\r\n"
+    "; countdown you can cancel; 0 = you are only asked, as with any summon\r\n"
+    "allow_forced_summon=0\r\n"
     "; your name, shown to the other players\r\n"
     "name=Runner\r\n"
     "; how the other players see you: faith, or a ghost style and color (pick it in the in-game menu)\r\n"
@@ -128,6 +134,17 @@ constexpr const char* kDefaultIniTail =
     "hide_key=Y\r\n"
     "wheel_prev_key=Q\r\n"
     "wheel_next_key=E\r\n"
+    "; summon: a tap on summon_key calls everyone to where you stand, holding it for a second pulls them in\r\n"
+    "; (a hard summon, see allow_forced_summon in [player] and members_may_hard_summon in [net]), and\r\n"
+    "; holding it while your call is open withdraws it. While a summon is shown to you, hold\r\n"
+    "; summon_accept_key (go) or summon_decline_key (no; after a summon it takes you back) for a second;\r\n"
+    "; the _pad entries are gamepad buttons for those two. hard_summon_grace_ms = the countdown (0..15000).\r\n"
+    "summon_key=G\r\n"
+    "summon_accept_key=1\r\n"
+    "summon_decline_key=2\r\n"
+    "summon_accept_pad=LEFT\r\n"
+    "summon_decline_pad=RIGHT\r\n"
+    "hard_summon_grace_ms=5000\r\n"
     "; how gamepad buttons are named in hints: xbox or playstation (the settings above keep Xbox names)\r\n"
     "pad_labels=xbox\r\n"
     "; what a short press places: ping_tap=0 the marker you picked last, ping_tap=1 always the one in\r\n"
@@ -373,6 +390,14 @@ void load(const std::wstring& dir) {
     s.hideKey = readString(ini, L"ui", L"hide_key", "Y");
     s.wheelPrevKey = readString(ini, L"ui", L"wheel_prev_key", "Q");
     s.wheelNextKey = readString(ini, L"ui", L"wheel_next_key", "E");
+    s.summonKey = readString(ini, L"ui", L"summon_key", "G");
+    s.summonAcceptKey = readString(ini, L"ui", L"summon_accept_key", "1");
+    s.summonDeclineKey = readString(ini, L"ui", L"summon_decline_key", "2");
+    s.summonAcceptPad = readString(ini, L"ui", L"summon_accept_pad", "LEFT");
+    s.summonDeclinePad = readString(ini, L"ui", L"summon_decline_pad", "RIGHT");
+    s.hardSummonGraceMs = clampInt(readInt(ini, L"ui", L"hard_summon_grace_ms", 5000), 0, 15000);
+    s.allowForcedSummon = readInt(ini, L"player", L"allow_forced_summon", 0) != 0;
+    s.membersMayHardSummon = readInt(ini, L"net", L"members_may_hard_summon", 0) != 0;
     s.padPlayStation = _stricmp(readString(ini, L"ui", L"pad_labels", "xbox").c_str(), "playstation") == 0;
     s.pingClearKey = readString(ini, L"ui", L"ping_clear_key", "X");
     s.pingClearPad = readString(ini, L"ui", L"ping_clear_pad", "RS");
@@ -505,6 +530,14 @@ void applyPending() {
     put(L"ui", L"hide_key", snapshot->hideKey);
     put(L"ui", L"wheel_prev_key", snapshot->wheelPrevKey);
     put(L"ui", L"wheel_next_key", snapshot->wheelNextKey);
+    put(L"ui", L"summon_key", snapshot->summonKey);
+    put(L"ui", L"summon_accept_key", snapshot->summonAcceptKey);
+    put(L"ui", L"summon_decline_key", snapshot->summonDeclineKey);
+    put(L"ui", L"summon_accept_pad", snapshot->summonAcceptPad);
+    put(L"ui", L"summon_decline_pad", snapshot->summonDeclinePad);
+    put(L"ui", L"hard_summon_grace_ms", std::to_string(snapshot->hardSummonGraceMs));
+    put(L"player", L"allow_forced_summon", snapshot->allowForcedSummon ? "1" : "0");
+    put(L"net", L"members_may_hard_summon", snapshot->membersMayHardSummon ? "1" : "0");
     put(L"ui", L"pad_labels", snapshot->padPlayStation ? "playstation" : "xbox");
     put(L"ui", L"ping_wheel", std::to_string(snapshot->pingWheel + 1));
     put(L"ui", L"ping_last_wheel", std::to_string(snapshot->pingLastWheel + 1));

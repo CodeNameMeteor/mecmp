@@ -58,7 +58,9 @@ struct Settings {
     bool autoStart = false;               // start that session when the game starts (else wait for the menu)
     float loopbackOffset = 3.0f;          // solo test: metres along world X the mirrored ghost stands
     std::string servers;                  // the menu's server list: addresses, comma separated
+    bool membersMayHardSummon = false;    // when you host: members may pull players in (a hard summon)
     // [player]
+    bool allowForcedSummon = false;       // a hard summon from the host (or a member it allows) takes you after a countdown
     std::string name = "Runner";
     std::string look = "faith";           // how you look to others: faith, or echo:<hash> (a ghost style + colour)
     int outfit = 0;                       // with look = faith: what is changed about her outfit (net::protocol::kWear... bits)
@@ -96,6 +98,16 @@ struct Settings {
     std::string hideKey = "Y";            // shows / hides names, markers, arrows, notices and chat lines; empty = none
     std::string wheelPrevKey = "Q";       // while the wheel is open: the previous wheel; empty = none
     std::string wheelNextKey = "E";       // ... the next wheel; empty = none
+    // Summon ("come to me", net/summon_policy.h). A tap on summon_key calls everyone to where you stand,
+    // holding it for a second pulls them in (hard, see allowForcedSummon / membersMayHardSummon), and
+    // holding it while your call is still open withdraws it. The accept and decline keys work only while a
+    // summon is shown to you: hold one for a second.
+    std::string summonKey = "G";          // as ping_key; empty = none
+    std::string summonAcceptKey = "1";    // a letter, a digit or a menu key name; empty = none
+    std::string summonDeclineKey = "2";   // also "go back" after a summon took you somewhere
+    std::string summonAcceptPad = "LEFT"; // gamepad buttons (as menu_pad); empty = none
+    std::string summonDeclinePad = "RIGHT";
+    int hardSummonGraceMs = 5000;         // a hard summon counts down this long before it takes you (0..15000)
     bool padPlayStation = false;          // gamepad buttons are named as on a PlayStation pad in hints
     int pingWheel = 0;                    // the wheel that opens (the one used last)
     int pingLastWheel = 0, pingLastSlot = 0; // the marker picked last

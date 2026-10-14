@@ -707,6 +707,16 @@ void tick(uint64_t tick, uint64_t ticksInLevel) {
         playerSince = ticksInLevel;
     }
     const bool playerSettled = playerChar && ticksInLevel - playerSince >= kPlayerSettleTicks;
+    if (playerSettled) { // the right spawner before any spawn (the hooks and scans may have changed it)
+        const void* ours[kMaxGhosts];
+        size_t k = 0;
+        {
+            std::lock_guard<std::mutex> lock(g_m);
+            for (const auto& g : g_ghosts)
+                if (g.character && k < kMaxGhosts) ours[k++] = g.character;
+        }
+        level::chooseGhostSpawner(ours, k);
+    }
 
     // Every present player needs a ghost: hand them a free one, else spawn (one per kSpawnGapMs).
     // Never in the main menu: its "Your Echo" preview is spawned from a projection spawner there, and a

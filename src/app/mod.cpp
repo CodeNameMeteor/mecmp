@@ -165,7 +165,10 @@ void monitorLoop() {
         // is made again), only if something is still missing in a level you play in.
         const bool firstWorld = worldsSeen == 1;
         const DWORD inLevel = GetTickCount() - levelSince;
-        const bool lateScanDue = !firstWorld && inLevel > 60000 && game::level::playerCharacter();
+        // Not "and the player character exists": a level whose player spawner was missed has no player
+        // character, which is exactly when the scan is needed (it would never have run: no ghosts, no state
+        // sent, 'the player character is not available' for Go to).
+        const bool lateScanDue = !firstWorld && inLevel > 20000 && !game::level::inFrontEnd();
         // The ghost look list (styles x colours) comes from the level's time-trial markers, noted as they
         // are created: checked every second (cheap). Fallback memory scan 20 s and 60 s into the first
         // level. Ghosts waiting for the list get their look right after.

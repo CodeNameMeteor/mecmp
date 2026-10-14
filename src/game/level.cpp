@@ -16,6 +16,7 @@ std::mutex g_m;
 void* g_playerSpawner = nullptr;
 void* g_ghostSpawner = nullptr;
 std::vector<void*> g_clientComps; // other ghosts' client replay components (reference setup source)
+std::vector<void*> g_ghostCands;  // every ghost-blueprint spawner seen (hooks and scans), for chooseGhostSpawner
 
 bool clientCompAlive(uintptr_t c) {
     uintptr_t vt = 0;
@@ -57,8 +58,10 @@ void considerSpawner(void* entity, uintptr_t data, bool fromScan) {
         if (!fromScan || !g_playerSpawner || !spawnerAliveUnlocked(g_playerSpawner)) g_playerSpawner = entity;
         VLOG("level: player spawner %p%s", entity, fromScan ? " (found by scan)" : "");
     } else if (name == kGhostBlueprint) {
-        // live capture: the newest one is the city-ghost spawner
+        // live capture: the newest one, until chooseGhostSpawner has looked at all of them
         if (!fromScan || !g_ghostSpawner || !spawnerAliveUnlocked(g_ghostSpawner)) g_ghostSpawner = entity;
+        if (g_ghostCands.size() < 64 && std::find(g_ghostCands.begin(), g_ghostCands.end(), entity) == g_ghostCands.end())
+            g_ghostCands.push_back(entity);
         VLOG("level: ghost spawner %p%s", entity, fromScan ? " (found by scan)" : "");
     }
 }
@@ -134,12 +137,74 @@ void scanForMissing() {
          spawnerAlive(ghostSpawner()) ? "found" : "missing");
 }
 
+// Which of the ghost spawners is the level's city-ghost spawner (the one our ghosts are made from)?
+// The newest one is not always it: when the mod is loaded before the level, the hooks see the pooled
+// replay-marker spawners and others created after it, and ghosts made from one of those stood still after
+// half a second. The city-ghost spawner has its own data object (the pooled ones share one) and holds the
+// game's own city ghost: a character that is not one of ours (`ours`). Ours do not count: a ghost made from
+// the wrong spawner would make it look like the right one.
+void chooseGhostSpawner(const void* const* ours, size_t oursCount) {
+    static DWORD lastAt = 0; // game thread only
+    const DWORD now = GetTickCount();
+    if (now - lastAt < 500) return;
+    lastAt = now;
+    std::vector<void*> cands;
+    void* current = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(g_m);
+        cands = g_ghostCands;
+        current = g_ghostSpawner;
+    }
+    struct Info { void* spawner; uintptr_t data; size_t holds; };
+    std::vector<Info> alive;
+    for (void* c : cands) {
+        if (!spawnerAliveUnlocked(c)) continue;
+        const uintptr_t s = reinterpret_cast<uintptr_t>(c);
+        uintptr_t v[2] = {};
+        size_t holds = 0; // characters in its list that are not ours
+        if (mem::read(s + Spawner_Spawned, v, sizeof(v)) && v[1] >= v[0] && v[1] - v[0] <= 0x800) {
+            const size_t count = (v[1] - v[0]) / 8;
+            uintptr_t items[64] = {};
+            if (count <= 64 && (count == 0 || mem::read(v[0], items, count * 8))) {
+                for (size_t i = 0; i < count; ++i) {
+                    bool mine = false;
+                    for (size_t k = 0; k < oursCount; ++k) mine = mine || reinterpret_cast<uintptr_t>(ours[k]) == items[i];
+                    if (!mine) ++holds;
+                }
+            } else {
+                holds = count; // too many to compare: it holds something
+            }
+        }
+        alive.push_back({c, mem::readOr<uintptr_t>(s + Spawner_Data), holds});
+    }
+    if (alive.empty()) return;
+    void* best = nullptr;
+    int bestScore = -1;
+    for (const Info& a : alive) {
+        size_t shared = 0;
+        for (const Info& b : alive) shared += b.data == a.data ? 1 : 0;
+        const bool own = shared == 1;
+        const int score = own ? (a.holds ? 6 : 3) : (a.holds ? 1 : 0);
+        if (score >= bestScore) { // a tie goes to the newer one
+            best = a.spawner;
+            bestScore = score;
+        }
+    }
+    if (best && best != current) {
+        MLOG("level: ghost spawner %p chosen among %llu (score %d; was %p)", best, static_cast<unsigned long long>(alive.size()),
+             bestScore, current);
+        std::lock_guard<std::mutex> lock(g_m);
+        g_ghostSpawner = best;
+    }
+}
+
 void reset() {
     {
         std::lock_guard<std::mutex> lock(g_m);
         g_playerSpawner = nullptr;
         g_ghostSpawner = nullptr;
         g_clientComps.clear();
+        g_ghostCands.clear();
     }
     models::reset();
 }

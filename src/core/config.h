@@ -93,6 +93,7 @@ struct Settings {
     std::string pingPad;                  // gamepad buttons for the same (as menu_pad); empty = none
     bool wheelInstant = false;            // the wheel opens the moment the key goes down (false: after a short hold)
     float wheelSensitivity = 1.0f;        // how far the pointer in the open wheel moves per mouse movement
+    float uiScale = 1.0f;                 // size of all overlay text and markers, on top of the automatic size (0.5..2)
     std::string reactKey = "C";           // tap = send the last quick answer, hold = its wheel; empty = none
     std::string reactPad;                 // gamepad buttons for the same; empty = none
     std::string altKey = "B";             // places a marker the other way (stand <-> look); empty = none

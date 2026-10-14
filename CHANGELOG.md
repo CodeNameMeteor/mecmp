@@ -40,6 +40,12 @@
   `--mirror` still mirrors you, with any build.
 
 ### Fixes
+- **The overlay follows the game window's size again, and has a size setting.** The font was sized once,
+  from the window as it was when the overlay started. The game starts in a 1280x720 window and then goes
+  full screen, so on a 1440p or 4K screen the menu, markers and the wheel stayed at 720p size (the wheel
+  was about 17% of the screen's height, the labels a few pixels). The size now follows the window's height
+  all the time. *Interface size* (menu, Players tab; `[ui] ui_scale`, 0.5..2) scales it further.
+
 - **Joining works with a server on the same PC.** A mecmp_server (or a second game) on this PC holds
   UDP 47800, so the mod could not start at all ("cannot use UDP port 47800"). A joiner now uses any free
   port when its own is taken; hosting still needs the configured port, and the message now says what

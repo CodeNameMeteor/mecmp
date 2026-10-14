@@ -3,6 +3,9 @@
 ## Unreleased
 
 ### Fixes
+- **A joiner listens only to its host.** Everything in a session reaches a joiner through the host (or the
+  server), so packets from any other address are now ignored. Before, someone who knew a player's address
+  could send it chat, markers or a summon that appeared to come from the host.
 - **The injector finds the game, not the activation window.** Starting the game first runs an
   activation process that is also called MirrorsEdgeCatalyst.exe; an injector started early loaded the
   mod into that one. It now waits until the game itself is running (the engine is loaded and its window

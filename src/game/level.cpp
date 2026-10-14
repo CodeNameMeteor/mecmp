@@ -50,11 +50,15 @@ void considerSpawner(void* entity, uintptr_t data, bool fromScan) {
     if (name.empty()) return;
     models::noteTemplate(data, name);
     std::lock_guard<std::mutex> lock(g_m);
+    // A scan may only fill a gap, never replace a live spawner (a hook's newest capture always wins). A held
+    // spawner that is no longer alive is a gap: the game destroys and rebuilds them when a district streams
+    // out and in, and keeping the dead pointer left the mod with no spawner (no ghosts, "found" in the log).
     if (name == kPlayerBlueprint) {
-        if (!fromScan || !g_playerSpawner) g_playerSpawner = entity;
+        if (!fromScan || !g_playerSpawner || !spawnerAliveUnlocked(g_playerSpawner)) g_playerSpawner = entity;
         VLOG("level: player spawner %p%s", entity, fromScan ? " (found by scan)" : "");
     } else if (name == kGhostBlueprint) {
-        if (!fromScan || !g_ghostSpawner) g_ghostSpawner = entity; // live capture: the newest one is the city-ghost spawner
+        // live capture: the newest one is the city-ghost spawner
+        if (!fromScan || !g_ghostSpawner || !spawnerAliveUnlocked(g_ghostSpawner)) g_ghostSpawner = entity;
         VLOG("level: ghost spawner %p%s", entity, fromScan ? " (found by scan)" : "");
     }
 }
@@ -126,7 +130,8 @@ void scanForMissing() {
     MLOG("level: scanned %llu MB in %.1f s: %llu spawners (%llu ghost), %llu ghost clients; player spawner %s, ghost spawner %s",
          static_cast<unsigned long long>(scanned >> 20), (GetTickCount() - start) / 1000.0,
          static_cast<unsigned long long>(spawners.size()), static_cast<unsigned long long>(ghosts.size()),
-         static_cast<unsigned long long>(comps.size()), playerSpawner() ? "found" : "missing", ghostSpawner() ? "found" : "missing");
+         static_cast<unsigned long long>(comps.size()), spawnerAlive(playerSpawner()) ? "found" : "missing",
+         spawnerAlive(ghostSpawner()) ? "found" : "missing");
 }
 
 void reset() {

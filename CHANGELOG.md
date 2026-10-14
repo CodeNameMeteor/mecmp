@@ -56,6 +56,10 @@
   `--mirror` still mirrors you, with any build.
 
 ### Fixes
+- **Other players' ghosts no longer disappear for good** after the game rebuilds the city (a district
+  streaming out and in). The mod kept pointing at the ghost spawner the game had destroyed, so ghosts that
+  were taken away were never made again, while the log still said the spawner was found. A scan now
+  replaces a dead spawner, and a level may be scanned up to three times (not once) when something is missing.
 - **The overlay follows the game window's size again, and has a size setting.** The font was sized once,
   from the window as it was when the overlay started. The game starts in a 1280x720 window and then goes
   full screen, so on a 1440p or 4K screen the menu, markers and the wheel stayed at 720p size (the wheel

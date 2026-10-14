@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -27,6 +28,7 @@
 #include "ui/gamepad.h"
 #include "ui/glyph.h"
 #include "ui/overlay.h"
+#include "ui/summon.h"
 
 namespace mecmp::ui::menu {
 namespace {
@@ -39,7 +41,7 @@ char g_reactLabel[config::kPingSlots][net::protocol::kMaxPingLabelBytes + 1] = {
 bool g_inited = false;
 bool g_keyCapture = false; // waiting for a new menu key
 int g_bindCapture = -1;        // which key of the Controls tab is being recorded (see kKeyBinds; -1 = none)
-std::string g_bindNote[8];     // why the last key was refused (empty = nothing to say)
+std::string g_bindNote[11];    // why the last key was refused (empty = nothing to say)
 gamepad::Action g_padCapture = gamepad::Action::Count; // which gamepad binding is being recorded (Count = none)
 DWORD g_hintUntil = 0;
 
@@ -233,17 +235,68 @@ void serversSection() {
     }
 }
 
+std::set<uint32_t> g_summonPick; // the players ticked for "Summon selected"
+bool g_summonHard = false;       // "pull in" ticked (only offered while it can work)
+
+// Summon (ui/summon.h): call everyone, or the ticked players; the host's rule for members.
+void summonControls(const std::vector<net::RemoteInfo>& remotes) {
+    const auto cfg = config::get();
+    if (net::hosting()) {
+        bool allow = cfg->membersMayHardSummon;
+        if (ImGui::Checkbox("Members may pull players in (hard summon)", &allow))
+            config::change([allow](config::Settings& c) { c.membersMayHardSummon = allow; });
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("You can always pull players in. This lets the others do it too.\n"
+                              "A player is only pulled in if they allowed it themselves (Controls tab).");
+    }
+    if (remotes.empty()) return;
+    ImGui::Spacing();
+    const bool canHard = net::canHardSummon();
+    ImGui::BeginDisabled(!canHard);
+    ImGui::Checkbox("Pull in (hard)", &g_summonHard);
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip(canHard ? "Players who allowed it are taken to you after a countdown they can cancel.\n"
+                                    "Everyone else is just asked."
+                                  : "Only the host, or a member the host allows, can pull players in.");
+    const bool hard = g_summonHard && canHard;
+    ImGui::SameLine();
+    if (ImGui::Button("Summon everyone")) summon::send({}, hard);
+    ImGui::SameLine();
+    std::vector<uint32_t> picked;
+    for (const auto& r : remotes)
+        if (!r.loopback && g_summonPick.count(r.id)) picked.push_back(r.id);
+    ImGui::BeginDisabled(picked.empty());
+    char label[48];
+    snprintf(label, sizeof(label), "Summon selected (%d)", static_cast<int>(picked.size()));
+    if (ImGui::Button(label)) summon::send(picked, hard);
+    ImGui::EndDisabled();
+    ImGui::TextDisabled("They get a marker where you stand. Tick players in the list to call only them.");
+}
+
 void playersSection() {
     ImGui::SeparatorText("Players");
     const auto remotes = net::remotes(5000);
     if (remotes.empty()) {
         ImGui::TextDisabled("Nobody else here yet.");
+        summonControls(remotes);
         return;
     }
     if (ImGui::BeginTable("players", 4, ImGuiTableFlags_SizingStretchProp)) {
         for (const auto& r : remotes) {
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
+            ImGui::PushID(static_cast<int>(r.id) + 1);
+            if (!r.loopback) {
+                bool on = g_summonPick.count(r.id) != 0;
+                if (ImGui::Checkbox("##pick", &on)) {
+                    if (on) g_summonPick.insert(r.id);
+                    else g_summonPick.erase(r.id);
+                }
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Tick to call this player with \"Summon selected\"");
+                ImGui::SameLine();
+            }
+            ImGui::PopID();
             ImGui::Text("%s%s", r.name.empty() ? "(joining...)" : r.name.c_str(), r.loopback ? " (you, mirrored)" : "");
             ImGui::TableNextColumn();
             if (r.ageMs < 1000) ImGui::TextColored(ImVec4(0.4f, 1.f, 0.4f, 1.f), "live");
@@ -270,6 +323,7 @@ void playersSection() {
         }
         ImGui::EndTable();
     }
+    summonControls(remotes);
 }
 
 // Colour swatches for the echo colour names (the game's own colours are shader parameters).
@@ -471,11 +525,16 @@ void lookSection() {
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Hides the other players' ghosts until you show them again");
 }
 
-// The action key pressed this frame (as ping_key names it: a letter, ENTER or a menu key), if any.
+// The action key pressed this frame (as ping_key names it: a letter, a digit, ENTER or a menu key), if any.
 bool pressedActionKey(std::string& name) {
     for (int i = 0; i < 26; ++i) {
         if (!ImGui::IsKeyPressed(static_cast<ImGuiKey>(ImGuiKey_A + i), false)) continue;
         name.assign(1, static_cast<char>('A' + i));
+        return true;
+    }
+    for (int i = 0; i < 10; ++i) { // the number row
+        if (!ImGui::IsKeyPressed(static_cast<ImGuiKey>(ImGuiKey_0 + i), false)) continue;
+        name.assign(1, static_cast<char>('0' + i));
         return true;
     }
     if (ImGui::IsKeyPressed(ImGuiKey_Enter, false)) {
@@ -591,7 +650,7 @@ struct KeyBind {
     bool (*set)(const std::string&);
     int mouse;  // 0 = the keyboard only, 1 = also Mouse 4 / 5, 2 = also the middle button
 };
-const KeyBind kKeyBinds[8] = {
+const KeyBind kKeyBinds[11] = {
     {"Tap to place a marker. Hold to open the marker wheel.", &config::Settings::pingKey, &ui::setPingKey, 1},
     {"Tap twice to remove the marker you look at (or stand at). Hold for a moment to remove all your markers.",
      &config::Settings::pingClearKey, &ui::setPingClearKey, 2},
@@ -607,6 +666,14 @@ const KeyBind kKeyBinds[8] = {
      &config::Settings::wheelPrevKey, &ui::setWheelPrevKey, 1},
     {"While the marker wheel is open: the next wheel. The Right arrow and the mouse wheel do the same.",
      &config::Settings::wheelNextKey, &ui::setWheelNextKey, 1},
+    {"Tap to call everyone to where you stand. Hold for a second to pull them in (hard summon, if you may). "
+     "Hold it while your call is open to withdraw it.",
+     &config::Settings::summonKey, &ui::setSummonKey, 1},
+    {"While a summon is shown to you: hold for a second to go to the caller.",
+     &config::Settings::summonAcceptKey, &ui::setSummonAcceptKey, 1},
+    {"While a summon is shown to you: hold for a second to say no. After a summon took you somewhere, hold it "
+     "for 3 seconds within a minute to go back.",
+     &config::Settings::summonDeclineKey, &ui::setSummonDeclineKey, 1},
 };
 
 void keyRow(const config::Settings& cfg, int which) {
@@ -1247,6 +1314,31 @@ void controlsSection() {
     keyRow(*cfg, 3);
     padRow("Gamepad:", gamepad::Action::React, cfg->reactPad, &config::Settings::reactPad,
            "The same on a gamepad: tap sends your last answer, hold opens the answers wheel.");
+
+    ImGui::SeparatorText("Summon");
+    ImGui::TextUnformatted("Call players to you");
+    ImGui::Indent();
+    keyRow(*cfg, 8);
+    ImGui::Unindent();
+    ImGui::TextUnformatted("Answer a summon: go (hold)");
+    ImGui::Indent();
+    keyRow(*cfg, 9);
+    padRow("Gamepad:", gamepad::Action::SummonAccept, cfg->summonAcceptPad, &config::Settings::summonAcceptPad,
+           "Hold these buttons for a second to go to the player who called you. The game does not see them while a summon is shown.");
+    ImGui::Unindent();
+    ImGui::TextUnformatted("Answer a summon: no (hold), and go back");
+    ImGui::Indent();
+    keyRow(*cfg, 10);
+    padRow("Gamepad:", gamepad::Action::SummonDecline, cfg->summonDeclinePad, &config::Settings::summonDeclinePad,
+           "Hold for a second to say no; after a summon took you somewhere, hold for 3 seconds to go back.");
+    ImGui::Unindent();
+    bool forced = cfg->allowForcedSummon;
+    if (ImGui::Checkbox("Allow being pulled in (hard summon)", &forced))
+        config::change([forced](config::Settings& c) { c.allowForcedSummon = forced; });
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Off: every summon only asks you.\n"
+                          "On: when the host (or a member the host allows) pulls you in, you are taken to them after a\n"
+                          "countdown. You can cancel it in that time. Never from anyone else.");
 
     ImGui::SeparatorText("Overlay");
     ImGui::TextUnformatted("Show / hide names, markers, arrows, notices and chat");

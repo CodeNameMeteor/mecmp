@@ -3,6 +3,11 @@
 ## Unreleased
 
 ### Fixes
+- **The injector finds the game, not the activation window.** Starting the game first runs an
+  activation process that is also called MirrorsEdgeCatalyst.exe; an injector started early loaded the
+  mod into that one. It now waits until the game itself is running (the engine is loaded and its window
+  is up), so it can be started before the game. Started by double-click, its window stays open until a
+  key is pressed, so the result can be read.
 - **"Your Echo" works with a session running.** In the main menu the mod no longer spawns ghosts or
   stops the menus from pausing. The preview echo used to vanish, and a ghost took its place.
 - **Hosting is harder to flood.** A host accepts at most 4 players from one IP address, refuses a

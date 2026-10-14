@@ -1,6 +1,7 @@
 #include "game/hooks.h"
 
 #include "core/log.h"
+#include "core/prof.h"
 #include "game/engine.h"
 #include "game/ghosts.h"
 #include "game/level.h"
@@ -140,12 +141,17 @@ void uiSystemUpdate(void* uiSystem) {
     g_uiSystem = reinterpret_cast<uintptr_t>(uiSystem);
     uintptr_t controller = 0;
     int32_t saved[2] = {};
-    // Only while you are in a level, as a player: the main menu (which may have no server level at all
-    // after leaving one) keeps its own pause, which its screens ("Your Echo") need; nobody sees you there.
-    const bool session = net::running() && (net::hosting() || net::connectedToHost()) && level::serverWorld() &&
-                         !level::inFrontEnd() && level::playerCharacter();
-    if (!session || !mem::read(reinterpret_cast<uintptr_t>(uiSystem) + UISystem_PauseController, controller) || !controller ||
-        !mem::read(controller + 8, saved, sizeof(saved))) {
+    bool session;
+    {
+        prof::Scope scope(prof::UIPause); // our check only, not the game's own UI update
+        // Only while you are in a level, as a player: the main menu (which may have no server level at all
+        // after leaving one) keeps its own pause, which its screens ("Your Echo") need; nobody sees you there.
+        session = net::running() && (net::hosting() || net::connectedToHost()) && level::serverWorld() &&
+                  !level::inFrontEnd() && level::playerCharacter() &&
+                  mem::read(reinterpret_cast<uintptr_t>(uiSystem) + UISystem_PauseController, controller) && controller &&
+                  mem::read(controller + 8, saved, sizeof(saved));
+    }
+    if (!session) {
         g_origUISystemUpdate(uiSystem);
         return;
     }

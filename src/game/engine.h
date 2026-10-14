@@ -175,7 +175,7 @@ inline bool inImage(uintptr_t a) {
 inline uintptr_t gameVirtual(const void* obj, size_t slotOffset) {
     uintptr_t vt = 0, fn = 0;
     if (!obj || !mem::read(reinterpret_cast<uintptr_t>(obj), vt) || !inImage(vt)) return 0;
-    if (!mem::read(vt + slotOffset, fn) || !inImage(fn)) return 0;
+    if (!mem::readFast(vt + slotOffset, fn) || !inImage(fn)) return 0; // vtables are image data
     return fn;
 }
 
@@ -185,10 +185,10 @@ inline bool isKindOfRuntime(void* obj, uintptr_t classInfo) {
     const auto getType = reinterpret_cast<GetTypeFn>(gameVirtual(obj, 0));
     if (!getType) return false;
     const uint8_t* ti = getType(obj);
-    uint16_t id = 0, first = 0, last = 0;
-    if (!ti || !mem::read(reinterpret_cast<uintptr_t>(ti) + 0x28, id) || !mem::read(classInfo + 0x28, first) ||
-        !mem::read(classInfo + 0x2a, last))
+    uint16_t id = 0, range[2] = {}; // the class's first and last type id
+    if (!ti || !mem::readFast(reinterpret_cast<uintptr_t>(ti) + 0x28, id) || !mem::readFast(classInfo + 0x28, range, sizeof(range)))
         return false;
+    const uint16_t first = range[0], last = range[1];
     return static_cast<uint32_t>(id - first) <= static_cast<uint32_t>(last - first);
 }
 
@@ -224,6 +224,7 @@ inline void* engineAlloc(void** arenaMember, uint64_t size, uint64_t align) {
 // Fault-tolerant small write (our own process): used for fields the client thread also touches.
 inline void poke(uintptr_t addr, const void* src, size_t n) {
     SIZE_T w = 0;
+    ++prof::t_writes;
     WriteProcessMemory(GetCurrentProcess(), reinterpret_cast<void*>(addr), src, n, &w);
 }
 template <class T> inline void poke(uintptr_t addr, T v) { poke(addr, &v, sizeof(T)); }

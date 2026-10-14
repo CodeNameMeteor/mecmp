@@ -19,10 +19,16 @@ bool capturePose(net::PlayerState& st, float& keyTime) {
     if (!comp) return false;
     const uintptr_t rec = mem::readOr<uintptr_t>(reinterpret_cast<uintptr_t>(comp) + 0x48);
     if (!rec) return false;
-    const uint64_t stride = mem::readOr<uint64_t>(rec + Rec_Stride);
-    const uint32_t cap = mem::readOr<uint32_t>(rec + Rec_Capacity);
-    const uintptr_t base = mem::readOr<uintptr_t>(rec + Rec_Base);
-    const uint32_t head = mem::readOr<uint32_t>(rec + Rec_Head);
+    // The ring's stride, capacity, base and head in one read.
+    uint8_t ring[Rec_Head + 4 - Rec_Stride];
+    if (!mem::read(rec + Rec_Stride, ring, sizeof(ring))) return false;
+    uint64_t stride = 0;
+    uint32_t cap = 0, head = 0;
+    uintptr_t base = 0;
+    memcpy(&stride, ring, sizeof(stride));
+    memcpy(&cap, ring + (Rec_Capacity - Rec_Stride), sizeof(cap));
+    memcpy(&base, ring + (Rec_Base - Rec_Stride), sizeof(base));
+    memcpy(&head, ring + (Rec_Head - Rec_Stride), sizeof(head));
     if (!base || !cap || stride < 0x30 || (stride - 0x10) % 0x20 != 0) return false;
     const uint32_t n = static_cast<uint32_t>((stride - 0x10) / 0x20);
     if (n == 0 || n > net::kMaxPoseBones) return false;

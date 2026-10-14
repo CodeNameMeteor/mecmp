@@ -11,6 +11,8 @@
 #include <cstring>
 #include <string>
 
+#include "core/prof.h"
+
 namespace mecmp::mem {
 
 inline uintptr_t moduleBase() { return reinterpret_cast<uintptr_t>(GetModuleHandleW(nullptr)); }
@@ -20,11 +22,62 @@ inline uintptr_t rva(uintptr_t va, uintptr_t imageBase = 0x140000000) { return m
 
 inline bool read(uintptr_t addr, void* out, size_t size) {
     if (addr < 0x10000) return false;
+    ++prof::t_reads;
     SIZE_T got = 0;
     return ReadProcessMemory(GetCurrentProcess(), reinterpret_cast<LPCVOID>(addr), out, size, &got) && got == size;
 }
 
 template <class T> inline bool read(uintptr_t addr, T& out) { return read(addr, &out, sizeof(T)); }
+
+// The game image's data sections (vtables, type info, globals): committed, readable and not code,
+// found once with VirtualQuery. They stay mapped for the life of the process, so a read that lies
+// entirely inside one is a plain copy instead of a kernel call.
+struct Range { uintptr_t begin, end; };
+struct DataRanges {
+    Range r[32];
+    int n = 0;
+};
+inline const DataRanges& imageDataRanges() {
+    static const DataRanges ranges = [] {
+        DataRanges d;
+        const uintptr_t base = moduleBase();
+        const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
+        const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(base + static_cast<uintptr_t>(dos->e_lfanew));
+        const uintptr_t end = base + nt->OptionalHeader.SizeOfImage;
+        for (uintptr_t a = base; a < end && d.n < 32;) {
+            MEMORY_BASIC_INFORMATION mbi{};
+            if (!VirtualQuery(reinterpret_cast<LPCVOID>(a), &mbi, sizeof(mbi)) || !mbi.RegionSize) break;
+            const uintptr_t rb = reinterpret_cast<uintptr_t>(mbi.BaseAddress), re = rb + mbi.RegionSize;
+            const DWORD p = mbi.Protect;
+            const bool data = mbi.State == MEM_COMMIT && !(p & (PAGE_GUARD | PAGE_NOACCESS)) &&
+                              (p & (PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY)); // not executable
+            if (data) {
+                if (d.n && d.r[d.n - 1].end == rb) d.r[d.n - 1].end = re < end ? re : end;
+                else d.r[d.n++] = {rb, re < end ? re : end};
+            }
+            a = re;
+        }
+        return d;
+    }();
+    return ranges;
+}
+
+inline bool inImageData(uintptr_t addr, size_t size) {
+    const DataRanges& d = imageDataRanges();
+    for (int i = 0; i < d.n; ++i)
+        if (addr >= d.r[i].begin && addr + size <= d.r[i].end && addr + size >= addr) return true;
+    return false;
+}
+
+// As read(), but a plain copy when the bytes lie in the game image's data (see above).
+inline bool readFast(uintptr_t addr, void* out, size_t size) {
+    if (inImageData(addr, size)) {
+        memcpy(out, reinterpret_cast<const void*>(addr), size);
+        return true;
+    }
+    return read(addr, out, size);
+}
+template <class T> inline bool readFast(uintptr_t addr, T& out) { return readFast(addr, &out, sizeof(T)); }
 
 template <class T> inline T readOr(uintptr_t addr, T fallback = T{}) {
     T v;

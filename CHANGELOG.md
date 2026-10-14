@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### Seeing what players do
+- **A run's clock above the runner.** While a player is in a dash (or a delivery, GridNode, MetaGrid run) or a
+  time trial, their name tag shows it with a running clock: "Dash: The View  12.4". It clears when the run is
+  finished or cancelled. The clock is counted from when the player's game started the run (the countdown
+  may be in it); it is for watching, not a result. Needs the new packet type 10 (a dedicated server must be
+  updated as well).
+- **"typing..." above a player** whose chat box is open.
+
+### Map marker
+- **Go to the marker you placed on the game's map**: tap **T** while the map is open (or hold it for a second
+  in the city), or *Go to my map marker* on the Players tab (`map_marker_key`). The same fade and ground wait
+  as *Go to*; you land on the first surface under the marker (a rooftop). A marker placed before the mod was
+  loaded is only known once it is placed again. Hold **2** within a minute to go back, as after a summon.
+
+### Injector
+- **The injector's window closes by itself** 10 seconds after a successful injection (a key closes it at
+  once). After a failure it still waits for a key, so the error can be read.
+
 ### Finished runs
 - **When someone finishes a dash, everyone sees it**: "Meteor finished the dash The View in 1:23.45
   (new record, 2.10 faster)". Deliveries, GridNodes and the MetaGrid too; billboard hacks are not timed

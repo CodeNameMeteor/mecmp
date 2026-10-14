@@ -89,6 +89,9 @@ struct Remote {
     proto::RecentIds<16> reactSeen; // quick answers already shown
     proto::RecentIds<8> resultSeen; // finished runs already shown
     DWORD resultAt = 0;             // flood limit: one run result per kResultGapMs
+    uint32_t stateFlags = 0;        // the newest STATE's flags (kStateTyping, ...)
+    proto::Activity activity;       // their run now (ACTIVITY), as of activityAt
+    DWORD activityAt = 0;
     DWORD reactBurstAt = 0;         // flood limit
     int reactBurst = 0;
     proto::RecentIds<16> summonSeen;       // summons already handled
@@ -259,6 +262,8 @@ proto::Header header(uint16_t type) {
     return proto::Header{proto::kMagic, proto::kProtocol, type, g_session, ++seq};
 }
 
+std::atomic<bool> g_typing{false};
+
 void sendState() {
     PlayerState s;
     {
@@ -266,6 +271,7 @@ void sendState() {
         if (!g_haveLocal || g_sendTo.empty()) return;
         s = g_local;
     }
+    if (g_typing.load()) s.flags |= kStateTyping;
     static proto::Encoder enc;
     char buf[proto::kMaxPacket];
     sendAll(buf, proto::writeState(buf, header(proto::kTypeState), s, enc));
@@ -523,6 +529,45 @@ void receiveResult(Remote& r, bool own, const char* payload, size_t len) { // ca
     MLOG("run: %s%s", text.c_str(), own ? " (solo test: our own)" : "");
     g_results.push_back(text);
     while (g_results.size() > 8) g_results.pop_front();
+}
+
+// --- What players are doing (ACTIVITY) --------------------------------------------------------------
+constexpr DWORD kActivityForgetMs = 4000; // no ACTIVITY for this long: they are not in a run any more
+struct MyActivity {
+    uint8_t kind = proto::kActivityNone;
+    DWORD started = 0;
+    std::string title;
+    int endSends = 0; // "none" packets still to send after a run ended
+};
+MyActivity g_myActivity; // guarded by g_m
+
+void receiveActivity(Remote& r, const char* payload, size_t len) { // caller holds g_m
+    proto::Activity a;
+    if (!proto::readActivity(payload, len, a)) { ++g_dropped; return; }
+    r.activity = a;
+    r.activityAt = GetTickCount();
+}
+
+// Network thread, every frame: our run, about once a second while in one, then "none" a few times.
+void sendActivity() {
+    static DWORD last = 0;
+    const DWORD now = GetTickCount();
+    proto::Activity a;
+    {
+        std::lock_guard<std::mutex> lock(g_m);
+        MyActivity& m = g_myActivity;
+        const bool active = m.kind != proto::kActivityNone;
+        if (!active && m.endSends <= 0) return;
+        if (now - last < (active ? 1000u : 250u)) return;
+        if (g_sendTo.empty()) return;
+        if (!active) --m.endSends;
+        a.kind = m.kind;
+        a.elapsedMs = active ? now - m.started : 0;
+        a.title = m.title;
+    }
+    last = now;
+    char buf[proto::kMaxPacket];
+    sendAll(buf, proto::writeActivity(buf, header(proto::kTypeActivity), a));
 }
 
 // --- Summon ----------------------------------------------------------------------------------------
@@ -783,6 +828,10 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
         receiveResult(r, own, payload, len);
         return;
     }
+    if (h.type == proto::kTypeActivity) {
+        receiveActivity(r, payload, len);
+        return;
+    }
     if (h.type == proto::kTypeSummon || h.type == proto::kTypeSummonReply) {
         if (h.type == proto::kTypeSummonReply) {
             receiveSummonReply(r, own, payload, len);
@@ -801,6 +850,7 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
     bool full = false;
     if (!proto::readState(payload, len, r.decoder, s, full)) { ++g_dropped; return; }
     if (full) proto::commitBase(r.decoder, s);
+    r.stateFlags = s.flags;
     if (own) { // solo test: the mirror stands a fixed distance away along the world X axis, so it does
                // not turn with the camera and you can walk around it (to check it and its name tag)
         s.pos[0] += g_loopbackOffset;
@@ -981,7 +1031,7 @@ void threadMain() {
         timeval tv{0, 10000};
         if (select(0, &rd, nullptr, nullptr, &tv) > 0) receiveAll();
         const DWORD now = GetTickCount();
-        if (now - lastSend >= 33) { lastSend = now; sendState(); sendPendingChat(); sendPendingBursts(); }
+        if (now - lastSend >= 33) { lastSend = now; sendState(); sendPendingChat(); sendPendingBursts(); sendActivity(); }
         if (now - lastHello >= 1000) { lastHello = now; sendHello(); }
         if (now - lastStats >= 30000) { lastStats = now; MLOG("net: %s", describe().c_str()); }
         if (now - lastHousekeeping >= 1000) {
@@ -1210,6 +1260,22 @@ void sendResult(const proto::Result& result) {
     const size_t n = proto::writeResult(buf, proto::Header{}, r);
     g_outBurst.push_back({proto::kTypeResult, std::vector<char>(buf + sizeof(proto::Header), buf + n), kChatSends});
 }
+
+void setActivity(uint8_t kind, uint32_t startedTick, const std::string& title) {
+    std::lock_guard<std::mutex> lock(g_m);
+    MyActivity& m = g_myActivity;
+    if (kind == proto::kActivityNone) {
+        if (m.kind != proto::kActivityNone) m.endSends = 3;
+        m.kind = kind;
+        return;
+    }
+    m.kind = kind;
+    m.started = startedTick;
+    m.title = title;
+    m.endSends = 0;
+}
+
+void setTyping(bool typing) { g_typing = typing; }
 
 std::vector<std::string> takeResults() {
     std::lock_guard<std::mutex> lock(g_m);
@@ -1463,8 +1529,15 @@ std::vector<RemoteInfo> remotes(uint32_t maxAgeMs) {
     for (const auto& kv : g_remotes) {
         const Remote& r = kv.second;
         if (!r.fill || now - r.lastTick > maxAgeMs) continue;
-        v.push_back({r.id, r.name, r.loopback, now - r.lastTick, r.loss.percent(nowMs()), r.look, r.outfit, r.profile.id,
-                     r.profile.name});
+        RemoteInfo info{r.id, r.name, r.loopback, now - r.lastTick, r.loss.percent(nowMs()), r.look, r.outfit, r.profile.id,
+                         r.profile.name};
+        info.typing = (r.stateFlags & kStateTyping) != 0;
+        if (r.activity.kind != proto::kActivityNone && r.activityAt && now - r.activityAt < kActivityForgetMs) {
+            info.runKind = r.activity.kind;
+            info.runMs = r.activity.elapsedMs + (now - r.activityAt);
+            info.runTitle = r.activity.title;
+        }
+        v.push_back(std::move(info));
     }
     return v;
 }

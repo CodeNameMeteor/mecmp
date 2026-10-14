@@ -31,6 +31,7 @@ bool isOpen() { return g_open.load(); }
 
 void draw() {
     const bool typing = g_open.load();
+    net::setTyping(typing); // the others' name tags show "typing..."
     if (!typing && !config::get()->showChat) return;
     const auto lines = net::chatLines(kShownLines);
     const DWORD now = GetTickCount();

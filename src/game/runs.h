@@ -20,5 +20,6 @@ void onChallengeMarker(void* entity);
 // Each tick on the client / server game thread: registers the listener once that context exists.
 void clientTick();
 void serverTick();
+void levelChanged(); // the run we were in (shown on the others' name tags) ends
 
 } // namespace mecmp::game::runs

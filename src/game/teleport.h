@@ -21,6 +21,9 @@ bool requestToPos(const float pos[3], float yaw);
 // After requestToPos moved us: how long (ms) requestReturn still takes us back to where we stood
 // (0 = no longer possible: it ran out, the level changed, or the character died / respawned).
 uint32_t returnLeftMs();
+// "Go to the map marker": the same, to the marker placed on the game's map. Its height is the map's,
+// so the ground probe starts high above it and lands on the first surface below (a rooftop).
+bool requestToMapMarker(const float pos[3]);
 bool requestReturn();            // same rules as requestToPos; ignored when returnLeftMs() is 0
 bool busy();
 // 0..1, how black the screen should be now (the overlay draws it over everything).

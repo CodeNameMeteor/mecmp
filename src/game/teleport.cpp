@@ -25,6 +25,10 @@ constexpr DWORD kMaxHoldMs = 8000;
 // over the target (the character's own capsule, a ceiling) are skipped by casting again below them.
 constexpr float kProbeUp = 1.0f, kProbeDown = 40.f, kProbeAccept = 0.6f;
 constexpr int kProbeCasts = 3;
+// A map marker's height is the map's, not necessarily a floor's: its probe starts high above it and takes
+// the first surface going down (a rooftop), skipping the character's own capsule where it is held.
+constexpr float kMapProbe = 300.f, kCapsuleBelow = 0.3f, kCapsuleAbove = 2.2f;
+constexpr int kMapProbeCasts = 6;
 constexpr float kFarGround = 2.f;   // ground further below the target than this waits for kHoldMs
 constexpr float kLift = 0.05f;      // set down this much above the ground (the anchor can sit in a thin floor)
 constexpr float kFallMargin = 0.5f; // below the target by this much during the hold: placed again
@@ -44,6 +48,8 @@ std::atomic<uint32_t> g_peer{0};
 // A summoned place (source Fixed), written before the phase leaves Idle so the game thread sees it.
 float g_fixedPos[3] = {0, 0, 0};
 float g_fixedYaw = 0;
+std::atomic<bool> g_mapMarker{false}; // the Fixed place is a map marker (probe from above, face the way we go)
+bool g_probeFromAbove = false;        // game thread: this teleport's ground probe (see kMapProbe)
 // Where a summon took us from (written by the game thread in tick; g_backAt = when, 0 = nothing to go back to).
 LinearTransform g_back{};
 void* g_backCharacter = nullptr;
@@ -98,6 +104,22 @@ bool finite(const float* v, int n) {
 // The height of the ground under `t` (false: nothing there yet, or no ray caster in this build).
 bool groundBelow(const LinearTransform& t, float& ground) {
     if (!raycast::available()) return false;
+    if (g_probeFromAbove) {
+        float from[3] = {t.trans[0], t.trans[1] + kMapProbe, t.trans[2]};
+        const float to[3] = {t.trans[0], t.trans[1] - kMapProbe, t.trans[2]};
+        for (int i = 0; i < kMapProbeCasts; ++i) {
+            raycast::Hit hit;
+            if (!raycast::cast(from, to, hit)) return false;
+            const bool capsule = hit.pos[1] >= t.trans[1] - kCapsuleBelow && hit.pos[1] <= t.trans[1] + kCapsuleAbove;
+            if (!capsule) {
+                ground = hit.pos[1];
+                return true;
+            }
+            from[1] = hit.pos[1] - 0.05f;
+            if (from[1] <= to[1]) return false;
+        }
+        return false;
+    }
     float from[3] = {t.trans[0], t.trans[1] + kProbeUp, t.trans[2]};
     const float to[3] = {t.trans[0], t.trans[1] - kProbeDown, t.trans[2]};
     for (int i = 0; i < kProbeCasts; ++i) {
@@ -125,6 +147,17 @@ bool requestToPos(const float pos[3], float yaw) {
     if (g_phase != Idle || !available() || !finite(pos, 3) || !std::isfinite(yaw)) return false;
     memcpy(g_fixedPos, pos, sizeof(g_fixedPos));
     g_fixedYaw = yaw;
+    g_mapMarker = false;
+    g_source = Fixed;
+    setPhase(FadeOut);
+    return true;
+}
+
+bool requestToMapMarker(const float pos[3]) {
+    if (g_phase != Idle || !available() || !finite(pos, 3)) return false;
+    memcpy(g_fixedPos, pos, sizeof(g_fixedPos));
+    g_fixedYaw = 0;
+    g_mapMarker = true;
     g_source = Fixed;
     setPhase(FadeOut);
     return true;
@@ -209,13 +242,20 @@ void tick() {
             }
             // Where we stood, so that a summon can be undone for a minute (returnLeftMs / requestReturn).
             LinearTransform before{};
-            if (readEntityTransform(player, before)) {
+            const bool haveBefore = readEntityTransform(player, before);
+            if (haveBefore) {
                 g_back = before;
                 g_backCharacter = player;
                 g_backAt = GetTickCount() | 1; // never 0
             }
-            g_target = transformFromYaw(g_fixedPos, g_fixedYaw);
-            MLOG("teleport: to a summoned place %.1f %.1f %.1f", g_fixedPos[0], g_fixedPos[1], g_fixedPos[2]);
+            float yaw = g_fixedYaw;
+            if (g_mapMarker.load() && haveBefore) { // face the way we travelled
+                const float dx = g_fixedPos[0] - before.trans[0], dz = g_fixedPos[2] - before.trans[2];
+                if (dx * dx + dz * dz > 1.f) yaw = std::atan2(dx, dz);
+            }
+            g_target = transformFromYaw(g_fixedPos, yaw);
+            MLOG("teleport: to %s %.1f %.1f %.1f", g_mapMarker.load() ? "the map marker at" : "a summoned place",
+                 g_fixedPos[0], g_fixedPos[1], g_fixedPos[2]);
         } else { // Back
             if (!g_backAt.load() || player != g_backCharacter) {
                 MLOG("teleport: nothing to go back to (the character changed); cancelled");
@@ -227,6 +267,7 @@ void tick() {
             g_backAt = 0;
             MLOG("teleport: back to where the summon took us from");
         }
+        g_probeFromAbove = source == Fixed && g_mapMarker.load();
         g_retries = 0;
         g_character = player;
         g_haveFrom = source != Back && readEntityTransform(player, g_from);

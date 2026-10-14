@@ -3,6 +3,7 @@
 #include "core/log.h"
 #include "core/prof.h"
 #include "game/players_map.h"
+#include "game/map_marker.h"
 #include "game/runs.h"
 #include "game/engine.h"
 #include "game/ghosts.h"
@@ -72,6 +73,7 @@ std::atomic<bool> g_updaterHooked{false};
 
 void updateAllHook(void* self, void* info) {
     runs::clientTick(); // cheap once registered
+    map_marker::clientTick();
     ghosts::beforeClientReplayUpdate();
     g_origUpdateAll(self, info);
 }

@@ -525,6 +525,32 @@ bool readResult(const char* payload, size_t n, Result& out) {
     return true;
 }
 
+size_t writeActivity(char* buf, const Header& h, const Activity& a) {
+    char* p = buf;
+    put(p, h);
+    put(p, a.kind);
+    put(p, a.elapsedMs);
+    const std::string t = a.kind == kActivityNone ? std::string() : cleanResultTitle(a.title);
+    put(p, static_cast<uint8_t>(t.size()));
+    memcpy(p, t.data(), t.size());
+    p += t.size();
+    return static_cast<size_t>(p - buf);
+}
+
+bool readActivity(const char* payload, size_t n, Activity& out) {
+    const char* p = payload;
+    const char* end = payload + n;
+    Activity a;
+    uint8_t len = 0;
+    if (!get(p, end, a.kind) || !get(p, end, a.elapsedMs) || !get(p, end, len) || len > kMaxResultTitleBytes ||
+        static_cast<size_t>(end - p) < len)
+        return false;
+    if (a.elapsedMs > 24u * 3600 * 1000) return false; // a day: not a run
+    a.title = cleanResultTitle(std::string(p, len));
+    out = a;
+    return true;
+}
+
 const char* runKindName(uint8_t kind) {
     switch (kind) {
     case kRunDash: return "Dash";

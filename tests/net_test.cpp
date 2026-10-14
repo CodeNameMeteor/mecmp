@@ -726,8 +726,32 @@ static void testResult() {
     CHECK(protocol::knownType(protocol::kTypeResult));
 }
 
+static void testActivity() {
+    char buf[protocol::kMaxPacket];
+    protocol::Header h{};
+    protocol::Activity a;
+    a.kind = protocol::kRunDash;
+    a.elapsedMs = 12345;
+    a.title = "The View\n";
+    const size_t n = protocol::writeActivity(buf, h, a);
+    protocol::Activity got;
+    CHECK(protocol::readActivity(buf + sizeof(h), n - sizeof(h), got));
+    CHECK(got.kind == protocol::kRunDash && got.elapsedMs == 12345 && got.title == "The View");
+    CHECK(!protocol::readActivity(buf + sizeof(h), n - sizeof(h) - 2, got)); // cut short
+    protocol::Activity none; // the run ended: no title is sent
+    none.title = "ignored";
+    const size_t nn = protocol::writeActivity(buf, h, none);
+    CHECK(protocol::readActivity(buf + sizeof(h), nn - sizeof(h), got));
+    CHECK(got.kind == protocol::kActivityNone && got.title.empty());
+    a.elapsedMs = 25u * 3600 * 1000; // more than a day: not a run
+    const size_t nb = protocol::writeActivity(buf, h, a);
+    CHECK(!protocol::readActivity(buf + sizeof(h), nb - sizeof(h), got));
+    CHECK(protocol::knownType(protocol::kTypeActivity));
+}
+
 int main() {
     testResult();
+    testActivity();
     testKnownTypes();
     testInfoAnswerName();
     testRecentIds();

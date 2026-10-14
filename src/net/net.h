@@ -15,11 +15,14 @@ namespace mecmp::net {
 namespace protocol { struct Result; } // net/protocol.h
 
 constexpr uint32_t kMaxPoseBones = 32;
+// PlayerState::flags (STATE packet).
+constexpr uint32_t kStateInLevel = 1;
+constexpr uint32_t kStateTyping = 2; // the chat box is open (older versions ignore it)
 
 struct PlayerState {
     float pos[3] = {0, 0, 0};
     float yaw = 0;      // radians, atan2(forward.x, forward.z)
-    uint32_t flags = 0; // bit0: in a level
+    uint32_t flags = 0; // kState... bits
     uint32_t timeMs = 0; // sender's clock when this state was captured (receivers replay on it)
     // Body pose in the replay player's format: per bone {translation x,y,z,w; rotation x,y,z,w}.
     // Bone order = the recorder's, which maps 1:1 onto a ghost's replay pose. 0 = no pose.
@@ -37,6 +40,10 @@ struct RemoteInfo {
     uint8_t outfit = 0;     // with look 0: what they changed about Faith's outfit (protocol::kWear... bits)
     uint64_t onlineId = 0;  // their EA online id, if they share it (for the game's map markers); 0 = not shared
     std::string profileName; // their EA profile name, with onlineId
+    bool typing = false;    // their chat box is open
+    uint8_t runKind = 0xff; // the run they are in (protocol::ResultKind); 0xff = none (protocol::kActivityNone)
+    uint32_t runMs = 0;     // how long that run has been going, counted on to now
+    std::string runTitle;   // its name
 };
 
 // join: empty = host; otherwise a join code or ip:port of the host. Calling it again switches
@@ -107,6 +114,11 @@ std::vector<ReactionInfo> takeReactions();
 // texts ("Meteor finished the dash The View in 1:23.45"). Any thread.
 void sendResult(const protocol::Result& result);
 std::vector<std::string> takeResults();
+// The run we are in now (ACTIVITY, protocol.h): kind = protocol::ResultKind, startedTick = GetTickCount when it
+// started; kind protocol::kActivityNone = none (sent a few times so the others' name tags clear). Any thread.
+void setActivity(uint8_t kind, uint32_t startedTick, const std::string& title);
+// Our chat box is open: a flag in our STATE packets, shown by the others' name tags. Any thread.
+void setTyping(bool typing);
 
 // Summon ("come to me"; packets in protocol.h, rules in net/summon_policy.h). Any thread.
 // Calls the players whose session ids are in `targets` (empty = everyone heard from) to `pos`/`yaw`.

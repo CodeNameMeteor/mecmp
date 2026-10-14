@@ -56,6 +56,9 @@
   `--mirror` still mirrors you, with any build.
 
 ### Fixes
+- **The server starts with `--config` pointing at a file that does not exist yet** (the systemd setup in
+  docs/SERVER.md does that): it writes the commented default there, as it does without `--config`. Before, it
+  stopped at once with "cannot read".
 - **The overlay follows the game window's size again, and has a size setting.** The font was sized once,
   from the window as it was when the overlay started. The game starts in a 1280x720 window and then goes
   full screen, so on a 1440p or 4K screen the menu, markers and the wheel stayed at 720p size (the wheel

@@ -72,6 +72,7 @@ add_library(mecmp SHARED
   src/ui/markers.cpp
   src/ui/glyph.cpp
   src/ui/radial.cpp
+  src/ui/summon.cpp
   third_party/imgui/imgui.cpp
   third_party/imgui/imgui_draw.cpp
   third_party/imgui/imgui_tables.cpp

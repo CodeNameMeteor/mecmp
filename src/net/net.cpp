@@ -661,6 +661,18 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
         g_heardFromHost = true;
         MLOG("net: connected to the host %s", addrToString(from).c_str());
     }
+#if !MECMP_DEBUG_KEYS
+    // The solo test (our own packets coming back as a mirrored ghost) is a developer tool: release
+    // builds ignore their own packets, so joining yourself shows nobody.
+    if (own) {
+        static bool told = false;
+        if (!told) {
+            told = true;
+            MLOG("net: these are our own packets (joined yourself); the solo test is only in developer builds");
+        }
+        return;
+    }
+#endif
     auto found = g_remotes.find(h.session);
     if (found == g_remotes.end()) {
         if (g_remotes.size() >= kMaxRemotes) {

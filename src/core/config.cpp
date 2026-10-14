@@ -35,14 +35,16 @@ constexpr const char* kDefaultIni =
     "; HOST: leave join empty. The mod opens the port on your router (UPnP) and writes your\r\n"
     ";       join code to the log and to join_code.txt (the menu's Copy button copies it).\r\n"
     "; JOIN: paste the host's join code, e.g. join=8H3KQ-ZT1V4 (or the host's ip:port).\r\n"
-    "; solo test: join=127.0.0.1:47800 (a ghost mirrors you)\r\n"
+#if MECMP_DEBUG_KEYS
+    "; solo test (developer builds): join=127.0.0.1:47800 (a ghost mirrors you)\r\n"
+#endif
     "join=\r\n"
     "; 1 = start that session (host, or join= above) as soon as the game starts; 0 = stay offline until\r\n"
     ";     you host or join in the menu (nothing is opened on your router until then)\r\n"
     "auto_start=0\r\n"
     "; the menu's server list: dedicated servers' addresses, comma separated (the menu edits it)\r\n"
     "servers=\r\n"
-    "; solo test only: how far the mirrored ghost stands from you, along the world X axis (metres)\r\n"
+    "; solo test (developer builds) only: how far the mirrored ghost stands from you, along world X (metres)\r\n"
     "loopback_offset=3.0\r\n"
     "; HOST: 1 = members of your session may pull players in with a hard summon (you always may). Players\r\n"
     "; still have to allow it themselves (allow_forced_summon in [player]); otherwise they are only asked.\r\n"

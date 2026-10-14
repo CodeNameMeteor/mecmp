@@ -83,7 +83,8 @@ add_library(mecmp SHARED
 target_include_directories(mecmp PRIVATE src third_party/imgui)
 # Developer hotkeys (F7 spawn/show ghosts, F8 next model, F9 status, F12 hide). Not configurable and
 # not part of release builds: configure release builds with -DMECMP_DEBUG_KEYS=OFF.
-option(MECMP_DEBUG_KEYS "Developer hotkeys F7/F8/F9/F12 (OFF for release builds)" ON)
+# Also the solo test (a ghost that mirrors you) and the F9 perf line.
+option(MECMP_DEBUG_KEYS "Developer build: hotkeys F7/F9/F10/F12, solo test (OFF for release builds)" ON)
 if(MECMP_DEBUG_KEYS)
   target_compile_definitions(mecmp PRIVATE MECMP_DEBUG_KEYS=1)
 endif()

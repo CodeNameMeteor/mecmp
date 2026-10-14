@@ -247,6 +247,15 @@ void noteBansTime() {
     if (!ec) g_bansTime = t;
 }
 
+// Moves `from` over `to` (replacing it).
+bool replaceFile(const std::string& from, const std::string& to) {
+#ifdef _WIN32
+    return MoveFileExA(from.c_str(), to.c_str(), MOVEFILE_REPLACE_EXISTING) != 0;
+#else
+    return std::rename(from.c_str(), to.c_str()) == 0;
+#endif
+}
+
 // Keeps the comments of existing lines; adds `note` to a new one.
 void writeBans(const std::set<uint32_t>& ips, uint32_t added, const std::string& note) {
     if (g_opts.bansPath.empty()) return;
@@ -268,9 +277,21 @@ void writeBans(const std::set<uint32_t>& ips, uint32_t added, const std::string&
         std::strftime(date, sizeof(date), "%Y-%m-%d", std::localtime(&now));
         kept.push_back(mecmp::server::ipToString(added) + "  # " + note + " " + date);
     }
-    std::ofstream out(g_opts.bansPath, std::ios::trunc);
-    for (const auto& l : kept) out << l << '\n';
-    out.close();
+    // Written beside the file and then moved over it: a failed write leaves the old list as it was.
+    const std::string tmp = g_opts.bansPath + ".tmp";
+    {
+        std::ofstream out(tmp, std::ios::trunc);
+        for (const auto& l : kept) out << l << '\n';
+        out.close();
+        if (out.fail()) {
+            logLine("cannot write " + tmp + "; the bans are not saved");
+            return;
+        }
+    }
+    if (!replaceFile(tmp, g_opts.bansPath)) {
+        logLine("cannot replace " + g_opts.bansPath + "; the bans are not saved (the new list is in " + tmp + ")");
+        return;
+    }
     noteBansTime();
 }
 
@@ -309,12 +330,15 @@ void runCommand(const std::string& cmd, mecmp::server::Relay& relay) {
             logLine(line);
         }
     } else if (verb == "kick") {
-        if (!relay.kick(arg, nowMs())) logLine("no player '" + arg + "' (use the id or name from 'list')");
+        if (relay.matchPlayers(arg) > 1) logLine("several players are called '" + arg + "': kick them by id (see list)");
+        else if (!relay.kick(arg, nowMs())) logLine("no player '" + arg + "' (use the id or name from 'list')");
     } else if (verb == "ban") {
-        std::string name;
-        for (const auto& m : relay.members())
-            if (m.name == arg) name = m.name;
-        if (const uint32_t ip = relay.ban(arg)) writeBans(relay.bans(), ip, name.empty() ? std::string("banned") : "'" + name + "'");
+        size_t i = 0;
+        const size_t n = relay.matchPlayers(arg, &i);
+        // Read before the ban removes the player from the list.
+        const std::string name = n == 1 ? relay.members()[i].name : std::string();
+        if (n > 1) logLine("several players are called '" + arg + "': ban them by id (see list)");
+        else if (const uint32_t ip = relay.ban(arg)) writeBans(relay.bans(), ip, name.empty() ? std::string("banned") : "'" + name + "'");
         else logLine("no player or IP address '" + arg + "' (use the id or name from 'list', or an IP)");
     } else if (verb == "unban") {
         if (relay.unban(arg)) writeBans(relay.bans(), 0, "");

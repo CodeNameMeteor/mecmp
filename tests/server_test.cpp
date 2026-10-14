@@ -315,6 +315,20 @@ static int chatsTo(const Harness& t, const Addr& a, std::string* last = nullptr)
     return n;
 }
 
+static void testSharedNames() {
+    // Two players with the same name: kick and ban refuse the name (it would hit one of them at random);
+    // the id still works.
+    Harness t;
+    auto hA = hello(1, "dup"), hB = hello(2, "dup");
+    t.relay.onPacket(A, hA.data(), hA.size(), 0);
+    t.relay.onPacket(B, hB.data(), hB.size(), 0);
+    CHECK(t.relay.matchPlayers("dup") == 2);
+    CHECK(!t.relay.kick("dup", 100) && t.relay.members().size() == 2);
+    CHECK(t.relay.ban("dup") == 0 && t.relay.bans().empty());
+    CHECK(t.relay.kick("00000002", 100) && t.relay.members().size() == 1);
+    CHECK(t.relay.members()[0].addr == A);
+}
+
 static void testBans() {
     Harness t;
     auto hA = hello(1, "alice"), hB = hello(2, "bob");
@@ -419,6 +433,7 @@ static void testInfo() {
 int main() {
     testInfo();
     testBans();
+    testSharedNames();
     testFullNoticeAndPerIp();
     testMotd();
     testMirror();

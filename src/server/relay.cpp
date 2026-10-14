@@ -277,16 +277,23 @@ void Relay::tick(uint32_t nowMs) {
     while (!chat_.empty() && chat_.front().left <= 0) chat_.pop_front();
 }
 
-bool Relay::kick(const std::string& who, uint32_t nowMs) {
-    for (size_t i = 0; i < members_.size(); ++i) {
-        const Member& m = members_[i];
-        if (hex(m.session) == who || m.name == who) {
-            blocks_.push_back({m.addr.ip, m.addr.port, nowMs + cfg_.kickBlockMs});
-            drop(i, "kicked");
-            return true;
+size_t Relay::matchPlayers(const std::string& who, size_t* first) const {
+    size_t n = 0;
+    for (size_t i = 0; i < members_.size(); ++i)
+        if (hex(members_[i].session) == who || members_[i].name == who) {
+            if (n == 0 && first) *first = i;
+            ++n;
         }
-    }
-    return false;
+    return n;
+}
+
+bool Relay::kick(const std::string& who, uint32_t nowMs) {
+    size_t i = 0;
+    if (matchPlayers(who, &i) != 1) return false; // nobody, or a name several players share
+    const Member& m = members_[i];
+    blocks_.push_back({m.addr.ip, m.addr.port, nowMs + cfg_.kickBlockMs});
+    drop(i, "kicked");
+    return true;
 }
 
 void Relay::say(const std::string& raw) {
@@ -299,8 +306,9 @@ void Relay::say(const std::string& raw) {
 uint32_t Relay::ban(const std::string& who) {
     uint32_t ip = 0;
     if (!parseIp(who, ip)) {
-        for (const auto& m : members_)
-            if (hex(m.session) == who || m.name == who) ip = m.addr.ip;
+        size_t i = 0;
+        if (matchPlayers(who, &i) != 1) return 0; // nobody, or a name several players share
+        ip = members_[i].addr.ip;
     }
     if (!ip) return 0;
     std::set<uint32_t> next = bans_;

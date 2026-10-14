@@ -47,8 +47,8 @@ Console commands (type them in the server's window):
 | Command | |
 |---|---|
 | `list` | players: id, name, address, time connected, packets |
-| `kick <id or name>` | removes a player; their address is refused for 60 s |
-| `ban <id, name or IP>` | removes the player and refuses their IP address from now on (saved in bans.txt) |
+| `kick <id or name>` | removes a player; their address is refused for 60 s. A name several players share is refused: use the id |
+| `ban <id, name or IP>` | removes the player and refuses their IP address from now on (saved in bans.txt). A name several players share is refused: use the id |
 | `unban <IP>` | lifts a ban |
 | `bans` | lists banned addresses |
 | `say <text>` | a chat message from the server |

@@ -79,6 +79,9 @@ public:
     void tick(uint32_t nowMs);
 
     // Console. `who` is a session id (hex, as `list` shows it) or a player name.
+    // How many players `who` matches, and the first of them in `*first`. Names can repeat: a name that
+    // matches several players is refused by kick and ban, and the id has to be used.
+    size_t matchPlayers(const std::string& who, size_t* first = nullptr) const;
     bool kick(const std::string& who, uint32_t nowMs);
     void say(const std::string& text); // chat from the server (sent 3 times, like a player's)
     // Bans are by IP address. `who`: a player's id or name (their address is banned) or an IP. Players

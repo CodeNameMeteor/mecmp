@@ -19,6 +19,7 @@ namespace proto = protocol;
 constexpr DWORD kAskEveryMs = 5000;
 constexpr DWORD kAnswerKeepMs = 15000;
 constexpr DWORD kResolveEveryMs = 60000;
+constexpr DWORD kRetryMs = 30000; // a name that did not resolve is looked up again after this long
 
 std::mutex g_m;
 std::vector<std::string> g_wanted; // guarded by g_m
@@ -32,6 +33,8 @@ struct Probe {
     sockaddr_in addr{};
     bool resolved = false;
     DWORD resolvedAt = 0;
+    bool tried = false; // a lookup has been made (resolved or not)
+    DWORD triedAt = 0;
     uint32_t seq = 0;
     DWORD sentAt = 0, answeredAt = 0;
 };
@@ -86,9 +89,14 @@ void threadMain() {
         if (g_refresh.exchange(false) || !askedAt || now - askedAt >= kAskEveryMs) {
             askedAt = now;
             for (auto& p : probes) {
-                if (!p.resolved || now - p.resolvedAt > kResolveEveryMs) {
+                // A lookup can block this thread for seconds, so a name that fails is not looked up at every ask:
+                // the other servers' answers would wait behind it.
+                const bool due = !p.tried || (p.resolved ? now - p.resolvedAt > kResolveEveryMs : now - p.triedAt >= kRetryMs);
+                if (due) {
+                    p.tried = true;
+                    p.triedAt = GetTickCount();
                     p.resolved = resolve(p.address, p.addr);
-                    p.resolvedAt = GetTickCount();
+                    p.resolvedAt = p.triedAt;
                 }
                 if (!p.resolved) continue;
                 char buf[proto::kInfoRequestSize];

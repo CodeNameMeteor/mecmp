@@ -163,9 +163,16 @@ bool peerLogAllowed() {
     return true;
 }
 
+// The log names other players by address, which is personal: without verbose logging only the first two
+// numbers are written (verbose logs are for bug reports, which need the whole address).
 std::string addrToString(const sockaddr_in& a) {
     char ip[64] = {};
-    inet_ntop(AF_INET, &a.sin_addr, ip, sizeof(ip));
+    if (log::verbose) {
+        inet_ntop(AF_INET, &a.sin_addr, ip, sizeof(ip));
+    } else {
+        const unsigned char* b = reinterpret_cast<const unsigned char*>(&a.sin_addr);
+        snprintf(ip, sizeof(ip), "%u.%u.x.x", b[0], b[1]);
+    }
     return std::string(ip) + ":" + std::to_string(ntohs(a.sin_port));
 }
 

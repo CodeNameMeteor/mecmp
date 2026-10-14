@@ -39,7 +39,17 @@ using AssignSlotFn = void* (*)(void* manager, const OnlineId* id, const float* p
 
 std::atomic<const char*> g_status{"not seen yet"};
 
-bool ours(uint64_t id) { return (id & 0xffffffff00000000ull) == kIdTag; }
+// The local player's own online id (OnlineId at *0x14257cc68 + 0x30, what the game publishes its own
+// position under). Test: the solo-test mirror uses it, so the marker can show a real Runner Tag.
+constexpr uintptr_t kOwnPresence = 0x14257cc68;
+uint64_t g_ownId = 0;
+
+bool ownOnlineId(OnlineId& out) {
+    const uintptr_t p = mem::readOr<uintptr_t>(rva(kOwnPresence));
+    return p && mem::read(p + 0x30, &out, sizeof(out)) && out.id != 0;
+}
+
+bool ours(uint64_t id) { return (id & 0xffffffff00000000ull) == kIdTag || (g_ownId && id == g_ownId); }
 
 void hideSlot(uintptr_t slot) {
     const uint8_t no = 0;
@@ -74,7 +84,7 @@ void updateManager(uintptr_t mgr, const std::vector<net::RemoteInfo>& players, b
         const uint64_t id = slotId(i);
         if (!ours(id)) continue;
         bool present = false;
-        for (const auto& p : players) present = present || (kIdTag | p.id) == id;
+        for (const auto& p : players) present = present || (kIdTag | p.id) == id || (p.loopback && g_ownId == id);
         if (!enabled || !present) hideSlot(range[0] + i * Slot_Size);
     }
     if (!enabled) return;
@@ -83,7 +93,13 @@ void updateManager(uintptr_t mgr, const std::vector<net::RemoteInfo>& players, b
     for (const auto& p : players) {
         uint32_t age = 0;
         if (!net::remoteState(p.id, st, age) || age >= kShowAfterMs || !(st.flags & 1)) continue;
-        const uint64_t id = kIdTag | p.id;
+        OnlineId own{};
+        const bool useOwn = p.loopback && ownOnlineId(own);
+        if (useOwn && own.id != g_ownId) {
+            g_ownId = own.id;
+            MLOG("map: solo test: the mirror's marker uses your own online id (so it can show your Runner Tag)");
+        }
+        const uint64_t id = useOwn ? own.id : (kIdTag | p.id);
         uintptr_t slot = 0;
         for (size_t i = 0; i < count && !slot; ++i)
             if (slotId(i) == id) slot = range[0] + i * Slot_Size;
@@ -91,12 +107,28 @@ void updateManager(uintptr_t mgr, const std::vector<net::RemoteInfo>& players, b
         if (!slot) {
             // A slot of its own: the game spawns the marker prefab for it the first time.
             OnlineId oid{};
-            oid.id = id;
-            snprintf(oid.name, sizeof(oid.name), "%s", p.name.empty() ? "Runner" : p.name.c_str());
+            if (useOwn) oid = own;
+            else {
+                oid.id = id;
+                snprintf(oid.name, sizeof(oid.name), "%s", p.name.empty() ? "Runner" : p.name.c_str());
+            }
             auto assign = reinterpret_cast<AssignSlotFn>(rva(Fn_PresenceInfoManager_assignSlot));
             slot = reinterpret_cast<uintptr_t>(assign(reinterpret_cast<void*>(mgr), &oid, pos, kPriority));
             if (!slot) continue; // every slot holds someone of a higher or equal priority
-            MLOG("map: player %08x ('%s') is on the map", p.id, oid.name);
+            const uintptr_t inst = mem::readOr<uintptr_t>(slot + 0x40), handle = mem::readOr<uintptr_t>(slot + 0x48);
+            MLOG("map: player %08x ('%s') is on the map (marker prefab %p, presence entity handle %p)", p.id, oid.name,
+                 reinterpret_cast<void*>(inst), reinterpret_cast<void*>(handle));
+        }
+        static DWORD lastLog = 0;
+        if (GetTickCount() - lastLog > 5000) { // diagnostics: what the game copied into the marker
+            lastLog = GetTickCount();
+            const uintptr_t h = mem::readOr<uintptr_t>(slot + 0x48);
+            const uintptr_t ent = h ? mem::readOr<uintptr_t>(h) : 0;
+            const uintptr_t data = ent > 0x10000 ? mem::readOr<uintptr_t>(ent + 0x28) : 0;
+            uint64_t shownId = data ? mem::readOr<uint64_t>(data + 0x10) : 0;
+            MLOG("map: slot of %08x: pos (%.1f, %.1f, %.1f), shown %u; presence entity %p, its id %s ours",
+                 p.id, pos[0], pos[1], pos[2], mem::readOr<uint8_t>(slot), reinterpret_cast<void*>(ent),
+                 shownId == id ? "matches" : "does not match");
         }
         mem::write(slot + Slot_Pos, pos, sizeof(pos));
         const uint8_t yes = 1;

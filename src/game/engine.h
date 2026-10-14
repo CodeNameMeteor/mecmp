@@ -21,6 +21,12 @@ using mem::rva;
 // passes the controller at UISystem+0x8c8; its pause requests are the ints at +0x08 / +0x0c.
 constexpr uintptr_t Slot_PamUISystemUpdate = 0x141cb64f0;
 constexpr uintptr_t Fn_PamUISystemUpdate = 0x143b16c50;
+// Friend markers on the map (game/players_map.h): the PresenceInfo manager pool's update slot, the
+// manager's vtable and its assignSlot(manager, OnlineId*, Vec4* pos, priority) -> slot*.
+constexpr uintptr_t Slot_PresenceInfoManagerPoolUpdate = 0x141c74bc8;
+constexpr uintptr_t Fn_PresenceInfoManagerPoolUpdate = 0x143a4bb30;
+constexpr uintptr_t Vtbl_PamClientPresenceInfoManagerEntity = 0x141c74be8;
+constexpr uintptr_t Fn_PresenceInfoManager_assignSlot = 0x143a405e0;
 constexpr size_t UISystem_PauseController = 0x8c8;
 constexpr uintptr_t kTypeInfoListHead = 0x14215d028;
 constexpr uintptr_t kServerGameWorld = 0x1425469e0; // ServerGameWorld* (null between levels)

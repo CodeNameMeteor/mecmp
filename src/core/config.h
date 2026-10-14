@@ -121,6 +121,7 @@ struct Settings {
     bool mumbleLink = true;               // positional voice through Mumble's Link plugin
     bool showNotices = true;              // "<name> joined / left / placed a marker" at the top of the screen
     bool showChat = true;                 // chat messages bottom-left
+    bool playersOnMap = true;             // the session's players on the game's map (as its friend markers)
     std::string chatKey = "ENTER";        // opens the chat line: a letter, ENTER, or a menu key name
     // [debug]
     bool verbose = false;

@@ -509,6 +509,9 @@ void lookSection() {
         ImGui::SetTooltip("Short messages at the top of the screen when someone joins, leaves or places a marker");
     bool showChat = config::get()->showChat;
     if (ImGui::Checkbox("Chat", &showChat)) config::change([showChat](config::Settings& c) { c.showChat = showChat; });
+    bool onMap = config::get()->playersOnMap;
+    if (ImGui::Checkbox("Players on the map", &onMap)) config::change([onMap](config::Settings& c) { c.playersOnMap = onMap; });
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Shows the session's players on the game's map, as it shows friends.");
     ImGui::SameLine();
     ImGui::TextDisabled("(%s to type)", config::get()->chatKey.c_str());
     bool mumble = config::get()->mumbleLink;

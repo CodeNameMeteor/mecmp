@@ -112,6 +112,8 @@ constexpr const char* kDefaultIniTail =
     "; 1 = show chat messages; chat_key opens the chat line (a letter A..Z, ENTER, or INSERT/F1../...)\r\n"
     "show_chat=1\r\n"
     "chat_key=ENTER\r\n"
+    "; 1 = the session's players are shown on the game's map (as friends are)\r\n"
+    "players_on_map=1\r\n"
     "; markers: a short press of ping_key places one where you stand, holding it opens the marker wheel\r\n"
     "; (a letter A..Z, ENTER, or INSERT/F1../...; empty = no key). ping_pad = gamepad buttons for the same\r\n"
     "; (as menu_pad; empty = none). Both can be changed in the menu.\r\n"
@@ -332,6 +334,7 @@ void load(const std::wstring& dir) {
     s.mumbleLink = readInt(ini, L"voice", L"mumble_link", 1) != 0;
     s.showNotices = readInt(ini, L"ui", L"show_notices", 1) != 0;
     s.showChat = readInt(ini, L"ui", L"show_chat", 1) != 0;
+    s.playersOnMap = readInt(ini, L"ui", L"players_on_map", 1) != 0;
     s.chatKey = readString(ini, L"ui", L"chat_key", "ENTER");
     s.pingKey = readString(ini, L"ui", L"ping_key", "V");
     s.pingPad = readString(ini, L"ui", L"ping_pad", "");
@@ -490,6 +493,7 @@ void applyPending() {
     put(L"voice", L"mumble_link", snapshot->mumbleLink ? "1" : "0");
     put(L"ui", L"show_notices", snapshot->showNotices ? "1" : "0");
     put(L"ui", L"show_chat", snapshot->showChat ? "1" : "0");
+    put(L"ui", L"players_on_map", snapshot->playersOnMap ? "1" : "0");
     put(L"ui", L"chat_key", snapshot->chatKey);
     put(L"ui", L"ping_key", snapshot->pingKey);
     put(L"ui", L"ping_pad", snapshot->pingPad);

@@ -2,6 +2,7 @@
 
 #include "core/log.h"
 #include "core/prof.h"
+#include "game/players_map.h"
 #include "game/engine.h"
 #include "game/ghosts.h"
 #include "game/level.h"
@@ -180,6 +181,33 @@ void installUIPauseHook(std::vector<Patch>& undo) {
     VLOG("hook UI pause: installed");
 }
 
+// The friend markers' manager pool: our players get slots just before the game copies the slots into the
+// markers (game/players_map.h). Optional: without it there are no players on the map.
+using PoolUpdateFn = void (*)(void* pool, void* updateInfo);
+PoolUpdateFn g_origPresencePoolUpdate = nullptr;
+
+void presencePoolUpdate(void* pool, void* updateInfo) {
+    players_map::beforeManagerUpdate(pool);
+    g_origPresencePoolUpdate(pool, updateInfo);
+}
+
+void installPlayersMapHook(std::vector<Patch>& undo) {
+    const uintptr_t slot = rva(Slot_PresenceInfoManagerPoolUpdate);
+    uintptr_t current = 0;
+    if (!mem::read(slot, current) || current != rva(Fn_PresenceInfoManagerPoolUpdate)) {
+        MLOG("hook map markers: slot holds %p, expected %p; players are not shown on the map",
+             reinterpret_cast<void*>(current), reinterpret_cast<void*>(rva(Fn_PresenceInfoManagerPoolUpdate)));
+        return;
+    }
+    g_origPresencePoolUpdate = reinterpret_cast<PoolUpdateFn>(current);
+    if (!mem::patchPointer(slot, reinterpret_cast<uintptr_t>(&presencePoolUpdate), nullptr)) {
+        MLOG("hook map markers: VirtualProtect failed (%lu)", GetLastError());
+        return;
+    }
+    undo.push_back({slot, current});
+    VLOG("hook map markers: installed");
+}
+
 void postUpdate(void* world, void* updateInfo) {
     g_origPostUpdate(world, updateInfo);
     if (world == reinterpret_cast<void*>(level::serverWorld())) {
@@ -217,6 +245,7 @@ bool install(TickFn onTick, Installed* out) {
     installFactory(kCustomize, Slot_CustomizeProjectionFactory, Fn_CustomizeProjectionCreate, &customizeFactory, undo);
     got.ghostClients = replay && chars;
     installUIPauseHook(undo);
+    installPlayersMapHook(undo);
     // The tick hook goes in last: nothing reaches the mod's code before every other hook is in, and
     // if it fails, the factory hooks above are taken out again.
     if (!mem::patchPointer(slot, reinterpret_cast<uintptr_t>(&postUpdate), nullptr)) {

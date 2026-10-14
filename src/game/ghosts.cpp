@@ -562,13 +562,8 @@ void beforeClientReplayUpdate() {
 }
 
 void renderFrame() {
-    // Both of the game's client replay updaters run every frame, and each calls this first: one pose
-    // write per frame is enough (the second call would write the same moment again).
-    static std::atomic<uint64_t> lastAt{0};
-    static const uint64_t minGap = [] { LARGE_INTEGER f; QueryPerformanceFrequency(&f); return static_cast<uint64_t>(f.QuadPart / 1000); }();
-    const uint64_t t = prof::now();
-    if (t - lastAt.load(std::memory_order_relaxed) < minGap) return; // within 1 ms: the same frame
-    lastAt.store(t, std::memory_order_relaxed);
+    // Both of the game's client replay updaters run every frame and each calls this first. Writing before
+    // both keeps the ghost smooth (skipping the second was visibly less smooth), and a write costs ~15 us.
     prof::Scope scope(prof::RenderPose);
     if (!level::serverWorld() || level::inFrontEnd()) return; // no ghosts outside a playable level
     struct Target { uint32_t peer; void* comp; void* ch; };

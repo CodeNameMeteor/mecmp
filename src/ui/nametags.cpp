@@ -75,13 +75,13 @@ void draw() {
         dl->AddText(font, size, at, text, name.c_str());
         // Above the name: the run they are in, with its clock, and "typing..." while their chat box is open.
         float top = at.y - size * 0.35f;
-        const float small = size * 0.85f;
+        const float lineSize = size * 0.85f; // not "small": <windows.h> defines that as char
         if (r.runKind != net::protocol::kActivityNone)
-            top = tagLine(dl, font, small, sx, top, runLine(r).c_str(), IM_COL32(255, 210, 60, static_cast<int>(255 * alpha)), alpha);
+            top = tagLine(dl, font, lineSize, sx, top, runLine(r).c_str(), IM_COL32(255, 210, 60, static_cast<int>(255 * alpha)), alpha);
         if (r.typing) {
             static const char* const kDots[] = {"typing", "typing.", "typing..", "typing..."};
             const char* t = kDots[(GetTickCount() / 350) % 4];
-            tagLine(dl, font, small, sx, top, t, IM_COL32(180, 220, 255, static_cast<int>(230 * alpha)), alpha);
+            tagLine(dl, font, lineSize, sx, top, t, IM_COL32(180, 220, 255, static_cast<int>(230 * alpha)), alpha);
         }
     }
 }

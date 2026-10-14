@@ -1196,8 +1196,8 @@ void cancelSummon() {
     proto::Summon s;
     s.id = g_mySummon.id; // the summon withdrawn
     s.flags = proto::kSummonCancel;
+    // The cooldown stays: receivers would drop a new call this soon anyway (summon::kMinGapMs).
     g_mySummon.open = false;
-    g_lastSummonSent = 0; // withdrawing frees the cooldown: a mistaken call can be redone at once
     char buf[proto::kMaxPacket];
     const size_t n = proto::writeSummon(buf, proto::Header{}, s);
     g_outBurst.push_back({proto::kTypeSummon, std::vector<char>(buf + sizeof(proto::Header), buf + n), kChatSends});

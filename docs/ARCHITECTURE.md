@@ -222,7 +222,10 @@ one). Both use the one state machine, so only one teleport runs at a time.
 Packets: SUMMON (type 7: id, place, yaw, flags hard / vouched / cancel, optional list of called session
 ids; none = everyone) and SUMMON_REPLY (type 8: summon id, caller, result). Both are sent 3 times like
 PING and deduplicated by id; only the called players act on a SUMMON and only the caller shows a reply.
-The call stays open 60 s for its receivers and the caller collects answers for 65 s.
+The call stays open 60 s for its receivers and the caller collects answers for 65 s. A receiver already
+within 5 m of the place is not asked: it answers "teleporting" at once (it is there). One player may
+start a call every 10 s (withdrawing does not shorten that), and a receiver drops a second call from the
+same player within 5 s.
 
 Hard is the part that takes control of a player, so it is checked three times:
 1. **A player-host's relay** (`net.cpp::handlePacket`, `protocol::applyHostPolicy`) replaces the vouched
@@ -234,7 +237,8 @@ Hard is the part that takes control of a player, so it is checked three times:
    dedicated server (which forwards bytes unchanged, so a vouch means nothing) nobody is trusted, and
    until the host's HELLO is heard nobody is either.
 3. **The countdown** (`hard_summon_grace_ms`, 5 s): a visible panel, cancelable with the decline key;
-   it waits while a menu is up.
+   it does not end while the game cannot take the player's input (a menu or the chat is open, the
+   marker wheel is held, the game is not in front).
 The host announces `members_may_hard_summon` in its HELLO (flag 4, cleared from forwarded copies) so a
 member's menu can say whether holding the key will pull anyone in.
 

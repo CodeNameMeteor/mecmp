@@ -511,7 +511,38 @@ static void testDiscordFormatting() {
     off.post("ignored");
 }
 
+// A finished run: forwarded to the others, reported once (it arrives 3 times), at most one per 10 s each.
+static void testResultEvents() {
+    Harness t;
+    std::vector<server::Event> ev;
+    t.relay.setOnEvent([&ev](const server::Event& e) { if (e.kind == server::Event::Result) ev.push_back(e); });
+    auto hA = hello(1, "alice"), hB = hello(2, "bob");
+    t.relay.onPacket(A, hA.data(), hA.size(), 0);
+    t.relay.onPacket(B, hB.data(), hB.size(), 0);
+    char buf[proto::kMaxPacket];
+    proto::Result r;
+    r.id = 5;
+    r.kind = proto::kRunDash;
+    r.value = 61000;
+    r.title = "Nomad's Run";
+    const proto::Header h{proto::kMagic, proto::kProtocol, proto::kTypeResult, 1, 3};
+    size_t n = proto::writeResult(buf, h, r);
+    t.sent.clear();
+    for (int i = 0; i < 3; ++i) t.relay.onPacket(A, buf, n, 100 + static_cast<uint32_t>(i) * 33);
+    CHECK(t.sentTo(B) == 3); // forwarded like any packet
+    CHECK(ev.size() == 1 && ev[0].name == "alice" && ev[0].result.value == 61000 && ev[0].result.title == "Nomad's Run");
+    r.id = 6;
+    n = proto::writeResult(buf, h, r);
+    t.relay.onPacket(A, buf, n, 2000); // another run 2 s later: flooding, not reported
+    CHECK(ev.size() == 1);
+    r.id = 7;
+    n = proto::writeResult(buf, h, r);
+    t.relay.onPacket(A, buf, n, 12000);
+    CHECK(ev.size() == 2);
+}
+
 int main() {
+    testResultEvents();
     testEvents();
     testDiscordFormatting();
     testInfo();

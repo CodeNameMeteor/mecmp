@@ -27,6 +27,9 @@ constexpr uintptr_t Slot_PresenceInfoManagerPoolUpdate = 0x141c74bc8;
 constexpr uintptr_t Fn_PresenceInfoManagerPoolUpdate = 0x143a4bb30;
 constexpr uintptr_t Vtbl_PamClientPresenceInfoManagerEntity = 0x141c74be8;
 constexpr uintptr_t Fn_PresenceInfoManager_assignSlot = 0x143a405e0;
+// PamServerNamedChallengeEntity (dashes and other named challenges; game/runs.h): creator slot -> thunk.
+constexpr uintptr_t Slot_ServerNamedChallengeCreator = 0x141c7ee00;
+constexpr uintptr_t Fn_ServerNamedChallengeCreator = 0x143a834b0;
 constexpr uintptr_t Slot_PresenceInfoManagerCreator = 0x141c74cb8; // creator vtable slot -> the create thunk
 constexpr uintptr_t Fn_PresenceInfoManagerCreator = 0x143a41850;
 constexpr size_t UISystem_PauseController = 0x8c8;

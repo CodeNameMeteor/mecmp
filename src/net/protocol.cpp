@@ -1,6 +1,8 @@
 #include "net/protocol.h"
 
 #include <cmath>
+#include <cctype>
+#include <cstdio>
 #include <cstring>
 #include <string>
 
@@ -480,6 +482,89 @@ void commitBase(Decoder& dec, const PlayerState& s) {
     for (uint32_t i = 0; i < s.boneCount; ++i)
         for (int j = 0; j < 3; ++j) dec.baseT[i][j] = s.bones[i][j];
     dec.baseCount = s.boneCount;
+}
+
+
+// --- RESULT ------------------------------------------------------------------------------------------
+
+namespace {
+std::string cleanResultTitle(const std::string& raw) {
+    const std::string t = cleanChatText(raw);
+    return t.substr(0, utf8PrefixLength(t, kMaxResultTitleBytes));
+}
+} // namespace
+
+size_t writeResult(char* buf, const Header& h, const Result& r) {
+    char* p = buf;
+    put(p, h);
+    put(p, r.id);
+    put(p, r.contentId);
+    put(p, r.kind);
+    put(p, r.flags);
+    put(p, r.value);
+    put(p, r.delta);
+    const std::string t = cleanResultTitle(r.title);
+    put(p, static_cast<uint8_t>(t.size()));
+    memcpy(p, t.data(), t.size());
+    p += t.size();
+    return static_cast<size_t>(p - buf);
+}
+
+bool readResult(const char* payload, size_t n, Result& out) {
+    const char* p = payload;
+    const char* end = payload + n;
+    Result r;
+    uint8_t len = 0;
+    if (!get(p, end, r.id) || !get(p, end, r.contentId) || !get(p, end, r.kind) || !get(p, end, r.flags) ||
+        !get(p, end, r.value) || !get(p, end, r.delta) || !get(p, end, len) || len > kMaxResultTitleBytes ||
+        static_cast<size_t>(end - p) < len)
+        return false;
+    if (r.value < 0 || r.value > 24LL * 3600 * 1000) return false; // a day: not a run time
+    r.title = cleanResultTitle(std::string(p, len));
+    out = r;
+    return true;
+}
+
+const char* runKindName(uint8_t kind) {
+    switch (kind) {
+    case kRunDash: return "Dash";
+    case kRunTimeTrial: return "Time trial";
+    case kRunDelivery: return "Delivery";
+    case kRunGridNode: return "GridNode";
+    case kRunBillboard: return "Billboard hack";
+    case kRunMetaGrid: return "MetaGrid";
+    case kRunAssault: return "Assault";
+    default: return "Run";
+    }
+}
+
+std::string formatRunTime(int64_t ms) {
+    if (ms < 0) ms = 0;
+    const int64_t cs = (ms + 5) / 10; // hundredths
+    const int64_t h = cs / 360000, m = (cs / 6000) % 60, s = (cs / 100) % 60, c = cs % 100;
+    char buf[32];
+    if (h) snprintf(buf, sizeof(buf), "%lld:%02lld:%02lld.%02lld", static_cast<long long>(h), static_cast<long long>(m),
+                    static_cast<long long>(s), static_cast<long long>(c));
+    else if (m) snprintf(buf, sizeof(buf), "%lld:%02lld.%02lld", static_cast<long long>(m), static_cast<long long>(s),
+                         static_cast<long long>(c));
+    else snprintf(buf, sizeof(buf), "%lld.%02lld", static_cast<long long>(s), static_cast<long long>(c));
+    return buf;
+}
+
+std::string resultText(const std::string& player, const Result& r) {
+    std::string kind = runKindName(r.kind);
+    for (auto& c : kind) c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
+    if (kind == "gridnode") kind = "GridNode";
+    else if (kind == "metagrid") kind = "MetaGrid";
+    std::string s = (player.empty() ? std::string("Runner") : player) + " finished the " + kind;
+    if (!r.title.empty()) s += " " + r.title;
+    s += " in " + formatRunTime(r.value);
+    if (r.flags & kResultNewRecord) {
+        s += " (new record";
+        if ((r.flags & kResultHadRecord) && r.delta > 0) s += ", " + formatRunTime(r.delta) + " faster";
+        s += ")";
+    }
+    return s;
 }
 
 } // namespace mecmp::net::protocol

@@ -68,6 +68,10 @@ void draw() {
             push(re.from + " reacted \"" + re.text + "\" to your " +
                  (re.title.empty() ? std::string("marker") : "\"" + re.title + "\" marker"));
 
+    // Others' finished runs: "Foie finished the dash The View in 1:23.45 (new record)".
+    for (const auto& text : net::takeResults())
+        if (on) push(text);
+
     const DWORD t = GetTickCount();
     while (!g_notices.empty() && t - g_notices.front().at >= kShowMs) g_notices.pop_front();
     if (g_notices.empty() || !on || overlayHidden()) return;

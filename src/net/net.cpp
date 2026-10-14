@@ -87,6 +87,8 @@ struct Remote {
     DWORD pingBurstAt = 0; // flood limit
     int pingBurst = 0;
     proto::RecentIds<16> reactSeen; // quick answers already shown
+    proto::RecentIds<8> resultSeen; // finished runs already shown
+    DWORD resultAt = 0;             // flood limit: one run result per kResultGapMs
     DWORD reactBurstAt = 0;         // flood limit
     int reactBurst = 0;
     proto::RecentIds<16> summonSeen;       // summons already handled
@@ -506,6 +508,23 @@ void receiveReact(Remote& r, bool own, const char* payload, size_t len) { // cal
     while (g_reactions.size() > 16) g_reactions.pop_front();
 }
 
+// --- Finished runs (RESULT) ------------------------------------------------------------------------
+constexpr DWORD kResultGapMs = 3000; // a run takes longer than this: more often is someone flooding
+std::deque<std::string> g_results;   // notices about others' finished runs, not yet shown; guarded by g_m
+
+void receiveResult(Remote& r, bool own, const char* payload, size_t len) { // caller holds g_m
+    proto::Result re;
+    if (!proto::readResult(payload, len, re)) { ++g_dropped; return; }
+    if (!r.resultSeen.add(re.id)) return; // a repeat
+    const DWORD now = GetTickCount();
+    if (r.resultAt && now - r.resultAt < kResultGapMs) return;
+    r.resultAt = now;
+    const std::string text = proto::resultText(r.name, re);
+    MLOG("run: %s%s", text.c_str(), own ? " (solo test: our own)" : "");
+    g_results.push_back(text);
+    while (g_results.size() > 8) g_results.pop_front();
+}
+
 // --- Summon ----------------------------------------------------------------------------------------
 constexpr int kSummonBurst = 6; // at most this many summons / withdrawals from one player per kChatBurstMs
 std::deque<SummonInfo> g_summons; // summons to show, not yet taken; guarded by g_m
@@ -757,6 +776,10 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
     }
     if (h.type == proto::kTypeReact) {
         receiveReact(r, own, payload, len);
+        return;
+    }
+    if (h.type == proto::kTypeResult) {
+        receiveResult(r, own, payload, len);
         return;
     }
     if (h.type == proto::kTypeSummon || h.type == proto::kTypeSummonReply) {
@@ -1151,6 +1174,23 @@ void sendReact(uint32_t target, uint8_t cell, const std::string& markerTitle, co
     char buf[proto::kMaxPacket];
     const size_t n = proto::writeReact(buf, proto::Header{}, re);
     g_outBurst.push_back({proto::kTypeReact, std::vector<char>(buf + sizeof(proto::Header), buf + n), kChatSends});
+}
+
+void sendResult(const proto::Result& result) {
+    std::lock_guard<std::mutex> lock(g_m);
+    if (!g_run) return;
+    proto::Result r = result;
+    r.id = nextBurstId();
+    char buf[proto::kMaxPacket];
+    const size_t n = proto::writeResult(buf, proto::Header{}, r);
+    g_outBurst.push_back({proto::kTypeResult, std::vector<char>(buf + sizeof(proto::Header), buf + n), kChatSends});
+}
+
+std::vector<std::string> takeResults() {
+    std::lock_guard<std::mutex> lock(g_m);
+    std::vector<std::string> out(g_results.begin(), g_results.end());
+    g_results.clear();
+    return out;
 }
 
 std::vector<ReactionInfo> takeReactions() {

@@ -232,6 +232,20 @@ static void testChat() {
     CHECK(!protocol::readChat(bad, 6, id, text));
 }
 
+static void testInfoAnswerName() {
+    // A server's name is shown like a player's: control characters and outer spaces are dropped.
+    char payload[4 + protocol::kNameLen] = {};
+    payload[0] = 1;
+    payload[1] = 3;  // players
+    payload[2] = 16; // maximum
+    const char* raw = " Srv\x1b[2J\x07 name ";
+    memcpy(payload + 4, raw, strlen(raw));
+    protocol::ServerInfo info;
+    CHECK(protocol::readInfoAnswer(payload, sizeof(payload), info));
+    CHECK(info.name == "Srv[2J name");
+    CHECK(info.players == 3 && info.maxPlayers == 16);
+}
+
 static void testKnownTypes() {
     CHECK(protocol::knownType(protocol::kTypeState) && protocol::knownType(protocol::kTypeHello));
     CHECK(protocol::knownType(protocol::kTypeChat) && protocol::knownType(protocol::kTypePing));
@@ -452,6 +466,7 @@ static void testRgb() {
 
 int main() {
     testKnownTypes();
+    testInfoAnswerName();
     testRecentIds();
     testPing();
     testPingLabel();

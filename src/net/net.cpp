@@ -472,7 +472,7 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
     // Only the packet types we know may create state or be forwarded to other players.
     if (!proto::knownType(h.type)) { ++g_dropped; return; }
     const bool own = h.session == g_session;
-    std::lock_guard<std::mutex> lock(g_m);
+    std::unique_lock<std::mutex> lock(g_m);
     if (g_role == Role::Host) {
         // Nothing of ours comes back to the host, so a packet that claims our session id is forged.
         if (own) { ++g_dropped; return; }
@@ -495,9 +495,14 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
             relay[sizeof(h) + proto::kHelloFlagsOffset] = static_cast<char>(relay[sizeof(h) + proto::kHelloFlagsOffset] & ~proto::kHelloHost);
             out = relay;
         }
-        for (const auto& m : g_members)
-            if (!sameAddr(m.addr, from))
-                if (sendto(g_sock, out, n, 0, reinterpret_cast<const sockaddr*>(&m.addr), sizeof(m.addr)) == n) ++g_relayed;
+        // The sends run without g_m: the socket does not block, and only this thread changes the member list.
+        std::vector<sockaddr_in> to;
+        for (const auto& other : g_members)
+            if (!sameAddr(other.addr, from)) to.push_back(other.addr);
+        lock.unlock();
+        for (const auto& a : to)
+            if (sendto(g_sock, out, n, 0, reinterpret_cast<const sockaddr*>(&a), sizeof(a)) == n) ++g_relayed;
+        lock.lock();
     }
     // Joining: the host answered. A solo test joins itself, so its own packets coming back count too.
     if (g_role == Role::Join && sameAddr(from, g_hostAddr) && !g_heardFromHost) {
@@ -729,8 +734,12 @@ void hostSetup(uint32_t generation) {
     if (!lan.empty()) MLOG("net: join code for players on your own network: %s", lan.c_str());
 }
 
+// Packets read per pass. The rest stay in the socket for the next pass, so a flood cannot keep the
+// network thread busy and starve its other work (sends, timeouts, the router lease).
+constexpr int kMaxReadsPerPass = 256;
+
 void receiveAll() {
-    for (;;) {
+    for (int reads = 0; reads < kMaxReadsPerPass; ++reads) {
         char buf[proto::kMaxPacket + 64];
         sockaddr_in from{};
         int fromLen = sizeof(from);

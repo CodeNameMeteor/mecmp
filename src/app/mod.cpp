@@ -131,6 +131,13 @@ void monitorLoop() {
         if (world != lastWorld) {
             if (world) MLOG("level started: %s", game::level::levelName().c_str());
             else MLOG("level ended");
+            // No level (the main menu after leaving one has none): no server tick will notice, so forget
+            // the old level's ghosts here. Their client objects are gone, and the memory is reused, e.g.
+            // by the main menu's "Your Echo" preview, which must not get our poses.
+            if (!world) {
+                game::ghosts::levelChanged();
+                game::teleport::levelChanged();
+            }
             if (lastWorld) game::level::reset(); // spawners of the old level are stale
             lastWorld = world;
             levelSince = GetTickCount();

@@ -506,6 +506,7 @@ void beforeClientReplayUpdate() {
 }
 
 void renderFrame() {
+    if (!level::serverWorld() || level::inFrontEnd()) return; // no ghosts outside a playable level
     struct Target { uint32_t peer; void* comp; void* ch; };
     Target targets[kMaxGhosts];
     size_t n = 0;

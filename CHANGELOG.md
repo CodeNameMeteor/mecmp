@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Finished runs
+- **When someone finishes a dash, everyone sees it**: "Meteor finished the dash The View in 1:23.45
+  (new record, 2.10 faster)". Deliveries, GridNodes and the MetaGrid too; billboard hacks are not timed
+  and are not announced. The time is what the player's own game reports.
+
+### Discord
+- **A live "who's online" message in Discord**: one message, edited as players join and leave, with the
+  player list and the address to join; "offline" when the server stops (`webhook_live`).
+- **Servers can post to Discord.** Set `webhook_url` in `mecmp_server.ini` and the server posts when it
+  goes online (with the address to join) or offline, and when players join and leave, with the player
+  count, and finished runs with their times (`webhook_results`). Posts are batched and rate-limit aware;
+  names cannot ping anyone. See docs/SERVER.md.
+
 ### Players on the map
 - **The session's players show on the game's map**, the way the game showed online friends: a marker
   with their Runner Tag that follows them, with their profile name on hover. It uses the game's own
@@ -27,6 +40,10 @@
   `--mirror` still mirrors you, with any build.
 
 ### Fixes
+- **Joining works with a server on the same PC.** A mecmp_server (or a second game) on this PC holds
+  UDP 47800, so the mod could not start at all ("cannot use UDP port 47800"). A joiner now uses any free
+  port when its own is taken; hosting still needs the configured port, and the message now says what
+  is using it and how to change it.
 - **Teleports land on the floor.** *Go to*, a summon and *go back* used to drop the player through
   thin floors or into a city that had not streamed in yet. The screen now stays black while a ray looks
   for the ground under the target; the player is held there, set down on the ground it finds and put

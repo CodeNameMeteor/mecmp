@@ -77,7 +77,10 @@ void Relay::drop(size_t index, const char* why) {
     const Member& m = members_[index];
     log_("player " + hex(m.session) + " '" + m.name + "' (" + toString(m.addr) + ") left: " + why + "; " +
          std::to_string(members_.size() - 1) + " connected");
+    Event e{Event::Left, m.name, members_.size() - 1, {}};
+    const bool tell = m.announced; // a player who never said its name was never announced either
     members_.erase(members_.begin() + static_cast<long>(index));
+    if (tell && onEvent_) onEvent_(e);
 }
 
 void Relay::onPacket(const Addr& from, const char* buf, size_t n, uint32_t nowMs) {
@@ -170,6 +173,7 @@ void Relay::onPacket(const Addr& from, const char* buf, size_t n, uint32_t nowMs
             m->name = name;
             log_("player " + hex(m->session) + " '" + name + "' joined from " + toString(from) + "; " +
                  std::to_string(members_.size()) + " connected");
+            if (onEvent_) onEvent_(Event{Event::Joined, name, members_.size(), {}});
             if (!cfg_.motd.empty()) queueChat(cfg_.motd, &from);
         } else if (name != m->name) {
             log_("player " + hex(m->session) + " '" + m->name + "' is now called '" + name + "'");
@@ -181,6 +185,22 @@ void Relay::onPacket(const Addr& from, const char* buf, size_t n, uint32_t nowMs
                 static_cast<char>(copy[sizeof(h) + proto::kHelloFlagsOffset] &
                                   ~(proto::kHelloHost | proto::kHelloServer | proto::kHelloMembersHard));
             out = copy;
+        }
+    } else if (h.type == proto::kTypeResult) {
+        // A finished run: forwarded like any packet; reported once (it arrives up to 3 times).
+        proto::Result r;
+        if (!proto::readResult(payload, len, r)) { ++stats_.dropped; return; }
+        bool seen = false;
+        for (uint32_t x : resultSeen_) seen = seen || (x == (r.id ^ m->session));
+        constexpr uint32_t kResultGapMs = 10000; // a run is longer than this; more often is flooding
+        if (!seen && m->announced && (!m->resultAt || nowMs - m->resultAt >= kResultGapMs)) {
+            m->resultAt = nowMs ? nowMs : 1;
+            resultSeen_[resultSeenNext_++ % 32] = r.id ^ m->session;
+            log_("run: " + proto::resultText(m->name, r));
+            if (onEvent_) {
+                Event e{Event::Result, m->name, members_.size(), r};
+                onEvent_(e);
+            }
         }
     } else if (h.type == proto::kTypeChat && cfg_.logChat) {
         uint32_t id = 0;

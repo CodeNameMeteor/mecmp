@@ -22,7 +22,7 @@ jobs:
       - name: Dedicated server tests (Linux, sanitizers)
         run: |
           g++ -std=c++17 -Wall -Wextra -Isrc -fsanitize=address,undefined -fno-sanitize-recover=undefined -g \
-            tests/server_test.cpp src/server/relay.cpp src/net/protocol.cpp -o server_test
+            tests/server_test.cpp src/server/relay.cpp src/server/discord.cpp src/net/protocol.cpp -ldl -pthread -o server_test
           ./server_test
       - name: Host send-limit tests (Linux, sanitizers)
         run: |

@@ -62,13 +62,13 @@ void open(HMODULE self) {
     // 1) next to mecmp.dll (works when injected from a dev folder),
     // 2) next to the game exe, 3) %LOCALAPPDATA%\MECMP (always writable).
     wchar_t dir[MAX_PATH];
-    if (moduleDir(self, dir) && (g_file = tryOpen(dir))) { g_path = dir; return; }
-    if (moduleDir(nullptr, dir) && (g_file = tryOpen(dir))) { g_path = dir; return; }
+    if (moduleDir(self, dir) && (g_file = tryOpen(dir)) != nullptr) { g_path = dir; return; }
+    if (moduleDir(nullptr, dir) && (g_file = tryOpen(dir)) != nullptr) { g_path = dir; return; }
     DWORD n = GetEnvironmentVariableW(L"LOCALAPPDATA", dir, MAX_PATH - 16);
     if (n > 0 && n < MAX_PATH - 16) {
         lstrcatW(dir, L"\\MECMP\\");
         CreateDirectoryW(dir, nullptr);
-        if ((g_file = tryOpen(dir))) g_path = dir;
+        if ((g_file = tryOpen(dir)) != nullptr) g_path = dir;
     }
 }
 

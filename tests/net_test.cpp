@@ -692,7 +692,42 @@ static void testRgb() {
     CHECK(rgb[0] == 0 && rgb[1] == 0xff && rgb[2] == 0x7f); // left alone when refused
 }
 
+static void testResult() {
+    char buf[protocol::kMaxPacket];
+    protocol::Header h{};
+    protocol::Result r;
+    r.id = 77;
+    r.contentId = 0x36c85a80;
+    r.kind = protocol::kRunDash;
+    r.flags = protocol::kResultNewRecord | protocol::kResultHadRecord;
+    r.value = 83456; // 1:23.456
+    r.delta = 2104;
+    r.title = "The View\n";
+    const size_t n = protocol::writeResult(buf, h, r);
+    protocol::Result got;
+    CHECK(protocol::readResult(buf + sizeof(h), n - sizeof(h), got));
+    CHECK(got.id == 77 && got.contentId == 0x36c85a80 && got.kind == protocol::kRunDash && got.value == 83456 &&
+          got.delta == 2104 && got.title == "The View"); // cleaned like chat
+    CHECK(!protocol::readResult(buf + sizeof(h), n - sizeof(h) - 3, got)); // cut short
+    CHECK(protocol::formatRunTime(83456) == "1:23.46");
+    CHECK(protocol::formatRunTime(12070) == "12.07");
+    CHECK(protocol::formatRunTime(3723400) == "1:02:03.40");
+    CHECK(protocol::formatRunTime(-5) == "0.00");
+    CHECK(protocol::resultText("Meteor", got) == "Meteor finished the dash The View in 1:23.46 (new record, 2.10 faster)");
+    got.flags = 0;
+    got.title.clear();
+    got.kind = protocol::kRunGridNode;
+    CHECK(protocol::resultText("", got) == "Runner finished a GridNode in 1:23.46");
+    got.kind = protocol::kRunTimeTrial;
+    CHECK(protocol::resultText("Foie", got) == "Foie finished a time trial in 1:23.46");
+    r.value = -1; // a negative time is not a run
+    const size_t nb = protocol::writeResult(buf, h, r);
+    CHECK(!protocol::readResult(buf + sizeof(h), nb - sizeof(h), got));
+    CHECK(protocol::knownType(protocol::kTypeResult));
+}
+
 int main() {
+    testResult();
     testKnownTypes();
     testInfoAnswerName();
     testRecentIds();

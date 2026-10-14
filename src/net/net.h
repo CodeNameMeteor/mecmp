@@ -12,6 +12,7 @@
 #include <vector>
 
 namespace mecmp::net {
+namespace protocol { struct Result; } // net/protocol.h
 
 constexpr uint32_t kMaxPoseBones = 32;
 
@@ -101,6 +102,11 @@ struct ReactionInfo {
     std::string title; // our marker's title, as they saw it; may be empty
 };
 std::vector<ReactionInfo> takeReactions();
+
+// Finished runs (RESULT, protocol.h). Ours goes to everyone (id assigned here); others' arrive as notice
+// texts ("Meteor finished the dash The View in 1:23.45"). Any thread.
+void sendResult(const protocol::Result& result);
+std::vector<std::string> takeResults();
 
 // Summon ("come to me"; packets in protocol.h, rules in net/summon_policy.h). Any thread.
 // Calls the players whose session ids are in `targets` (empty = everyone heard from) to `pos`/`yaw`.

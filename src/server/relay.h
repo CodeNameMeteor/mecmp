@@ -21,6 +21,8 @@
 #include <string>
 #include <vector>
 
+#include "net/protocol.h"
+
 namespace mecmp::server {
 
 struct Addr {
@@ -61,6 +63,15 @@ struct Member {
     uint32_t refillAt = 0;
     uint64_t packets = 0, dropped = 0;
     bool announced = false; // its join was logged with a name
+    uint32_t resultAt = 0;  // when its last finished run was reported (at most one per kResultGapMs)
+};
+
+// Something the server's outside world may want to know (the Discord webhook).
+struct Event {
+    enum Kind { Joined, Left, Result } kind = Joined;
+    std::string name;   // the player's name
+    size_t players = 0; // players connected
+    net::protocol::Result result; // Result: the finished run, as the player's game reported it
 };
 
 struct Stats {
@@ -71,6 +82,7 @@ class Relay {
 public:
     using Send = std::function<void(const Addr& to, const char* data, size_t len)>;
     using Log = std::function<void(const std::string& line)>;
+    using OnEvent = std::function<void(const Event&)>;
 
     Relay(Config cfg, uint32_t serverSession, Send send, Log log);
 
@@ -91,6 +103,7 @@ public:
     const std::set<uint32_t>& bans() const { return bans_; }
     void setBans(std::set<uint32_t> ips); // e.g. bans.txt (re)loaded; drops players now banned
 
+    void setOnEvent(OnEvent f) { onEvent_ = std::move(f); }
     const std::vector<Member>& members() const { return members_; }
     const Stats& stats() const { return stats_; }
     const Config& config() const { return cfg_; }
@@ -112,6 +125,7 @@ private:
     uint32_t seq_ = 0;
     Send send_;
     Log log_;
+    OnEvent onEvent_;
     std::vector<Member> members_;
     Stats stats_;
     uint32_t helloAt_ = 0;
@@ -123,6 +137,8 @@ private:
     uint32_t chatId_;
     uint32_t chatSeen_[32] = {};
     size_t chatSeenNext_ = 0;
+    uint32_t resultSeen_[32] = {}; // RESULT ids (xor the sender's session) already reported
+    size_t resultSeenNext_ = 0;
     uint32_t fullWarnAt_ = 0;
     bool fullWarned_ = false;
     std::set<uint32_t> bans_;

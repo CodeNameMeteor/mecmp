@@ -3,6 +3,7 @@
 #include "core/log.h"
 #include "core/prof.h"
 #include "game/players_map.h"
+#include "game/runs.h"
 #include "game/engine.h"
 #include "game/ghosts.h"
 #include "game/level.h"
@@ -16,11 +17,12 @@ namespace mecmp::game::hooks {
 namespace {
 
 using FactoryFn = void* (*)(void* creator, void* ci, void* a3, void* a4);
-enum Factory { kSpawner, kPamSpawner, kClientReplay, kClientCharacter, kCustomize, kPresenceManager, kFactoryCount };
+enum Factory { kSpawner, kPamSpawner, kClientReplay, kClientCharacter, kCustomize, kPresenceManager, kNamedChallenge, kChallengeMarker, kFactoryCount };
 FactoryFn g_orig[kFactoryCount] = {};
 const char* const kNames[kFactoryCount] = {"ServerCharacterSpawnEntity", "PamServerCharacterSpawnEntity",
                                            "PamClientReplayPlayerComponent", "PamClientCharacterEntity",
-                                           "PamServerCustomizeProjectionCharacterEntity"};
+                                           "PamServerCustomizeProjectionCharacterEntity", "PamClientPresenceInfoManagerEntity",
+                                           "PamServerNamedChallengeEntity", "PamServerChallengeMarkerEntity"};
 
 void* spawnerFactory(void* creator, void* ci, void* a3, void* a4) {
     void* e = g_orig[kSpawner](creator, ci, a3, a4);
@@ -34,6 +36,20 @@ void* customizeFactory(void* creator, void* ci, void* a3, void* a4) {
     models::onCustomizeEntity(e);
     return e;
 }
+// Named challenges (dashes, ...): their data names a finished run (game/runs.h).
+void* namedChallengeFactory(void* creator, void* ci, void* a3, void* a4) {
+    void* e = g_orig[kNamedChallenge](creator, ci, a3, a4);
+    runs::onNamedChallengeEntity(e);
+    return e;
+}
+
+// Time-trial markers: their name names a finished time trial (game/runs.h).
+void* challengeMarkerFactory(void* creator, void* ci, void* a3, void* a4) {
+    void* e = g_orig[kChallengeMarker](creator, ci, a3, a4);
+    runs::onChallengeMarker(e);
+    return e;
+}
+
 // The friend-marker manager (game/players_map.h): only logged, to see whether a level has one.
 void* presenceManagerFactory(void* creator, void* ci, void* a3, void* a4) {
     void* e = g_orig[kPresenceManager](creator, ci, a3, a4);
@@ -55,6 +71,7 @@ UpdateAllFn g_origUpdateAll = nullptr;
 std::atomic<bool> g_updaterHooked{false};
 
 void updateAllHook(void* self, void* info) {
+    runs::clientTick(); // cheap once registered
     ghosts::beforeClientReplayUpdate();
     g_origUpdateAll(self, info);
 }
@@ -254,6 +271,9 @@ bool install(TickFn onTick, Installed* out) {
     installUIPauseHook(undo);
     installPlayersMapHook(undo);
     installFactory(kPresenceManager, Slot_PresenceInfoManagerCreator, Fn_PresenceInfoManagerCreator, &presenceManagerFactory, undo);
+    // Optional: without it a finished run is announced without its name.
+    installFactory(kNamedChallenge, Slot_ServerNamedChallengeCreator, Fn_ServerNamedChallengeCreator, &namedChallengeFactory, undo);
+    installFactory(kChallengeMarker, Slot_ServerChallengeMarkerCreator, Fn_ServerChallengeMarkerCreator, &challengeMarkerFactory, undo);
     // The tick hook goes in last: nothing reaches the mod's code before every other hook is in, and
     // if it fails, the factory hooks above are taken out again.
     if (!mem::patchPointer(slot, reinterpret_cast<uintptr_t>(&postUpdate), nullptr)) {

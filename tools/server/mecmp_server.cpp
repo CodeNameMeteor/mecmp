@@ -42,6 +42,7 @@
 
 #include "net/protocol.h"
 #include "net/joincode.h"
+#include "server/discord.h"
 #include "server/relay.h"
 
 namespace {
@@ -88,6 +89,8 @@ std::string trim(std::string s) {
 
 struct Options {
     uint16_t port = 47800;
+    mecmp::server::discord::Config discord;
+    std::string publicAddress; // what the Discord post tells players to join (empty: the address found by STUN)
     std::string logPath = "mecmp_server.log";
     std::string bansPath = "bans.txt";
     mecmp::server::Config relay;
@@ -117,8 +120,52 @@ bool readConfig(const std::string& path, Options& o, bool required) {
         else if (k == "motd") o.relay.motd = v;
         else if (k == "max_per_ip") o.relay.maxPerIp = static_cast<size_t>(std::atoi(v.c_str()));
         else if (k == "bans") o.bansPath = v;
+        else if (k == "webhook_url") o.discord.url = v;
+        else if (k == "webhook_name") o.discord.username = v;
+        else if (k == "webhook_joins") o.discord.joins = v != "0";
+        else if (k == "webhook_status") o.discord.status = v != "0";
+        else if (k == "webhook_results") o.discord.results = v != "0";
+        else if (k == "webhook_live") o.discord.live = v != "0";
+        else if (k == "webhook_status_id_file") o.discord.statusIdFile = v;
+        else if (k == "public_address") o.publicAddress = v;
     }
     return true;
+}
+
+// First run: a commented mecmp_server.ini to fill in (every setting at its default).
+void writeDefaultConfig(const std::string& path) {
+    std::ofstream out(path);
+    if (!out) return;
+    out << "# MECMP dedicated server settings. Lines starting with # or ; are comments; restart the server after\n"
+           "# changing this file. Options on the command line win over these.\n"
+           "name=MECMP server\n"
+           "port=47800\n"
+           "max_players=16\n"
+           "max_per_ip=4\n"
+           "log=mecmp_server.log\n"
+           "log_chat=1\n"
+           "bans=bans.txt\n"
+           "# a chat line each player gets when they join (empty = none)\n"
+           "motd=\n"
+           "\n"
+           "# Discord: Server Settings > Integrations > Webhooks > New Webhook > Copy Webhook URL, paste it here.\n"
+           "# Keep it private: anyone who has it can post to the channel.\n"
+           "webhook_url=\n"
+           "# the name the posts appear under (empty = the server's name)\n"
+           "webhook_name=\n"
+           "# the address the \"online\" post tells players to join, e.g. play.example.com:47800\n"
+           "# (empty = the public address the server finds itself)\n"
+           "public_address=\n"
+           "# 1 = one message that always shows who is online (and where to join), edited as players come\n"
+           "# and go; it is kept across restarts (its id is saved in webhook_status_id_file)\n"
+           "webhook_live=1\n"
+           "webhook_status_id_file=webhook_status_id.txt\n"
+           "# posts: players joining and leaving, server online / offline, finished dashes and time trials\n"
+           "# (0 turns one off)\n"
+           "webhook_joins=1\n"
+           "webhook_status=0\n"
+           "webhook_results=1\n";
+    logLine("wrote " + path + " with the default settings (edit it to name the server or add a Discord webhook)");
 }
 
 void usage() {
@@ -207,6 +254,43 @@ void logAddresses(uint16_t port, uint32_t publicIp, uint16_t publicPort) {
     } else {
         logLine("internet: the public address could not be found (no answer from the STUN server)");
     }
+}
+
+// The Discord post when the server is up: its name and the address to join (public_address, else the one
+// STUN found; none if neither is known).
+std::string g_joinAddress; // what players join with (public_address, else what STUN found); main thread
+
+// The live status message (webhook_live): who is online now, and where to join.
+std::string liveStatus(const Options& o, const mecmp::server::Relay* relay) {
+    namespace dc = mecmp::server::discord;
+    const std::string name = "**" + dc::escapeMarkdown(o.relay.name) + "**";
+    const std::string updated = " <t:" + std::to_string(static_cast<long long>(std::time(nullptr))) + ":R>";
+    if (!relay) return u8"\U0001F534 " + name + " is offline \u00B7 since" + updated;
+    std::vector<std::string> names;
+    for (const auto& m : relay->members())
+        if (m.announced) names.push_back(dc::escapeMarkdown(m.name.empty() ? "Runner" : m.name));
+    std::string s = u8"\U0001F7E2 " + name + " \u2014 " + std::to_string(names.size()) + "/" +
+                    std::to_string(o.relay.maxPlayers) + " online";
+    if (!names.empty()) {
+        s += ": ";
+        for (size_t i = 0; i < names.size(); ++i) s += (i ? ", " : "") + names[i];
+    }
+    if (!g_joinAddress.empty()) s += u8"\nJoin: `" + g_joinAddress + u8"` (MECMP menu \u2192 Join)";
+    s += "\n-# updated" + updated;
+    return s;
+}
+
+void announceOnline(mecmp::server::discord::Webhook& hook, const Options& o, uint32_t publicIp,
+                    const mecmp::server::Relay& relay) {
+    std::string where = o.publicAddress;
+    if (where.empty() && publicIp) where = ipString(publicIp) + ":" + std::to_string(o.port);
+    g_joinAddress = where;
+    if (!hook.enabled()) return;
+    hook.setStatus(liveStatus(o, &relay));
+    if (!hook.config().status) return;
+    namespace dc = mecmp::server::discord;
+    hook.post(u8"\U0001F7E2 **" + dc::escapeMarkdown(o.relay.name) + "** is online" +
+              (where.empty() ? std::string() : u8" \u2014 join with `" + where + u8"` (MECMP menu \u2192 Join)"));
 }
 
 // Console input on its own thread (blocking reads); commands are run by the main loop.
@@ -368,6 +452,7 @@ int main(int argc, char** argv) {
     bool configGiven = false;
     for (int i = 1; i < argc; ++i)
         if (std::string(argv[i]) == "--config" && i + 1 < argc) { configPath = argv[i + 1]; configGiven = true; }
+    if (!configGiven && !std::filesystem::exists(configPath)) writeDefaultConfig(configPath);
     if (!readConfig(configPath, o, configGiven)) return 1;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -420,6 +505,46 @@ int main(int argc, char** argv) {
         },
         logLine);
 
+    // Discord (optional): joins and leaves as they happen; the "online" post once the address is known.
+    namespace dc = mecmp::server::discord;
+    dc::Config discordCfg = o.discord;
+    if (discordCfg.username.empty()) discordCfg.username = o.relay.name;
+    if (!discordCfg.statusIdFile.empty() && discordCfg.statusIdFile.find_first_of("/\\") == std::string::npos &&
+        !o.logPath.empty()) {
+        // next to the log (the server's folder), like bans.txt
+        const auto dir = std::filesystem::path(o.logPath).parent_path();
+        if (!dir.empty()) discordCfg.statusIdFile = (dir / discordCfg.statusIdFile).string();
+    }
+    dc::Webhook webhook(discordCfg, logLine);
+    if (webhook.enabled()) webhook.setStatus(liveStatus(o, &relay)); // online; the address follows once known
+    if (webhook.enabled())
+        relay.setOnEvent([&webhook, &relay](const mecmp::server::Event& e) {
+            if (e.kind != mecmp::server::Event::Result) webhook.setStatus(liveStatus(g_opts, &relay));
+            namespace proto = mecmp::net::protocol;
+            const std::string who = "**" + dc::escapeMarkdown(e.name.empty() ? "Runner" : e.name) + "**";
+            const std::string count = std::to_string(e.players) + (e.players == 1 ? " player" : " players") + " online";
+            if (e.kind == mecmp::server::Event::Result) {
+                if (!webhook.config().results) return;
+                const proto::Result& r = e.result;
+                std::string kind = proto::runKindName(r.kind);
+                for (auto& c : kind) c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
+                if (kind == "gridnode") kind = "GridNode";
+                else if (kind == "metagrid") kind = "MetaGrid";
+                std::string line = u8"\U0001F3C1 " + who + " finished " + (r.title.empty() ? "a " : "the ") + kind;
+                if (!r.title.empty()) line += " **" + dc::escapeMarkdown(r.title) + "**";
+                line += " in **" + proto::formatRunTime(r.value) + "**";
+                if (r.flags & proto::kResultNewRecord) {
+                    line += u8" \u2014 new record";
+                    if ((r.flags & proto::kResultHadRecord) && r.delta > 0) line += " (" + proto::formatRunTime(r.delta) + " faster)";
+                }
+                webhook.post(line);
+                return;
+            }
+            if (!webhook.config().joins) return;
+            if (e.kind == mecmp::server::Event::Joined) webhook.post(u8"\u27A1\uFE0F " + who + " joined (" + count + ")");
+            else webhook.post(u8"\u2B05\uFE0F " + who + " left (" + count + ")");
+        });
+
     std::signal(SIGINT, onSignal);
     std::signal(SIGTERM, onSignal);
     loadBans(relay, true);
@@ -460,6 +585,7 @@ int main(int argc, char** argv) {
                 if (!addressShown && readStun(reinterpret_cast<const unsigned char*>(buf), n, pubIp, pubPort)) {
                     addressShown = true;
                     logAddresses(o.port, pubIp, pubPort);
+                    announceOnline(webhook, o, pubIp, relay);
                 } else {
                     relay.onPacket({ntohl(from.sin_addr.s_addr), ntohs(from.sin_port)}, buf, static_cast<size_t>(n), nowMs());
                 }
@@ -474,7 +600,7 @@ int main(int argc, char** argv) {
         if (!addressShown && now - stunAt >= 2000) { // no answer yet: try twice more, then say so
             stunAt = now;
             if (stunTries < 3 && sendStun(sock)) ++stunTries;
-            else { addressShown = true; logAddresses(o.port, 0, 0); }
+            else { addressShown = true; logAddresses(o.port, 0, 0); announceOnline(webhook, o, 0, relay); }
         }
         if (now - lastTick >= 50) {
             lastTick = now;
@@ -493,6 +619,9 @@ int main(int argc, char** argv) {
         }
     }
     logLine("server stopping");
+    if (webhook.enabled()) webhook.setStatus(liveStatus(o, nullptr));
+    if (webhook.enabled() && webhook.config().status)
+        webhook.post(u8"\U0001F534 **" + dc::escapeMarkdown(o.relay.name) + "** is offline");
     closeSocket(sock);
 #ifdef _WIN32
     WSACleanup();

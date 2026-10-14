@@ -26,6 +26,11 @@ constexpr uintptr_t Vtbl_PamServerNamedChallengeEntity = 0x141c7ec70;
 constexpr uint32_t kCategorySocialPlay = 0x54776fc6; // PamSocialPlayNamedChallenge*Message
 constexpr uint32_t kTypeFinished = 0xd71d027f;       // ...FinishedMessage
 constexpr uint32_t kTypeStarted = 0xc164590c;        // ...StartedMessage (logged only)
+// Message type ids are the djb2-xor hash of the message class name (checked against these).
+constexpr uint32_t kTypeChallengeFinished = 0x9b35497c; // PamSocialPlayChallengeFinishedMessage: a player-made time trial
+// Its fields (seen in game, three finishes 3-4 s after starting): +0x48 the time trial's GUID, +0x60 u32 the
+// time in hundredths of a second (139, 159, 249).
+constexpr size_t Tt_Guid = 0x48, Tt_Time = 0x60;
 constexpr size_t Msg_Category = 0x08, Msg_Type = 0x0c;
 constexpr size_t Fin_ContentId = 0x48, Fin_Delta = 0x50, Fin_HadRecord = 0x54, Fin_Value = 0x58, Fin_NewRecord = 0x60;
 
@@ -161,6 +166,27 @@ void onFinished(const uint8_t* m) {
 
 // Research: what the other messages of this category hold (a player-made time trial's finish is one of
 // them). Each type is dumped the first few times it is seen.
+void onTimeTrialFinished(const uint8_t* m) {
+    uint32_t cs = 0;
+    memcpy(&cs, m + Tt_Time, 4);
+    uint32_t guidHead = 0;
+    memcpy(&guidHead, m + Tt_Guid, 4);
+    MLOG("runs: finished a time trial (%08x...) in %u hundredths", guidHead, cs);
+    if (cs == 0 || cs > 360000) return; // not a time (an hour at most)
+    {
+        std::lock_guard<std::mutex> lock(g_m);
+        const uint32_t now = GetTickCount();
+        if (g_recent.content == guidHead && g_recent.value == cs && now - g_recent.at < 5000) return;
+        g_recent = {guidHead, cs, now};
+    }
+    proto::Result r;
+    r.contentId = guidHead;
+    r.kind = proto::kRunTimeTrial;
+    r.value = static_cast<int64_t>(cs) * 10;
+    MLOG("runs: you finished a time trial in %s", proto::formatRunTime(r.value).c_str());
+    net::sendResult(r);
+}
+
 void dumpMessage(const uint8_t* m, uint32_t type) {
     static uint32_t types[32] = {};
     static int counts[32] = {};
@@ -174,7 +200,7 @@ void dumpMessage(const uint8_t* m, uint32_t type) {
     for (size_t i = 0; i < sizeof(raw); ++i) snprintf(hex + i * 3, 4, "%02x ", raw[i]);
     uintptr_t vt = 0;
     memcpy(&vt, m, sizeof(vt));
-    MLOG("runs: social-play message type %08x (vtable %p), bytes from +0x30: %s", type, reinterpret_cast<void*>(vt), hex);
+    VLOG("runs: social-play message type %08x (vtable %p), bytes from +0x30: %s", type, reinterpret_cast<void*>(vt), hex);
 }
 
 void onMessage(Listener* self, const void* message) {
@@ -186,6 +212,7 @@ void onMessage(Listener* self, const void* message) {
     if (category != kCategorySocialPlay) return;
     dumpMessage(m, type);
     if (type == kTypeFinished) onFinished(m);
+    else if (type == kTypeChallengeFinished) onTimeTrialFinished(m);
     else if (type == kTypeStarted) {
         uint32_t content = 0;
         memcpy(&content, m + 0x48, 4);

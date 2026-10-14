@@ -486,7 +486,10 @@ int main(int argc, char** argv) {
                 if (!webhook.config().results) return;
                 const proto::Result& r = e.result;
                 std::string kind = proto::runKindName(r.kind);
-                std::string line = u8"\U0001F3C1 " + who + " finished the " + kind;
+                for (auto& c : kind) c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
+                if (kind == "gridnode") kind = "GridNode";
+                else if (kind == "metagrid") kind = "MetaGrid";
+                std::string line = u8"\U0001F3C1 " + who + " finished " + (r.title.empty() ? "a " : "the ") + kind;
                 if (!r.title.empty()) line += " **" + dc::escapeMarkdown(r.title) + "**";
                 line += " in **" + proto::formatRunTime(r.value) + "**";
                 if (r.flags & proto::kResultNewRecord) {

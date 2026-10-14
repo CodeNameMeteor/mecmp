@@ -717,7 +717,9 @@ static void testResult() {
     got.flags = 0;
     got.title.clear();
     got.kind = protocol::kRunGridNode;
-    CHECK(protocol::resultText("", got) == "Runner finished the GridNode in 1:23.46");
+    CHECK(protocol::resultText("", got) == "Runner finished a GridNode in 1:23.46");
+    got.kind = protocol::kRunTimeTrial;
+    CHECK(protocol::resultText("Foie", got) == "Foie finished a time trial in 1:23.46");
     r.value = -1; // a negative time is not a run
     const size_t nb = protocol::writeResult(buf, h, r);
     CHECK(!protocol::readResult(buf + sizeof(h), nb - sizeof(h), got));

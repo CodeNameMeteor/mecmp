@@ -556,7 +556,9 @@ std::string resultText(const std::string& player, const Result& r) {
     for (auto& c : kind) c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
     if (kind == "gridnode") kind = "GridNode";
     else if (kind == "metagrid") kind = "MetaGrid";
-    std::string s = (player.empty() ? std::string("Runner") : player) + " finished the " + kind;
+    // "the dash The View", or "a time trial" when it has no name.
+    std::string s = (player.empty() ? std::string("Runner") : player) + " finished " +
+                     (r.title.empty() ? std::string("a ") : std::string("the ")) + kind;
     if (!r.title.empty()) s += " " + r.title;
     s += " in " + formatRunTime(r.value);
     if (r.flags & kResultNewRecord) {

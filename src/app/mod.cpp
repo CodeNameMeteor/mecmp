@@ -129,7 +129,8 @@ void monitorLoop() {
     while (g_running) {
         const uintptr_t world = game::level::serverWorld();
         if (world != lastWorld) {
-            MLOG("level %s", world ? "started" : "ended");
+            if (world) MLOG("level started: %s", game::level::levelName().c_str());
+            else MLOG("level ended");
             if (lastWorld) game::level::reset(); // spawners of the old level are stale
             lastWorld = world;
             levelSince = GetTickCount();

@@ -140,7 +140,8 @@ void uiSystemUpdate(void* uiSystem) {
     g_uiSystem = reinterpret_cast<uintptr_t>(uiSystem);
     uintptr_t controller = 0;
     int32_t saved[2] = {};
-    const bool session = net::running() && (net::hosting() || net::connectedToHost());
+    // Not in the main menu: its screens (e.g. "Your Echo") need their own pause; nobody sees you there.
+    const bool session = net::running() && (net::hosting() || net::connectedToHost()) && !level::inFrontEnd();
     if (!session || !mem::read(reinterpret_cast<uintptr_t>(uiSystem) + UISystem_PauseController, controller) || !controller ||
         !mem::read(controller + 8, saved, sizeof(saved))) {
         g_origUISystemUpdate(uiSystem);

@@ -28,6 +28,11 @@ void scanForMissing();
 void reset();
 
 uintptr_t serverWorld();
+// The running level's asset name ("Levels/SP/SP_MainCity/..."); empty between levels or if unreadable.
+std::string levelName();
+// The main menu's level ("Levels/SP/FrontEnd/..."): no ghosts there, and its menus pause as usual. Any
+// thread; cached per world.
+bool inFrontEnd();
 void* playerSpawner();
 void* ghostSpawner();                 // the level's city-ghost spawner (always loaded in free roam)
 void* playerCharacter();              // local player's ServerCharacterEntity (game thread)

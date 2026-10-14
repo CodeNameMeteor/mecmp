@@ -628,7 +628,10 @@ void tick(uint64_t tick, uint64_t ticksInLevel) {
     const bool playerSettled = playerChar && ticksInLevel - playerSince >= kPlayerSettleTicks;
 
     // Every present player needs a ghost: hand them a free one, else spawn (one per kSpawnGapMs).
+    // Never in the main menu: its "Your Echo" preview is spawned from a projection spawner there, and a
+    // ghost of ours from it took the preview's place (and its look).
     const bool canSpawn = g_enabled && !g_paused && config::get()->autoSpawn && ticksInLevel >= kSettleTicks &&
+                          !level::inFrontEnd() &&
                           level::spawnerAlive(level::ghostSpawner()) && playerSettled;
     if (canSpawn) {
         level::BoneSetup ref;

@@ -3,6 +3,8 @@
 ## Unreleased
 
 ### Fixes
+- **"Your Echo" works with a session running.** In the main menu the mod no longer spawns ghosts or
+  stops the menus from pausing. The preview echo used to vanish, and a ghost took its place.
 - **Hosting is harder to flood.** A host accepts at most 4 players from one IP address, refuses a
   player who claims another player's session id, and limits each player to 80 packets a second.
   Before, one machine could take every slot of a session, and another player could send as someone else.
@@ -88,7 +90,6 @@ movement live: running, climbing, wall-running.
 
 ### Known issues
 - Echo ghosts use your own echo style (see above).
-- With the mod loaded, the game's "Your Echo" preview can appear and vanish at once.
 - In a level the mod was injected into mid-way, a ghost may stay invisible; load a level or a
   checkpoint (or inject at the main menu).
 - Ghosts have no collision. Traffic is not encrypted: only play with people and servers you trust.

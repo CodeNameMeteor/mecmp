@@ -511,6 +511,16 @@ void lookSection() {
         ImGui::SetTooltip("Short messages at the top of the screen when someone joins, leaves or places a marker");
     bool showChat = config::get()->showChat;
     if (ImGui::Checkbox("Chat", &showChat)) config::change([showChat](config::Settings& c) { c.showChat = showChat; });
+    bool onMap = config::get()->playersOnMap;
+    if (ImGui::Checkbox("Players on the map", &onMap)) config::change([onMap](config::Settings& c) { c.playersOnMap = onMap; });
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Shows the session's players on the game's map, as it shows friends, with their Runner Tag.\n"
+                          "Needs online services (Beat Revival), and only players who share their profile.");
+    bool share = config::get()->shareProfile;
+    if (ImGui::Checkbox("Share my EA profile", &share)) config::change([share](config::Settings& c) { c.shareProfile = share; });
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Sends your EA online id and profile name to the players in your session, so their map\n"
+                          "shows your Runner Tag where you are. Off: you are not on their maps.");
     ImGui::SameLine();
     ImGui::TextDisabled("(%s to type)", config::get()->chatKey.c_str());
     bool mumble = config::get()->mumbleLink;

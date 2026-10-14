@@ -60,6 +60,7 @@ struct Settings {
     std::string servers;                  // the menu's server list: addresses, comma separated
     bool membersMayHardSummon = false;    // when you host: members may pull players in (a hard summon)
     // [player]
+    bool shareProfile = false;            // send your EA online id and profile name, so others' maps show your Runner Tag
     bool allowForcedSummon = false;       // a hard summon from the host (or a member it allows) takes you after a countdown
     std::string name = "Runner";
     std::string look = "faith";           // how you look to others: faith, or echo:<hash> (a ghost style + colour)
@@ -121,6 +122,7 @@ struct Settings {
     bool mumbleLink = true;               // positional voice through Mumble's Link plugin
     bool showNotices = true;              // "<name> joined / left / placed a marker" at the top of the screen
     bool showChat = true;                 // chat messages bottom-left
+    bool playersOnMap = true;             // the session's players on the game's map (as its friend markers)
     std::string chatKey = "ENTER";        // opens the chat line: a letter, ENTER, or a menu key name
     // [debug]
     bool verbose = false;

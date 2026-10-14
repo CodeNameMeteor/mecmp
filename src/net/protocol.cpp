@@ -389,7 +389,8 @@ bool readInfoAnswer(const char* payload, size_t n, ServerInfo& out) {
     return true;
 }
 
-size_t writeHello(char* buf, const Header& h, const char* name, uint32_t look, uint8_t flags, uint8_t wear) {
+size_t writeHello(char* buf, const Header& h, const char* name, uint32_t look, uint8_t flags, uint8_t wear,
+                  const OnlineProfile* profile) {
     char* p = buf;
     put(p, h);
     const std::string full = name ? name : "";
@@ -400,10 +401,18 @@ size_t writeHello(char* buf, const Header& h, const char* name, uint32_t look, u
     put(p, look);
     put(p, flags);
     put(p, wear);
+    if (profile && profile->id) {
+        put(p, profile->id);
+        char pn[kProfileLen] = {};
+        for (size_t i = 0; i + 1 < kProfileLen && profile->name[i]; ++i) pn[i] = profile->name[i];
+        memcpy(p, pn, kProfileLen);
+        p += kProfileLen;
+    }
     return static_cast<size_t>(p - buf);
 }
 
-bool readHello(const char* payload, size_t n, std::string& name, uint32_t& look, uint8_t* flags, uint8_t* wear) {
+bool readHello(const char* payload, size_t n, std::string& name, uint32_t& look, uint8_t* flags, uint8_t* wear,
+               OnlineProfile* profile) {
     if (n == 0) return false;
     const size_t nameBytes = n < kNameLen ? n : kNameLen;
     size_t len = 0;
@@ -413,6 +422,20 @@ bool readHello(const char* payload, size_t n, std::string& name, uint32_t& look,
     if (n >= kNameLen + sizeof(uint32_t)) memcpy(&look, payload + kNameLen, sizeof(look));
     if (flags) *flags = n >= kNameLen + sizeof(uint32_t) + 1 ? static_cast<uint8_t>(payload[kNameLen + sizeof(uint32_t)]) : 0;
     if (wear) *wear = n >= kNameLen + sizeof(uint32_t) + 2 ? static_cast<uint8_t>(payload[kNameLen + sizeof(uint32_t) + 1]) : 0;
+    if (profile) {
+        *profile = OnlineProfile{};
+        const size_t at = kNameLen + sizeof(uint32_t) + 2;
+        if (n >= at + sizeof(uint64_t) + kProfileLen) {
+            memcpy(&profile->id, payload + at, sizeof(uint64_t));
+            // Printable ASCII only (EA profile names), always NUL terminated.
+            for (size_t i = 0; i + 1 < kProfileLen; ++i) {
+                const char c = payload[at + sizeof(uint64_t) + i];
+                if (c < 0x20 || c > 0x7e) break;
+                profile->name[i] = c;
+            }
+            if (!profile->name[0]) profile->id = 0;
+        }
+    }
     return true;
 }
 

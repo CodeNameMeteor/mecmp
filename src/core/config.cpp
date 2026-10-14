@@ -54,6 +54,9 @@ constexpr const char* kDefaultIni =
     "; 1 = a hard summon (from the host, or a member the host allows) takes you to the caller after a\r\n"
     "; countdown you can cancel; 0 = you are only asked, as with any summon\r\n"
     "allow_forced_summon=0\r\n"
+    "; 1 = share your EA online id and profile name with the session, so the game's map shows your Runner Tag\r\n"
+    ";     where you are (on the others' maps; needs online services such as Beat Revival). 0 = don't share\r\n"
+    "share_profile=0\r\n"
     "; your name, shown to the other players\r\n"
     "name=Runner\r\n"
     "; how the other players see you: faith, or a ghost style and color (pick it in the in-game menu)\r\n"
@@ -114,6 +117,8 @@ constexpr const char* kDefaultIniTail =
     "; 1 = show chat messages; chat_key opens the chat line (a letter A..Z, ENTER, or INSERT/F1../...)\r\n"
     "show_chat=1\r\n"
     "chat_key=ENTER\r\n"
+    "; 1 = the session's players are shown on the game's map (as friends are)\r\n"
+    "players_on_map=1\r\n"
     "; markers: a short press of ping_key places one where you stand, holding it opens the marker wheel\r\n"
     "; (a letter A..Z, ENTER, or INSERT/F1../...; empty = no key). ping_pad = gamepad buttons for the same\r\n"
     "; (as menu_pad; empty = none). Both can be changed in the menu.\r\n"
@@ -334,6 +339,7 @@ void load(const std::wstring& dir) {
     s.mumbleLink = readInt(ini, L"voice", L"mumble_link", 1) != 0;
     s.showNotices = readInt(ini, L"ui", L"show_notices", 1) != 0;
     s.showChat = readInt(ini, L"ui", L"show_chat", 1) != 0;
+    s.playersOnMap = readInt(ini, L"ui", L"players_on_map", 1) != 0;
     s.chatKey = readString(ini, L"ui", L"chat_key", "ENTER");
     s.pingKey = readString(ini, L"ui", L"ping_key", "V");
     s.pingPad = readString(ini, L"ui", L"ping_pad", "");
@@ -399,6 +405,7 @@ void load(const std::wstring& dir) {
     s.summonDeclinePad = readString(ini, L"ui", L"summon_decline_pad", "RIGHT");
     s.hardSummonGraceMs = clampInt(readInt(ini, L"ui", L"hard_summon_grace_ms", 5000), 0, 15000);
     s.allowForcedSummon = readInt(ini, L"player", L"allow_forced_summon", 0) != 0;
+    s.shareProfile = readInt(ini, L"player", L"share_profile", 0) != 0;
     s.membersMayHardSummon = readInt(ini, L"net", L"members_may_hard_summon", 0) != 0;
     s.padPlayStation = _stricmp(readString(ini, L"ui", L"pad_labels", "xbox").c_str(), "playstation") == 0;
     s.pingClearKey = readString(ini, L"ui", L"ping_clear_key", "X");
@@ -492,6 +499,7 @@ void applyPending() {
     put(L"voice", L"mumble_link", snapshot->mumbleLink ? "1" : "0");
     put(L"ui", L"show_notices", snapshot->showNotices ? "1" : "0");
     put(L"ui", L"show_chat", snapshot->showChat ? "1" : "0");
+    put(L"ui", L"players_on_map", snapshot->playersOnMap ? "1" : "0");
     put(L"ui", L"chat_key", snapshot->chatKey);
     put(L"ui", L"ping_key", snapshot->pingKey);
     put(L"ui", L"ping_pad", snapshot->pingPad);
@@ -539,6 +547,7 @@ void applyPending() {
     put(L"ui", L"summon_decline_pad", snapshot->summonDeclinePad);
     put(L"ui", L"hard_summon_grace_ms", std::to_string(snapshot->hardSummonGraceMs));
     put(L"player", L"allow_forced_summon", snapshot->allowForcedSummon ? "1" : "0");
+    put(L"player", L"share_profile", snapshot->shareProfile ? "1" : "0");
     put(L"net", L"members_may_hard_summon", snapshot->membersMayHardSummon ? "1" : "0");
     put(L"ui", L"pad_labels", snapshot->padPlayStation ? "playstation" : "xbox");
     put(L"ui", L"ping_wheel", std::to_string(snapshot->pingWheel + 1));

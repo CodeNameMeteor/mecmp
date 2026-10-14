@@ -13,6 +13,8 @@
 // type 2 HELLO (about once a second): char name[24] (UTF-8, at most 23 bytes, NUL padded)
 //   | u32 look (0 = Faith, else the game's echo CustomizationHash; absent from older versions = 0)
 //   | u8 flags (kHelloHost, kHelloServer) | u8 wear (Faith's outfit changes, kWear...; absent = 0)
+//   | u64 online id | char profile[32] (the player's EA online id and profile name, NUL padded; only when
+//     the player shares them, for the game's map markers; absent = not shared)
 // type 3 CHAT, type 4 PING, type 6 REACT, type 7 SUMMON and type 8 SUMMON_REPLY: see below.
 
 #include <cstddef>
@@ -354,11 +356,17 @@ constexpr uint8_t kWearNoMagRope = 8;  // without the MagRope and its upgrades
 constexpr uint8_t kWearNoToolbag = 16; // without the tool bag
 constexpr uint8_t kWearGridLink = 32;  // with the GridLink
 constexpr size_t kHelloFlagsOffset = kNameLen + sizeof(uint32_t); // payload offset of the flags byte (after name and look)
-size_t writeHello(char* buf, const Header& h, const char* name, uint32_t look = 0, uint8_t flags = 0, uint8_t wear = 0);
+constexpr size_t kProfileLen = 32;
+struct OnlineProfile {
+    uint64_t id = 0;            // 0 = not shared
+    char name[kProfileLen] = {}; // NUL terminated
+};
+size_t writeHello(char* buf, const Header& h, const char* name, uint32_t look = 0, uint8_t flags = 0, uint8_t wear = 0,
+                  const OnlineProfile* profile = nullptr);
 // HELLO payload (after the header). `name` = the raw field (cleaned by the caller); `look`, `flags` and
 // `wear` = 0 if absent.
 bool readHello(const char* payload, size_t n, std::string& name, uint32_t& look, uint8_t* flags = nullptr,
-               uint8_t* wear = nullptr);
+               uint8_t* wear = nullptr, OnlineProfile* profile = nullptr);
 // Decodes a STATE payload (after the header). `full` tells whether to commit it as the new base.
 bool readState(const char* payload, size_t n, const Decoder& dec, PlayerState& out, bool& full);
 void commitBase(Decoder& dec, const PlayerState& s);

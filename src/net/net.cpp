@@ -62,6 +62,7 @@ struct Remote {
     std::string name;
     uint32_t look = 0;
     uint8_t outfit = 0;
+    proto::OnlineProfile profile; // shared by them (HELLO), for map markers
     bool loopback = false;
     uint32_t lastSeq = 0;
     bool haveSeq = false;
@@ -268,6 +269,8 @@ void sendState() {
     sendAll(buf, proto::writeState(buf, header(proto::kTypeState), s, enc));
 }
 
+proto::OnlineProfile g_profile; // ours, under g_m
+
 void sendHello() {
     char buf[proto::kMaxPacket];
     std::string name;
@@ -280,7 +283,12 @@ void sendHello() {
         flags = proto::kHelloHost;
         if (config::get()->membersMayHardSummon) flags = static_cast<uint8_t>(flags | proto::kHelloMembersHard);
     }
-    sendAll(buf, proto::writeHello(buf, header(proto::kTypeHello), name.c_str(), g_look.load(), flags, g_outfit.load()));
+    proto::OnlineProfile profile;
+    {
+        std::lock_guard<std::mutex> lock(g_m);
+        profile = g_profile;
+    }
+    sendAll(buf, proto::writeHello(buf, header(proto::kTypeHello), name.c_str(), g_look.load(), flags, g_outfit.load(), &profile));
 }
 
 // Player names are shown in the menu and written to the log: keep bytes that can be shown, drop control
@@ -706,7 +714,9 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
         uint32_t look = 0;
         uint8_t flags = 0;
         uint8_t wear = 0;
-        proto::readHello(payload, len, raw, look, &flags, &wear);
+        proto::OnlineProfile profile;
+        proto::readHello(payload, len, raw, look, &flags, &wear, &profile);
+        r.profile = profile;
         // Accepted only straight from the host (forwarded copies come from the host's address too, but have the flag cleared).
         if ((flags & proto::kHelloHost) && !own && g_role == Role::Join && sameAddr(from, g_hostAddr)) {
             g_hostSession = h.session;
@@ -1388,7 +1398,8 @@ std::vector<RemoteInfo> remotes(uint32_t maxAgeMs) {
     for (const auto& kv : g_remotes) {
         const Remote& r = kv.second;
         if (!r.fill || now - r.lastTick > maxAgeMs) continue;
-        v.push_back({r.id, r.name, r.loopback, now - r.lastTick, r.loss.percent(nowMs()), r.look, r.outfit});
+        v.push_back({r.id, r.name, r.loopback, now - r.lastTick, r.loss.percent(nowMs()), r.look, r.outfit, r.profile.id,
+                     r.profile.name});
     }
     return v;
 }
@@ -1437,6 +1448,14 @@ std::string lanCode() {
     std::lock_guard<std::mutex> lock(g_m);
     return g_lanCode;
 }
+void setOnlineProfile(uint64_t id, const char* name) {
+    std::lock_guard<std::mutex> lock(g_m);
+    g_profile = proto::OnlineProfile{};
+    if (!id || !name) return;
+    g_profile.id = id;
+    for (size_t i = 0; i + 1 < proto::kProfileLen && name[i]; ++i) g_profile.name[i] = name[i];
+}
+
 void setLook(uint32_t look, uint8_t outfit) {
     g_look = look;
     g_outfit = look ? 0 : outfit;

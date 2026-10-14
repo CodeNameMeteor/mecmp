@@ -57,6 +57,7 @@ add_library(mecmp SHARED
   src/game/teleport.cpp
   src/game/local_player.cpp
   src/game/ping_point.cpp
+  src/game/players_map.cpp
   src/game/raycast.cpp
   src/net/net.cpp
   src/net/protocol.cpp

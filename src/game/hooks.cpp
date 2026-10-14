@@ -2,6 +2,7 @@
 
 #include "core/log.h"
 #include "core/prof.h"
+#include "game/players_map.h"
 #include "game/engine.h"
 #include "game/ghosts.h"
 #include "game/level.h"
@@ -15,7 +16,7 @@ namespace mecmp::game::hooks {
 namespace {
 
 using FactoryFn = void* (*)(void* creator, void* ci, void* a3, void* a4);
-enum Factory { kSpawner, kPamSpawner, kClientReplay, kClientCharacter, kCustomize, kFactoryCount };
+enum Factory { kSpawner, kPamSpawner, kClientReplay, kClientCharacter, kCustomize, kPresenceManager, kFactoryCount };
 FactoryFn g_orig[kFactoryCount] = {};
 const char* const kNames[kFactoryCount] = {"ServerCharacterSpawnEntity", "PamServerCharacterSpawnEntity",
                                            "PamClientReplayPlayerComponent", "PamClientCharacterEntity",
@@ -33,6 +34,13 @@ void* customizeFactory(void* creator, void* ci, void* a3, void* a4) {
     models::onCustomizeEntity(e);
     return e;
 }
+// The friend-marker manager (game/players_map.h): only logged, to see whether a level has one.
+void* presenceManagerFactory(void* creator, void* ci, void* a3, void* a4) {
+    void* e = g_orig[kPresenceManager](creator, ci, a3, a4);
+    MLOG("map: the level created a friend-marker manager %p", e);
+    return e;
+}
+
 void* pamSpawnerFactory(void* creator, void* ci, void* a3, void* a4) {
     void* e = g_orig[kPamSpawner](creator, ci, a3, a4);
     level::onSpawnerCreated(ci, e);
@@ -180,6 +188,33 @@ void installUIPauseHook(std::vector<Patch>& undo) {
     VLOG("hook UI pause: installed");
 }
 
+// The friend markers' manager pool: our players get slots just before the game copies the slots into the
+// markers (game/players_map.h). Optional: without it there are no players on the map.
+using PoolUpdateFn = void (*)(void* pool, void* updateInfo);
+PoolUpdateFn g_origPresencePoolUpdate = nullptr;
+
+void presencePoolUpdate(void* pool, void* updateInfo) {
+    players_map::beforeManagerUpdate(pool);
+    g_origPresencePoolUpdate(pool, updateInfo);
+}
+
+void installPlayersMapHook(std::vector<Patch>& undo) {
+    const uintptr_t slot = rva(Slot_PresenceInfoManagerPoolUpdate);
+    uintptr_t current = 0;
+    if (!mem::read(slot, current) || current != rva(Fn_PresenceInfoManagerPoolUpdate)) {
+        MLOG("hook map markers: slot holds %p, expected %p; players are not shown on the map",
+             reinterpret_cast<void*>(current), reinterpret_cast<void*>(rva(Fn_PresenceInfoManagerPoolUpdate)));
+        return;
+    }
+    g_origPresencePoolUpdate = reinterpret_cast<PoolUpdateFn>(current);
+    if (!mem::patchPointer(slot, reinterpret_cast<uintptr_t>(&presencePoolUpdate), nullptr)) {
+        MLOG("hook map markers: VirtualProtect failed (%lu)", GetLastError());
+        return;
+    }
+    undo.push_back({slot, current});
+    MLOG("hook map markers: installed");
+}
+
 void postUpdate(void* world, void* updateInfo) {
     g_origPostUpdate(world, updateInfo);
     if (world == reinterpret_cast<void*>(level::serverWorld())) {
@@ -217,6 +252,8 @@ bool install(TickFn onTick, Installed* out) {
     installFactory(kCustomize, Slot_CustomizeProjectionFactory, Fn_CustomizeProjectionCreate, &customizeFactory, undo);
     got.ghostClients = replay && chars;
     installUIPauseHook(undo);
+    installPlayersMapHook(undo);
+    installFactory(kPresenceManager, Slot_PresenceInfoManagerCreator, Fn_PresenceInfoManagerCreator, &presenceManagerFactory, undo);
     // The tick hook goes in last: nothing reaches the mod's code before every other hook is in, and
     // if it fails, the factory hooks above are taken out again.
     if (!mem::patchPointer(slot, reinterpret_cast<uintptr_t>(&postUpdate), nullptr)) {

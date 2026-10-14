@@ -40,6 +40,9 @@ constexpr int kDefaultReactionSlots = 8;
 
 // A saved spot: where a marker was, with its icon and title. Placing a bookmark puts a marker there again.
 constexpr size_t kMaxBookmarks = 20;
+// The menu's saved server list (Settings::servers) holds at most this many addresses. Each is at most
+// 127 characters (the menu's input), so the list stays under 4,100 characters.
+constexpr size_t kMaxServers = 32;
 struct Bookmark {
     std::string label;
     uint8_t glyph = 0;

@@ -38,7 +38,9 @@ jobs:
         run: |
           name="MECMP-${{ steps.v.outputs.version }}-windows"
           mkdir -p "pkg/$name/docs"
-          cp build/mecmp.dll build/mecmp_inject.exe build/mecmp_server.exe "pkg/$name/"
+          # version.dll is the loader: copied into the game folder, it loads mecmp.dll with the game (no injector).
+          cp build/mecmp.dll build/version.dll build/mecmp_inject.exe build/mecmp_server.exe "pkg/$name/"
+          test -s "pkg/$name/version.dll" && test -s "pkg/$name/mecmp.dll"
           cp docs/INSTALL.txt "pkg/$name/README.txt"
           cp LICENSE THIRD_PARTY_NOTICES.md CHANGELOG.md "pkg/$name/"
           cp docs/SERVER.md "pkg/$name/docs/"
@@ -79,6 +81,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the full history: the commits since the previous release
       - uses: actions/download-artifact@v4
         with:
           path: dist
@@ -90,6 +94,15 @@ jobs:
           ver="${GITHUB_REF_NAME#v}"
           # This version's section of CHANGELOG.md (from its heading to the next one).
           awk -v v="$ver" '$0 ~ "^## "v {on=1; next} on && /^## / {exit} on' CHANGELOG.md > notes.md
+          # Then the commits since the previous tag (all of them for the first release), newest first.
+          prev=$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || true)
+          if [ -n "$prev" ]; then range="$prev..$GITHUB_REF_NAME"; else range="$GITHUB_REF_NAME"; fi
+          {
+            echo
+            echo "## Commits${prev:+ since $prev}"
+            echo
+            git log --no-merges --pretty='- %s (%h)' "$range"
+          } >> notes.md
           prerelease=""
           case "$ver" in 0.*) prerelease="--prerelease" ;; esac
           gh release create "$GITHUB_REF_NAME" dist/* --draft $prerelease \

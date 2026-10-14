@@ -34,10 +34,12 @@ namespace {
 char g_name[net::protocol::kMaxNameBytes + 1] = {}; // what fits on the wire
 char g_code[64] = {};
 char g_label[config::kWheels][config::kPingSlots][net::protocol::kMaxPingLabelBytes + 1] = {}; // the marker wheels' titles
+char g_wheelName[config::kWheels][net::protocol::kMaxPingLabelBytes + 1] = {};                  // the wheels' own names
+char g_reactLabel[config::kPingSlots][net::protocol::kMaxPingLabelBytes + 1] = {};              // the quick answers
 bool g_inited = false;
 bool g_keyCapture = false; // waiting for a new menu key
 int g_bindCapture = -1;        // which key of the Controls tab is being recorded (see kKeyBinds; -1 = none)
-std::string g_bindNote[3];     // why the last key was refused (empty = nothing to say)
+std::string g_bindNote[8];     // why the last key was refused (empty = nothing to say)
 gamepad::Action g_padCapture = gamepad::Action::Count; // which gamepad binding is being recorded (Count = none)
 DWORD g_hintUntil = 0;
 
@@ -335,6 +337,8 @@ void myLookRows(const config::Settings& cfg, uint32_t mine) {
             ImGui::SetTooltip("Off: without the MagRope on your arm (you can still use it).\nOn: the one you have in your game, if you have it yet.");
         ImGui::SameLine();
         if (ImGui::Checkbox("Tool bag", &toolbag)) set(toolbag ? worn & ~wear::kWearNoToolbag : worn | wear::kWearNoToolbag);
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Off: without the tool bag on your back.\nOn: the one you have in your game, if you have it yet.");
         ImGui::SameLine();
         bool gridLink = (worn & wear::kWearGridLink) != 0;
         if (ImGui::Checkbox("GridLink", &gridLink)) set(gridLink ? worn | wear::kWearGridLink : worn & ~wear::kWearGridLink);
@@ -511,7 +515,7 @@ void padRow(const char* label, gamepad::Action action, const std::string& curren
         }
     } else {
         const uint16_t bits = gamepad::parse(current);
-        ImGui::Text("%s", bits ? gamepad::format(bits).c_str() : "none");
+        ImGui::Text("%s", bits ? gamepad::labelCombo(gamepad::format(bits)).c_str() : "none");
         ImGui::SameLine();
         // One binding is recorded at a time, and only a gamepad can press its buttons.
         ImGui::BeginDisabled(gamepad::capturing() || !gamepad::active());
@@ -542,6 +546,8 @@ void padRow(const char* label, gamepad::Action action, const std::string& curren
 // from the first change until the setting has caught up.
 struct SliderEdit { int value = 0; bool editing = false; };
 SliderEdit g_lifeEdit, g_maxEdit;
+struct FloatEdit { float value = 1.f; bool editing = false; };
+FloatEdit g_sensEdit;
 
 // True once, when the slider was let go after a change: the caller saves `edit.value`.
 bool settingSlider(const char* label, SliderEdit& edit, int current, int lo, int hi, const char* format, ImGuiSliderFlags flags) {
@@ -580,12 +586,24 @@ struct KeyBind {
     const char* tip;
     std::string config::Settings::*field;
     bool (*set)(const std::string&);
-    bool mouse; // mouse buttons 3..5 may be bound too
+    int mouse;  // 0 = the keyboard only, 1 = also Mouse 4 / 5, 2 = also the middle button
 };
-const KeyBind kKeyBinds[3] = {
-    {"Tap to place a marker. Hold to open the marker wheel.", &config::Settings::pingKey, &ui::setPingKey, false},
-    {"Hold for a moment to remove all your markers.", &config::Settings::pingClearKey, &ui::setPingClearKey, true},
-    {"Opens the chat line (Enter sends, Escape cancels).", &config::Settings::chatKey, &ui::setChatKey, false},
+const KeyBind kKeyBinds[8] = {
+    {"Tap to place a marker. Hold to open the marker wheel.", &config::Settings::pingKey, &ui::setPingKey, 1},
+    {"Tap twice to remove the marker you look at (or stand at). Hold for a moment to remove all your markers.",
+     &config::Settings::pingClearKey, &ui::setPingClearKey, 2},
+    {"Opens the chat line (Enter sends, Escape cancels).", &config::Settings::chatKey, &ui::setChatKey, 0},
+    {"Look at another player's marker: tap sends your last quick answer to them, hold opens the answers wheel.",
+     &config::Settings::reactKey, &ui::setReactKey, 1},
+    {"Places a marker the other way: where you stand if your markers go where you look, and where you look if they go "
+     "where you stand.",
+     &config::Settings::altKey, &ui::setAltKey, 1},
+    {"Hides names, markers, arrows, notices and chat lines (for a screenshot or a recording). Press again to show them.",
+     &config::Settings::hideKey, &ui::setHideKey, 1},
+    {"While the marker wheel is open: the previous wheel. The Left arrow and the mouse wheel do the same.",
+     &config::Settings::wheelPrevKey, &ui::setWheelPrevKey, 1},
+    {"While the marker wheel is open: the next wheel. The Right arrow and the mouse wheel do the same.",
+     &config::Settings::wheelNextKey, &ui::setWheelNextKey, 1},
 };
 
 void keyRow(const config::Settings& cfg, int which) {
@@ -605,7 +623,7 @@ void keyRow(const config::Settings& cfg, int which) {
             g_bindCapture = -1;
         } else {
             bool got = pressedActionKey(name);
-            for (int m = 2; m <= 4 && !got && bind.mouse; ++m)
+            for (int m = bind.mouse >= 2 ? 2 : 3; m <= 4 && !got && bind.mouse; ++m)
                 if (ImGui::IsMouseClicked(m)) {
                     name = "MOUSE" + std::to_string(m + 1);
                     got = true;
@@ -659,7 +677,7 @@ void tapModeRows(const config::Settings& cfg) {
     const int fixedWheel = cfg.pingFixedWheel < cfg.wheelCount ? cfg.pingFixedWheel : 0;
     if (ImGui::BeginCombo("##pingtap", slotName(cfg, fixedWheel, cfg.pingFixedSlot).c_str())) {
         for (int w = 0; w < cfg.wheelCount; ++w)
-            for (int i = 0; i < config::kPingSlots; ++i) {
+            for (int i = 0; i < cfg.wheelSlots[w]; ++i) {
                 const std::string id = slotName(cfg, w, i) + "##" + std::to_string(w * config::kPingSlots + i);
                 if (ImGui::Selectable(id.c_str(), w == fixedWheel && i == cfg.pingFixedSlot))
                     config::change([w, i](config::Settings& c) {
@@ -690,9 +708,17 @@ void loadLabels(int w, const config::Wheel& wheel) {
 void removeWheel(const config::Settings& cfg, int w) {
     for (int k = w; k + 1 < cfg.wheelCount; ++k) loadLabels(k, cfg.wheels[k + 1]);
     loadLabels(cfg.wheelCount - 1, config::defaultWheel(cfg.wheelCount - 1));
+    for (int k = w; k + 1 < cfg.wheelCount; ++k) memcpy(g_wheelName[k], g_wheelName[k + 1], sizeof(g_wheelName[k]));
+    g_wheelName[cfg.wheelCount - 1][0] = 0;
     config::change([w](config::Settings& c) {
         if (w < config::kDefaultWheels || w >= c.wheelCount) return;
-        for (int k = w; k + 1 < c.wheelCount; ++k) c.wheels[k] = c.wheels[k + 1];
+        for (int k = w; k + 1 < c.wheelCount; ++k) {
+            c.wheels[k] = c.wheels[k + 1];
+            c.wheelSlots[k] = c.wheelSlots[k + 1];
+            c.wheelNames[k] = c.wheelNames[k + 1];
+        }
+        c.wheelSlots[c.wheelCount - 1] = config::kPingSlots;
+        c.wheelNames[c.wheelCount - 1].clear();
         --c.wheelCount;
         c.wheels[c.wheelCount] = config::defaultWheel(c.wheelCount);
         // What pointed at the removed wheel goes back to the first marker; what came after it follows its wheel.
@@ -710,8 +736,11 @@ void removeWheel(const config::Settings& cfg, int w) {
     });
 }
 
-// One wheel's nine slots: the icon (click for the list of icons) and the title, which is what the others read.
-void wheelEditor(const config::Settings& cfg, int w) {
+// One slot per row: the icon (click for the list of icons) and the title, which is what the others
+// read. Rows past `shown` are kept but not on the wheel: greyed out. `setGlyph` / `setLabel` store a change.
+template <class SetGlyph, class SetLabel>
+void slotRows(const config::Settings& cfg, const config::Wheel& slots, int shown, char (*buf)[net::protocol::kMaxPingLabelBytes + 1],
+              SetGlyph setGlyph, SetLabel setLabel) {
     uint8_t rgb[3] = {255, 210, 60}, acc[3] = {255, 255, 255};
     net::protocol::parseRgb(cfg.pingColor, rgb);
     net::protocol::parseRgb(cfg.pingAccent, acc);
@@ -719,16 +748,17 @@ void wheelEditor(const config::Settings& cfg, int w) {
     const float h = ImGui::GetFrameHeight();
     for (int i = 0; i < config::kPingSlots; ++i) {
         ImGui::PushID(i);
+        ImGui::BeginDisabled(i >= shown);
         ImGui::AlignTextToFramePadding();
         ImGui::TextDisabled("%d", i + 1);
         ImGui::SameLine();
-        if (iconButton("##icon", cfg.wheels[w][i].glyph, h, fill, accent, false)) ImGui::OpenPopup("icons");
+        if (iconButton("##icon", slots[i].glyph, h, fill, accent, false)) ImGui::OpenPopup("icons");
         if (ImGui::BeginPopup("icons")) {
             for (int g = 0; g < kGlyphCount; ++g) {
                 ImGui::PushID(g);
                 if (g % 8) ImGui::SameLine();
-                if (iconButton("##pick", static_cast<uint8_t>(g), h * 1.4f, fill, accent, g == cfg.wheels[w][i].glyph)) {
-                    config::change([w, i, g](config::Settings& c) { c.wheels[w][i].glyph = static_cast<uint8_t>(g); });
+                if (iconButton("##pick", static_cast<uint8_t>(g), h * 1.4f, fill, accent, g == slots[i].glyph)) {
+                    setGlyph(i, static_cast<uint8_t>(g));
                     ImGui::CloseCurrentPopup();
                 }
                 ImGui::PopID();
@@ -737,17 +767,45 @@ void wheelEditor(const config::Settings& cfg, int w) {
         }
         ImGui::SameLine();
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 14);
-        if (ImGui::InputTextWithHint("##label", "(no title)", g_label[w][i], sizeof(g_label[w][i]))) {
-            const std::string text = net::protocol::cleanPingLabel(g_label[w][i]);
-            config::change([w, i, text](config::Settings& c) { c.wheels[w][i].label = text; });
-        }
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("The text others see above this marker. Up to %d bytes (about %d Latin or %d Cyrillic\n"
-                              "letters). Leave empty for an icon only.",
+        if (ImGui::InputTextWithHint("##label", "(no title)", buf[i], sizeof(buf[i])))
+            setLabel(i, net::protocol::cleanPingLabel(buf[i]));
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("The text others see. Up to %d bytes (about %d Latin or %d Cyrillic\n"
+                              "letters). Leave empty for an icon only.%s",
                               static_cast<int>(net::protocol::kMaxPingLabelBytes), static_cast<int>(net::protocol::kMaxPingLabelBytes),
-                              static_cast<int>(net::protocol::kMaxPingLabelBytes / 2));
+                              static_cast<int>(net::protocol::kMaxPingLabelBytes / 2),
+                              i >= shown ? "\nNot on the wheel at the moment (see Slots); kept for later." : "");
+        ImGui::EndDisabled();
         ImGui::PopID();
     }
+}
+
+SliderEdit g_slotsEdit[config::kWheels + 1]; // [kWheels] = the quick answers
+
+// One wheel: its name, how many slots it shows, and the slots.
+void wheelEditor(const config::Settings& cfg, int w) {
+    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 14);
+    if (ImGui::InputTextWithHint("Name", ("Wheel " + std::to_string(w + 1)).c_str(), g_wheelName[w], sizeof(g_wheelName[w]))) {
+        const std::string text = net::protocol::cleanPingLabel(g_wheelName[w]);
+        config::change([w, text](config::Settings& c) { c.wheelNames[w] = text; });
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("The title shown over this wheel when it is open. Empty: \"Wheel %d\".", w + 1);
+    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 10);
+    if (settingSlider("Slots", g_slotsEdit[w], cfg.wheelSlots[w], config::kMinSlots, config::kPingSlots, "%d", 0)) {
+        const int n = g_slotsEdit[w].value;
+        config::change([w, n](config::Settings& c) {
+            c.wheelSlots[w] = n;
+            if (c.pingLastWheel == w && c.pingLastSlot >= n) c.pingLastSlot = 0;
+            if (c.pingFixedWheel == w && c.pingFixedSlot >= n) c.pingFixedSlot = 0;
+        });
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("How many slots this wheel shows (2-9). The others are kept, so raising it again brings them back.");
+    const int shown = g_slotsEdit[w].editing ? g_slotsEdit[w].value : cfg.wheelSlots[w];
+    slotRows(
+        cfg, cfg.wheels[w], shown, g_label[w],
+        [w](int i, uint8_t g) { config::change([w, i, g](config::Settings& c) { c.wheels[w][i].glyph = g; }); },
+        [w](int i, const std::string& text) { config::change([w, i, text](config::Settings& c) { c.wheels[w][i].label = text; }); });
     const bool own = w >= config::kDefaultWheels; // a wheel the player added
     if (ImGui::SmallButton("Reset this wheel")) {
         loadLabels(w, config::defaultWheel(w));
@@ -757,6 +815,33 @@ void wheelEditor(const config::Settings& cfg, int w) {
     if (own) {
         ImGui::SameLine();
         if (ImGui::SmallButton("Remove this wheel")) removeWheel(cfg, w);
+    }
+}
+
+// The quick answers: what the react key sends to the owner of the marker you look at.
+void reactionEditor(const config::Settings& cfg) {
+    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 10);
+    if (settingSlider("Slots##react", g_slotsEdit[config::kWheels], cfg.reactionSlots, config::kMinSlots, config::kPingSlots, "%d", 0)) {
+        const int n = g_slotsEdit[config::kWheels].value;
+        config::change([n](config::Settings& c) {
+            c.reactionSlots = n;
+            if (c.reactLast >= n) c.reactLast = 0;
+        });
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("How many answers the wheel shows (2-9). The others are kept.");
+    const int shown = g_slotsEdit[config::kWheels].editing ? g_slotsEdit[config::kWheels].value : cfg.reactionSlots;
+    slotRows(
+        cfg, cfg.reactions, shown, g_reactLabel,
+        [](int i, uint8_t g) { config::change([i, g](config::Settings& c) { c.reactions[i].glyph = g; }); },
+        [](int i, const std::string& text) { config::change([i, text](config::Settings& c) { c.reactions[i].label = text; }); });
+    if (ImGui::SmallButton("Reset the answers")) {
+        const config::Wheel d = config::defaultReactions();
+        for (int i = 0; i < config::kPingSlots; ++i) snprintf(g_reactLabel[i], sizeof(g_reactLabel[i]), "%s", d[i].label.c_str());
+        config::change([](config::Settings& c) {
+            c.reactions = config::defaultReactions();
+            c.reactionSlots = config::kDefaultReactionSlots;
+            c.reactLast = 0;
+        });
     }
 }
 
@@ -989,6 +1074,9 @@ void markersSection() {
     bool showArrows = cfg.showArrows;
     if (ImGui::Checkbox("Player arrows", &showArrows)) config::change([showArrows](config::Settings& c) { c.showArrows = showArrows; });
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Shows an arrow on the edge of the screen towards each player you cannot see");
+    bool hideAll = ui::overlayHidden();
+    if (ImGui::Checkbox("Hide names, markers, arrows and notices", &hideAll)) ui::setOverlayHidden(hideAll);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("For a screenshot or a recording. The hide key (Controls tab) does the same.");
     bool pingPulse = cfg.pingPulse;
     if (ImGui::Checkbox("Flash markers when placed", &pingPulse))
         config::change([pingPulse](config::Settings& c) { c.pingPulse = pingPulse; });
@@ -1030,7 +1118,8 @@ void markersSection() {
     if (ImGui::TreeNode("Marker wheels")) {
         if (ImGui::BeginTabBar("wheels")) {
             for (int w = 0; w < cfg.wheelCount; ++w) {
-                const std::string tab = "Wheel " + std::to_string(w + 1);
+                const std::string tab = (cfg.wheelNames[w].empty() ? "Wheel " + std::to_string(w + 1) : cfg.wheelNames[w]) +
+                                        "###wheel" + std::to_string(w);
                 if (ImGui::BeginTabItem(tab.c_str())) {
                     wheelEditor(cfg, w);
                     ImGui::EndTabItem();
@@ -1039,9 +1128,12 @@ void markersSection() {
             if (cfg.wheelCount < config::kWheels) {
                 if (ImGui::TabItemButton("+", ImGuiTabItemFlags_Trailing | ImGuiTabItemFlags_NoTooltip)) {
                     loadLabels(cfg.wheelCount, config::defaultWheel(cfg.wheelCount));
+                    g_wheelName[cfg.wheelCount][0] = 0;
                     config::change([](config::Settings& c) {
                         if (c.wheelCount >= config::kWheels) return;
                         c.wheels[c.wheelCount] = config::defaultWheel(c.wheelCount);
+                        c.wheelSlots[c.wheelCount] = config::kPingSlots;
+                        c.wheelNames[c.wheelCount].clear();
                         ++c.wheelCount;
                     });
                 }
@@ -1049,6 +1141,12 @@ void markersSection() {
             }
             ImGui::EndTabBar();
         }
+        ImGui::TreePop();
+    }
+    if (ImGui::TreeNode("Quick answers")) {
+        ImGui::TextDisabled("Look at another player's marker, then tap or hold %s: the owner gets your answer.",
+                            cfg.reactKey.empty() ? "the react key" : ui::keyLabel(cfg.reactKey).c_str());
+        reactionEditor(cfg);
         ImGui::TreePop();
     }
 }
@@ -1108,13 +1206,64 @@ void controlsSection() {
     padRow("Gamepad:", gamepad::Action::PingClear, cfg->pingClearPad, &config::Settings::pingClearPad,
            "While you hold the marker button: removes all your markers.");
     ImGui::Unindent();
+    ImGui::TextUnformatted("Place the other way");
+    ImGui::Indent();
+    keyRow(*cfg, 4);
+    ImGui::Unindent();
     tapModeRows(*cfg);
+
+    ImGui::TextUnformatted("The marker wheel");
+    ImGui::Indent();
+    if (ImGui::RadioButton("opens after a short hold", !cfg->wheelInstant))
+        config::change([](config::Settings& c) { c.wheelInstant = false; });
+    if (ImGui::RadioButton("opens the moment the key goes down", cfg->wheelInstant))
+        config::change([](config::Settings& c) { c.wheelInstant = true; });
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("A very short tap that does not move the pointer still places your marker.");
+    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 10);
+    float sens = g_sensEdit.editing ? g_sensEdit.value : cfg->wheelSensitivity;
+    if (ImGui::SliderFloat("Pointer speed", &sens, 0.1f, 3.f, "%.2f x", ImGuiSliderFlags_AlwaysClamp)) {
+        g_sensEdit.value = sens;
+        g_sensEdit.editing = true;
+    }
+    if (ImGui::IsItemDeactivatedAfterEdit()) {
+        const float v = g_sensEdit.value;
+        config::change([v](config::Settings& c) { c.wheelSensitivity = v; });
+    }
+    if (g_sensEdit.editing && !ImGui::IsItemActive() && std::fabs(cfg->wheelSensitivity - g_sensEdit.value) < 0.001f)
+        g_sensEdit.editing = false;
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("How far the pointer in the open wheel moves per mouse movement. Raise it for a low mouse sensitivity.");
+    ImGui::TextUnformatted("Previous wheel (while it is open)");
+    keyRow(*cfg, 6);
+    ImGui::TextUnformatted("Next wheel (while it is open)");
+    keyRow(*cfg, 7);
+    ImGui::Unindent();
+
+    ImGui::SeparatorText("Quick answers");
+    keyRow(*cfg, 3);
+    padRow("Gamepad:", gamepad::Action::React, cfg->reactPad, &config::Settings::reactPad,
+           "The same on a gamepad: tap sends your last answer, hold opens the answers wheel.");
+
+    ImGui::SeparatorText("Overlay");
+    ImGui::TextUnformatted("Show / hide names, markers, arrows, notices and chat");
+    ImGui::Indent();
+    keyRow(*cfg, 5);
+    bool hidden = ui::overlayHidden();
+    if (ImGui::Checkbox("Hidden now", &hidden)) ui::setOverlayHidden(hidden);
+    ImGui::Unindent();
+
+    ImGui::SeparatorText("Gamepad");
+    bool ps = cfg->padPlayStation;
+    if (ImGui::Checkbox("Name the buttons as on a PlayStation pad", &ps))
+        config::change([ps](config::Settings& c) { c.padPlayStation = ps; });
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Only the names in hints change (A = Cross, LB = L1, ...). Your pad works the same.");
 }
 
 // "INSERT or LS+RS"
 std::string openKeys(const config::Settings& cfg) {
     const uint16_t pad = gamepad::parse(cfg.menuPad);
-    return pad ? cfg.menuKey + " or " + gamepad::format(pad) : cfg.menuKey;
+    return pad ? cfg.menuKey + " or " + gamepad::labelCombo(gamepad::format(pad)) : cfg.menuKey;
 }
 } // namespace
 
@@ -1142,7 +1291,12 @@ void draw(bool open) {
         g_inited = true;
         snprintf(g_name, sizeof(g_name), "%s", config::get()->name.c_str());
         snprintf(g_code, sizeof(g_code), "%s", config::get()->join.c_str());
-        for (int w = 0; w < config::kWheels; ++w) loadLabels(w, config::get()->wheels[w]);
+        for (int w = 0; w < config::kWheels; ++w) {
+            loadLabels(w, config::get()->wheels[w]);
+            snprintf(g_wheelName[w], sizeof(g_wheelName[w]), "%s", config::get()->wheelNames[w].c_str());
+        }
+        for (int i = 0; i < config::kPingSlots; ++i)
+            snprintf(g_reactLabel[i], sizeof(g_reactLabel[i]), "%s", config::get()->reactions[i].label.c_str());
         g_hintUntil = GetTickCount() + 10000;
     }
     static bool wasOpen = false;

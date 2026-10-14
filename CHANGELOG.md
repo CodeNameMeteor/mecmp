@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Fixes
+- **Hosting is harder to flood.** A host accepts at most 4 players from one IP address, refuses a
+  player who claims another player's session id, and limits each player to 80 packets a second.
+  Before, one machine could take every slot of a session, and another player could send as someone else.
+
 ## 0.9.0: first public beta
 
 Run through the city of Glass with other players. Each player shows up as a ghost that copies their

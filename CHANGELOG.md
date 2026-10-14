@@ -27,6 +27,13 @@
   `--mirror` still mirrors you, with any build.
 
 ### Fixes
+- **Teleports land on the floor.** *Go to*, a summon and *go back* used to drop the player through
+  thin floors or into a city that had not streamed in yet. The screen now stays black while a ray looks
+  for the ground under the target; the player is held there, set down on the ground it finds and put
+  back if falling, and the fade ends once they stand still. With no ground after 8 s they go back to
+  where they started.
+- **Player arrows fade with distance** like markers (50 m to 300 m), so far players, and the map
+  screen, no longer show arrows thousands of metres away.
 - **A joiner listens only to its host.** Everything in a session reaches a joiner through the host (or the
   server), so packets from any other address are now ignored. Before, someone who knew a player's address
   could send it chat, markers or a summon that appeared to come from the host.

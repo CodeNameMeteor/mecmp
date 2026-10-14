@@ -209,10 +209,13 @@ LinearTransform*)`, target read with MOVAPS (16-byte aligned). It stores the tar
 physics controller (+0x60, vtbl+0x140, velocity zeroed via vtbl+0x168), sets the transform, sends
 `CharacterToComponentsOnTeleportedMessage` to the components and marks the character dirty, so
 the client follows. Sequence on the server tick: fade to black (350 ms, drawn by the overlay) ->
-teleport onto the other player's spot, facing their way -> hold 1.2 s while the area streams in
-(placed again if more than 2 m below the target, at most 3 times, only while it is still the same
-character near the target: a death or respawn ends it) -> fade in. The fade also ends by itself if a
-phase runs 4 s over (the server tick can stop while the game handles a death), so the screen never
+teleport onto the other player's spot, facing their way -> hold while the area streams in: each tick
+the character is put back on the target until a ray straight down (`game/raycast.h`, skipping hits
+above the target such as its own capsule) finds the ground; ground more than 2 m below is only taken
+after 1.2 s. It is then set 5 cm above that ground, placed again if more than 0.5 m below (at most 10
+times), and the hold ends once it stood still for 0.4 s and at least 1.2 s passed. No ground in 8 s:
+back where it started. Only while it is still the same character near the target: a death or respawn
+ends it -> fade in. The fade also ends by itself if a phase runs 4 s over (the server tick can stop while the game handles a death), so the screen never
 stays black. The target's own state is not checked: a player who is dead may stand somewhere deadly. Before the first use
 the function's bytes are checked; if they differ, *Go to* is off (logged), the rest of the mod runs.
 

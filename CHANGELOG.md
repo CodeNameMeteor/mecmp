@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Performance
+- **Ghosts cost ~50x less per frame.** Writing a ghost's pose each frame took ~0.3 ms, almost all of it
+  in Windows' WriteProcessMemory, which flushes the CPU's instruction cache on every call. The mod now
+  uses the kernel call underneath it (just as safe if the memory is gone) and writes the pose once per
+  frame instead of twice: ~13 us per ghost per frame instead of ~350 us x2. Other hot paths read game
+  memory in fewer calls (one read per object instead of one per field; the game's own type data and
+  vtables are read directly). The whole mod now costs ~15 ms per second of game time with one ghost,
+  most of it the overlay.
+- **F9 logs a "perf:" line** (developer builds): time per call, calls per second and memory calls per
+  call for each part of the mod (tick, capture, ghosts, render pose, UI check, overlay).
+
 ### Fixes
 - **The injector finds the game, not the activation window.** Starting the game first runs an
   activation process that is also called MirrorsEdgeCatalyst.exe; an injector started early loaded the

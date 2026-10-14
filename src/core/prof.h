@@ -23,6 +23,9 @@ enum Section : int {
     Ping,        //   markers
     Models,      //   look catalogue
     RenderPose,  // client replay update: the ghosts' poses for this frame
+    RenderState, //   the blended network state (net::remoteState)
+    RenderRead,  //   reading the ghost's client component
+    RenderWrite, //   writing the pose
     UIPause,     // the UI system hook (menus do not pause the session)
     Overlay,     // the overlay (ImGui) on Present
     kSections
@@ -30,7 +33,7 @@ enum Section : int {
 
 inline const char* name(int s) {
     static const char* const k[kSections] = {"tick", "capture", "ghosts", "teleport", "ping",
-                                             "models", "render pose", "ui", "overlay"};
+                                             "models", "render pose", "  state", "  read", "  write", "ui", "overlay"};
     return s >= 0 && s < kSections ? k[s] : "?";
 }
 

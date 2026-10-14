@@ -222,11 +222,7 @@ inline void* engineAlloc(void** arenaMember, uint64_t size, uint64_t align) {
 }
 
 // Fault-tolerant small write (our own process): used for fields the client thread also touches.
-inline void poke(uintptr_t addr, const void* src, size_t n) {
-    SIZE_T w = 0;
-    ++prof::t_writes;
-    WriteProcessMemory(GetCurrentProcess(), reinterpret_cast<void*>(addr), src, n, &w);
-}
+inline void poke(uintptr_t addr, const void* src, size_t n) { mem::write(addr, src, n); }
 template <class T> inline void poke(uintptr_t addr, T v) { poke(addr, &v, sizeof(T)); }
 
 inline LinearTransform transformFromYaw(const float pos[3], float yaw) {

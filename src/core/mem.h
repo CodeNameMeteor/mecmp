@@ -29,6 +29,23 @@ inline bool read(uintptr_t addr, void* out, size_t size) {
 
 template <class T> inline bool read(uintptr_t addr, T& out) { return read(addr, &out, sizeof(T)); }
 
+// Fault-tolerant write into our own process. NtWriteVirtualMemory is the kernel call under
+// WriteProcessMemory without the extras: WriteProcessMemory also queries and changes the page
+// protection and flushes the instruction cache on every call (it is made for patching code), which
+// costs ~0.3 ms for a ghost's pose. Falls back to WriteProcessMemory (e.g. for a read-only page).
+inline bool write(uintptr_t addr, const void* src, size_t size) {
+    if (addr < 0x10000) return false;
+    ++prof::t_writes;
+    using NtWriteFn = LONG(NTAPI*)(HANDLE, PVOID, LPCVOID, SIZE_T, SIZE_T*);
+    static const NtWriteFn ntWrite =
+        reinterpret_cast<NtWriteFn>(reinterpret_cast<void*>(GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtWriteVirtualMemory")));
+    SIZE_T done = 0;
+    if (ntWrite && ntWrite(GetCurrentProcess(), reinterpret_cast<PVOID>(addr), src, size, &done) >= 0 && done == size)
+        return true;
+    done = 0;
+    return WriteProcessMemory(GetCurrentProcess(), reinterpret_cast<LPVOID>(addr), src, size, &done) && done == size;
+}
+
 // The game image's data sections (vtables, type info, globals): committed, readable and not code,
 // found once with VirtualQuery. They stay mapped for the life of the process, so a read that lies
 // entirely inside one is a plain copy instead of a kernel call.

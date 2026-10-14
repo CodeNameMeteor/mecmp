@@ -562,6 +562,13 @@ void beforeClientReplayUpdate() {
 }
 
 void renderFrame() {
+    // Both of the game's client replay updaters run every frame, and each calls this first: one pose
+    // write per frame is enough (the second call would write the same moment again).
+    static std::atomic<uint64_t> lastAt{0};
+    static const uint64_t minGap = [] { LARGE_INTEGER f; QueryPerformanceFrequency(&f); return static_cast<uint64_t>(f.QuadPart / 1000); }();
+    const uint64_t t = prof::now();
+    if (t - lastAt.load(std::memory_order_relaxed) < minGap) return; // within 1 ms: the same frame
+    lastAt.store(t, std::memory_order_relaxed);
     prof::Scope scope(prof::RenderPose);
     if (!level::serverWorld() || level::inFrontEnd()) return; // no ghosts outside a playable level
     struct Target { uint32_t peer; void* comp; void* ch; };
@@ -577,19 +584,28 @@ void renderFrame() {
     thread_local net::PlayerState st; // large; render thread or client update thread
     for (size_t i = 0; i < n; ++i) {
         uint32_t age = 0;
-        if (!net::remoteState(targets[i].peer, st, age) || age >= kHideAfterMs) continue;
+        {
+            prof::Scope s(prof::RenderState);
+            if (!net::remoteState(targets[i].peer, st, age) || age >= kHideAfterMs) continue;
+        }
         thread_local ClientCompView v;
-        if (!readClientComp(targets[i].comp, targets[i].ch, v)) continue;
-        const uintptr_t pose = v.pose();
-        const uint32_t bones = v.bones();
         uint32_t idx[kMaxBones];
-        const uintptr_t idxPtr = v.boneIndices();
-        if (!pose || bones != st.boneCount || !bones || bones > kMaxBones || !idxPtr || !mem::read(idxPtr, idx, bones * 4))
-            continue;
+        uintptr_t pose = 0;
+        uint32_t bones = 0;
+        {
+            prof::Scope s(prof::RenderRead);
+            if (!readClientComp(targets[i].comp, targets[i].ch, v)) continue;
+            pose = v.pose();
+            bones = v.bones();
+            const uintptr_t idxPtr = v.boneIndices();
+            if (!pose || bones != st.boneCount || !bones || bones > kMaxBones || !idxPtr || !mem::read(idxPtr, idx, bones * 4))
+                continue;
+        }
         float buf[kMaxBones][8];
         memcpy(buf, st.bones, bones * 0x20);
         for (uint32_t b = 0; b < bones; ++b)
             if ((idx[b] & 0xff) == 1) placeAnchor(&buf[0][0], static_cast<int>(b), st.pos); // the body's anchor
+        prof::Scope s(prof::RenderWrite);
         poke(pose, buf, bones * 0x20);
     }
 }

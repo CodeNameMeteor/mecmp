@@ -1,6 +1,7 @@
 #include "game/runs.h"
 
 #include <atomic>
+#include <cstdio>
 #include <cstring>
 #include <mutex>
 #include <string>
@@ -128,8 +129,11 @@ void onFinished(const uint8_t* m) {
     const uintptr_t data = challengeData(content);
     const std::string sid = data ? readString(mem::readOr<uintptr_t>(data + Data_Sid)) : std::string();
     const std::string stat = data ? readString(mem::readOr<uintptr_t>(data + Data_MainStatCode)) : std::string();
-    MLOG("runs: finished content %08x ('%s', stat '%s'): value %lld, delta %u, had record %d, new record %d", content,
-         sid.c_str(), stat.c_str(), static_cast<long long>(value), delta, hadRecord, newRecord);
+    uint32_t index = 0;
+    memcpy(&index, m + 0x4c, 4);
+    MLOG("runs: finished content %08x ('%s', stat '%s'), set %u: value %lld, delta %d, had record %d, new record %d",
+         content, sid.c_str(), stat.c_str(), index, static_cast<long long>(value), static_cast<int32_t>(delta), hadRecord,
+         newRecord);
     const uint8_t kind = kindOf(stat);
     // Only runs against the clock: a billboard hack's "time stamp" is when it was done, not how long.
     if (kind == proto::kRunBillboard || kind == proto::kRunAssault || (!stat.empty() && stat.find("_time") == std::string::npos)) {
@@ -148,6 +152,24 @@ void onFinished(const uint8_t* m) {
     net::sendResult(r);
 }
 
+// Research: what the other messages of this category hold (a player-made time trial's finish is one of
+// them). Each type is dumped the first few times it is seen.
+void dumpMessage(const uint8_t* m, uint32_t type) {
+    static uint32_t types[32] = {};
+    static int counts[32] = {};
+    int slot = -1;
+    for (int i = 0; i < 32 && slot < 0; ++i)
+        if (types[i] == type || types[i] == 0) { types[i] = type; slot = i; }
+    if (slot < 0 || counts[slot]++ >= 4) return;
+    uint8_t raw[0x60] = {};
+    if (!mem::read(reinterpret_cast<uintptr_t>(m) + 0x30, raw, sizeof(raw))) return;
+    char hex[sizeof(raw) * 3 + 1] = {};
+    for (size_t i = 0; i < sizeof(raw); ++i) snprintf(hex + i * 3, 4, "%02x ", raw[i]);
+    uintptr_t vt = 0;
+    memcpy(&vt, m, sizeof(vt));
+    MLOG("runs: social-play message type %08x (vtable %p), bytes from +0x30: %s", type, reinterpret_cast<void*>(vt), hex);
+}
+
 void onMessage(Listener* self, const void* message) {
     (void)self;
     const auto* m = static_cast<const uint8_t*>(message);
@@ -155,6 +177,7 @@ void onMessage(Listener* self, const void* message) {
     memcpy(&category, m + Msg_Category, 4);
     memcpy(&type, m + Msg_Type, 4);
     if (category != kCategorySocialPlay) return;
+    dumpMessage(m, type);
     if (type == kTypeFinished) onFinished(m);
     else if (type == kTypeStarted) {
         uint32_t content = 0;

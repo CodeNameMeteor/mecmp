@@ -130,6 +130,37 @@ bool readConfig(const std::string& path, Options& o, bool required) {
     return true;
 }
 
+// First run: a commented mecmp_server.ini to fill in (every setting at its default).
+void writeDefaultConfig(const std::string& path) {
+    std::ofstream out(path);
+    if (!out) return;
+    out << "# MECMP dedicated server settings. Lines starting with # or ; are comments; restart the server after\n"
+           "# changing this file. Options on the command line win over these.\n"
+           "name=MECMP server\n"
+           "port=47800\n"
+           "max_players=16\n"
+           "max_per_ip=4\n"
+           "log=mecmp_server.log\n"
+           "log_chat=1\n"
+           "bans=bans.txt\n"
+           "# a chat line each player gets when they join (empty = none)\n"
+           "motd=\n"
+           "\n"
+           "# Discord: Server Settings > Integrations > Webhooks > New Webhook > Copy Webhook URL, paste it here.\n"
+           "# Keep it private: anyone who has it can post to the channel.\n"
+           "webhook_url=\n"
+           "# the name the posts appear under (empty = the server's name)\n"
+           "webhook_name=\n"
+           "# the address the \"online\" post tells players to join, e.g. play.example.com:47800\n"
+           "# (empty = the public address the server finds itself)\n"
+           "public_address=\n"
+           "# 0 turns a kind of post off\n"
+           "webhook_joins=1\n"
+           "webhook_status=1\n"
+           "webhook_results=1\n";
+    logLine("wrote " + path + " with the default settings (edit it to name the server or add a Discord webhook)");
+}
+
 void usage() {
     std::printf("mecmp_server [--port 47800] [--name \"My server\"] [--max-players 16]\n"
                 "             [--config mecmp_server.ini] [--log mecmp_server.log] [--bans bans.txt] [--mirror]\n");
@@ -388,6 +419,7 @@ int main(int argc, char** argv) {
     bool configGiven = false;
     for (int i = 1; i < argc; ++i)
         if (std::string(argv[i]) == "--config" && i + 1 < argc) { configPath = argv[i + 1]; configGiven = true; }
+    if (!configGiven && !std::filesystem::exists(configPath)) writeDefaultConfig(configPath);
     if (!readConfig(configPath, o, configGiven)) return 1;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -445,10 +477,26 @@ int main(int argc, char** argv) {
     dc::Config discordCfg = o.discord;
     if (discordCfg.username.empty()) discordCfg.username = o.relay.name;
     dc::Webhook webhook(discordCfg, logLine);
-    if (webhook.enabled() && webhook.config().joins)
+    if (webhook.enabled())
         relay.setOnEvent([&webhook](const mecmp::server::Event& e) {
+            namespace proto = mecmp::net::protocol;
             const std::string who = "**" + dc::escapeMarkdown(e.name.empty() ? "Runner" : e.name) + "**";
             const std::string count = std::to_string(e.players) + (e.players == 1 ? " player" : " players") + " online";
+            if (e.kind == mecmp::server::Event::Result) {
+                if (!webhook.config().results) return;
+                const proto::Result& r = e.result;
+                std::string kind = proto::runKindName(r.kind);
+                std::string line = u8"\U0001F3C1 " + who + " finished the " + kind;
+                if (!r.title.empty()) line += " **" + dc::escapeMarkdown(r.title) + "**";
+                line += " in **" + proto::formatRunTime(r.value) + "**";
+                if (r.flags & proto::kResultNewRecord) {
+                    line += u8" \u2014 new record";
+                    if ((r.flags & proto::kResultHadRecord) && r.delta > 0) line += " (" + proto::formatRunTime(r.delta) + " faster)";
+                }
+                webhook.post(line);
+                return;
+            }
+            if (!webhook.config().joins) return;
             if (e.kind == mecmp::server::Event::Joined) webhook.post(u8"\u27A1\uFE0F " + who + " joined (" + count + ")");
             else webhook.post(u8"\u2B05\uFE0F " + who + " left (" + count + ")");
         });

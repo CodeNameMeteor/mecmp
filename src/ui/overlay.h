@@ -29,6 +29,19 @@ bool setPingClearKey(const std::string& name);
 // The chat key (as chat_key; empty = none), at once. False if it is not such a key or is the menu,
 // marker or clear-markers key.
 bool setChatKey(const std::string& name);
+// The quick answers key (as ping_key; empty = none), at once. False if it is the menu, chat, marker
+// or clear-markers key.
+bool setReactKey(const std::string& name);
+// More keys, set the same way (letters, ENTER, menu keys, MOUSE4 / MOUSE5; empty = none). A key does
+// one job: False, and nothing changed, if another action of the mod (or the menu) has it.
+bool setAltKey(const std::string& name);        // place a marker the other way
+bool setHideKey(const std::string& name);       // show / hide the overlay
+bool setWheelPrevKey(const std::string& name);  // previous wheel, while the wheel is open
+bool setWheelNextKey(const std::string& name);  // next wheel
+// Names, markers, arrows, notices and chat lines are not drawn while this is on (a screenshot, a
+// recording). The menu, the chat line and the open wheel still are. Any thread.
+bool overlayHidden();
+void setOverlayHidden(bool hidden);
 int pingClearVk();  // its virtual-key code (0 = none)
 bool gameFocused(); // the game's window has the keyboard
 // A key name as shown to the player: "Middle click" for MOUSE3, "Mouse 4", "Mouse 5", else the name itself.

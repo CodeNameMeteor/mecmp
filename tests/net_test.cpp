@@ -367,6 +367,47 @@ static void testPingLabel() {
 }
 
 // What follows the title: how long the marker stays, its accent colour and the cell it goes into.
+// A quick answer to someone's marker.
+static void testReact() {
+    char buf[protocol::kMaxPacket];
+    const protocol::Header h{protocol::kMagic, protocol::kProtocol, protocol::kTypeReact, 7, 1};
+    protocol::React in, out;
+    in.id = 11;
+    in.target = 0xdeadbeefu;
+    in.cell = 3;
+    in.title = "Here";
+    in.text = "On my way";
+    size_t n = protocol::writeReact(buf, h, in);
+    CHECK(protocol::knownType(protocol::kTypeReact));
+    CHECK(protocol::readReact(buf + sizeof(h), n - sizeof(h), out));
+    CHECK(out.id == 11 && out.target == 0xdeadbeefu && out.cell == 3 && out.title == "Here" && out.text == "On my way");
+    // A marker without a title is fine; an answer without text is not.
+    in.title.clear();
+    n = protocol::writeReact(buf, h, in);
+    CHECK(protocol::readReact(buf + sizeof(h), n - sizeof(h), out) && out.title.empty() && out.text == "On my way");
+    in.text.clear();
+    n = protocol::writeReact(buf, h, in);
+    CHECK(!protocol::readReact(buf + sizeof(h), n - sizeof(h), out));
+    // Every cut of a good packet is refused, never read out of bounds (the sanitizers watch).
+    in.title = "Roof";
+    in.text = "Got it";
+    n = protocol::writeReact(buf, h, in);
+    for (size_t cut = 0; cut + 1 < n - sizeof(h); ++cut) CHECK(!protocol::readReact(buf + sizeof(h), cut, out));
+    // A cell that does not exist, and a text that claims to be longer than the packet.
+    n = protocol::writeReact(buf, h, in);
+    buf[sizeof(h) + 8] = static_cast<char>(protocol::kPingCells);
+    CHECK(!protocol::readReact(buf + sizeof(h), n - sizeof(h), out));
+    n = protocol::writeReact(buf, h, in);
+    buf[n - 1 - 6] = static_cast<char>(200); // the text's length byte
+    CHECK(!protocol::readReact(buf + sizeof(h), n - sizeof(h), out));
+    // Over-long and dirty texts are cut and cleaned like marker titles.
+    in.title = "x";
+    in.text = std::string(1, char(7)) + std::string(80, 'a');
+    n = protocol::writeReact(buf, h, in);
+    CHECK(protocol::readReact(buf + sizeof(h), n - sizeof(h), out) && out.text.size() <= protocol::kMaxPingLabelBytes &&
+          out.text.find(char(7)) == std::string::npos);
+}
+
 static void testPingTail() {
     char buf[protocol::kMaxPacket];
     protocol::Header h{protocol::kMagic, protocol::kProtocol, protocol::kTypePing, 7, 1};
@@ -470,6 +511,7 @@ int main() {
     testRecentIds();
     testPing();
     testPingLabel();
+    testReact();
     testPingTail();
     testPingCells();
     testRgb();

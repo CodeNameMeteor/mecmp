@@ -7,6 +7,43 @@
   player who claims another player's session id, and limits each player to 80 packets a second.
   Before, one machine could take every slot of a session, and another player could send as someone else.
 
+### Marker wheel
+- **Instant wheel** (Controls tab): the wheel can open the moment the key goes down instead of after a
+  short hold. A very short tap that never moves the pointer still places your marker.
+- **Easier to aim at a low mouse sensitivity.** The pointer is kept close to the middle, so turning to
+  the opposite wedge is a short move; the dead zone is smaller, there is a *Pointer speed* setting
+  (0.1 to 3), and
+  the right mouse button cancels. The wheel looks as it did.
+- **Slots per wheel (2 to 9).** Each wheel shows the first N of its nine slots; the others are kept, so
+  raising N again brings them back. Digits, wedges and the tap slot follow.
+- **Wheel names.** Each wheel can have its own title.
+
+### Markers
+- Markers are drawn 15% smaller until your crosshair is on one, then they grow to 10% over their old size.
+- **Double tap the clear key** (X now, was H) to remove just the marker of yours you look at (the one
+  at your feet within 1.5 m when markers go where you stand). Holding it still removes all of them.
+- Titles of markers that would cover each other, or another marker's icon, stack upwards (only up,
+  so they do not jump about), with a thin line back to their marker.
+
+### Keys
+- **Mouse 4 / Mouse 5** can be bound to the marker, quick answer and the new keys below (nothing is
+  bound to them by default).
+- **Place the other way** (B): a marker where you stand if markers go where you look, and the other
+  way round, without opening the settings.
+- **Hide the overlay** (Y, or the checkbox on the Markers tab): names, markers, arrows, notices and
+  chat lines are not drawn, for a screenshot or a recording.
+- **Previous / next wheel** (Q / E) while the wheel is open. The arrows and the mouse wheel still work.
+  While the marker key is down the game does not see the wheel's keys (digits, arrows, Q, E).
+
+### Quick answers
+- New **react key** (C by default): look at another player's marker, tap to send your last quick
+  answer, hold for the answers wheel. The owner sees `Name reacted "On my way" to your "Here" marker`.
+  Needs the new packet type, so a dedicated server must be updated as well.
+
+### Gamepad
+- **PlayStation names** for the buttons in hints (Controls tab, `pad_labels`). Settings keep Xbox names.
+- Tool bag now has a tooltip like MagRope and GridLink.
+
 ## 0.9.0: first public beta
 
 Run through the city of Glass with other players. Each player shows up as a ghost that copies their

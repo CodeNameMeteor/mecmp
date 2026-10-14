@@ -29,6 +29,7 @@ constexpr uint16_t kTypeState = 1;
 constexpr uint16_t kTypeHello = 2;
 constexpr uint16_t kTypeChat = 3;
 constexpr uint16_t kTypePing = 4; // a world marker
+constexpr uint16_t kTypeReact = 6; // a quick answer to someone's marker (see REACT below)
 // type 5 INFO: a server list's question "who are you?" and a dedicated server's answer. Not a session
 // packet: it is not in knownType (never stored or forwarded), and a server answers it whatever the
 // protocol in the header, so a list can say "other version" instead of nothing.
@@ -41,7 +42,7 @@ constexpr size_t kInfoRequestSize = 80;
 // The packet types this version understands. Anything else is dropped before it can create state or
 // be forwarded, so a new type needs no protocol bump: older versions simply ignore it.
 constexpr bool knownType(uint16_t type) {
-    return type == kTypeState || type == kTypeHello || type == kTypeChat || type == kTypePing;
+    return type == kTypeState || type == kTypeHello || type == kTypeChat || type == kTypePing || type == kTypeReact;
 }
 constexpr size_t kMaxChatBytes = 120; // UTF-8, after cleaning
 constexpr size_t kNameLen = 24;
@@ -241,6 +242,23 @@ int choosePingCell(const PingCellView cells[kPingCells], int limit, uint8_t glyp
                    const float pos[3]);
 // True when a marker at `pos` is the one in `cell` again (same glyph and title, within kPingMergeMetres).
 bool samePingMarker(const PingCellView& cell, uint8_t glyph, const std::string& label, const float pos[3]);
+// type 6 REACT: u32 id | u32 target | u8 cell | u8 titleLength | title | u8 textLength | text.
+// A quick answer to the marker in `cell` of the player whose session id is `target` ("On my way").
+// `title` is that marker's title as the sender saw it (empty = none), so the owner can name it even if
+// the marker was replaced meanwhile. Everyone receives it (the host and servers forward it like any
+// packet); only `target` shows it. Sent a few times like PING, `id` makes the repeats the same event.
+// Older versions do not know the type and drop it.
+struct React {
+    uint32_t id = 0;
+    uint32_t target = 0;
+    uint8_t cell = 0;   // 0..kPingCells-1
+    std::string title;  // cleaned, at most kMaxPingLabelBytes; may be empty
+    std::string text;   // cleaned, at most kMaxPingLabelBytes; never empty
+};
+size_t writeReact(char* buf, const Header& h, const React& r);
+// False for a short or damaged packet, a cell out of range, or an empty answer.
+bool readReact(const char* payload, size_t n, React& out);
+
 // "ffd23c" or "#ffd23c" -> r, g, b. False (rgb untouched) for anything else.
 bool parseRgb(const std::string& hex, uint8_t rgb[3]);
 std::string formatRgb(const uint8_t rgb[3]);

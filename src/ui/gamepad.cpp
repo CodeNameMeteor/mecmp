@@ -9,6 +9,7 @@
 #include <atomic>
 #include <cstring>
 
+#include "core/config.h"
 #include "core/log.h"
 #include "game/engine.h"
 #include "game/hooks.h"
@@ -33,6 +34,7 @@ struct Pad {
 };
 Pad g_pads[XUSER_MAX_COUNT];
 std::atomic<int> g_wheelPad{-1}; // the controller whose marker buttons are held (it drives the marker wheel)
+std::atomic<int> g_wheelAction{static_cast<int>(Action::Ping)}; // which buttons it is: Ping or React
 std::atomic<DWORD> g_fakePacket{1};
 
 // Capture: 0 off, 1 waiting until nothing is held (the press that clicked "Change"), 2 waiting for
@@ -77,7 +79,7 @@ DWORD WINAPI getState(DWORD user, XINPUT_STATE* st) {
     const uint16_t now = st->Gamepad.wButtons;
     const uint16_t before = pad.held.exchange(now);
     uint16_t hidden = 0; // buttons the game must not see this time
-    bool pingPressed = false, clearPressed = false;
+    bool pingPressed = false, reactPressed = false, clearPressed = false;
     if (g_capture.load() != 0) track(now);
     for (int a = 0; a < kActions; ++a) {
         const uint16_t bind = g_binding[a].load();
@@ -91,7 +93,13 @@ DWORD WINAPI getState(DWORD user, XINPUT_STATE* st) {
                     pingPressed = true; // a short press places a marker, a long one opens the wheel (below)
                     pad.swallow[a] = true;
                 }
-            } else if (g_wheelPad.load() == static_cast<int>(user) && radial::engaged()) {
+            } else if (a == static_cast<int>(Action::React)) {
+                if (!ui::menuOpen() && !game::hooks::gameMenuOpen()) {
+                    reactPressed = true; // a short press sends the last answer, a long one opens its wheel
+                    pad.swallow[a] = true;
+                }
+            } else if (a == static_cast<int>(Action::PingClear) && g_wheelPad.load() == static_cast<int>(user) &&
+                       radial::engaged()) {
                 clearPressed = true; // only while the marker buttons are held; otherwise the game has these buttons
                 pad.swallow[a] = true;
             }
@@ -101,13 +109,19 @@ DWORD WINAPI getState(DWORD user, XINPUT_STATE* st) {
     }
     // The marker wheel: this pad's right stick points at a slot and LB/RB switch wheel while it is open.
     bool wheelOpen = false;
-    if (pingPressed && g_wheelPad.load() < 0) g_wheelPad = static_cast<int>(user);
+    if ((pingPressed || reactPressed) && g_wheelPad.load() < 0) {
+        g_wheelPad = static_cast<int>(user);
+        g_wheelAction = static_cast<int>(pingPressed ? Action::Ping : Action::React);
+    }
     if (g_wheelPad.load() == static_cast<int>(user)) {
-        const uint16_t bind = g_binding[static_cast<int>(Action::Ping)].load();
+        const int action = g_wheelAction.load();
+        const uint16_t bind = g_binding[action].load();
         const bool held = bind && g_capture.load() == 0 && (now & bind) == bind;
         const uint16_t shoulders = static_cast<uint16_t>((XINPUT_GAMEPAD_LEFT_SHOULDER | XINPUT_GAMEPAD_RIGHT_SHOULDER) & ~bind);
         const uint16_t went = static_cast<uint16_t>(now & ~before & shoulders);
-        wheelOpen = radial::padUpdate(pingPressed, held, st->Gamepad.sThumbRX / 32767.f, -st->Gamepad.sThumbRY / 32767.f,
+        const radial::Mode mode = action == static_cast<int>(Action::React) ? radial::Mode::React : radial::Mode::Markers;
+        wheelOpen = radial::padUpdate(mode, pingPressed || reactPressed, held, st->Gamepad.sThumbRX / 32767.f,
+                                      -st->Gamepad.sThumbRY / 32767.f,
                                       (went & XINPUT_GAMEPAD_LEFT_SHOULDER) != 0, (went & XINPUT_GAMEPAD_RIGHT_SHOULDER) != 0,
                                       clearPressed);
         if (wheelOpen) pad.wheelButtons = static_cast<uint16_t>(pad.wheelButtons | (now & shoulders));
@@ -165,6 +179,32 @@ std::string format(uint16_t buttons) {
     for (const Name& n : kNames)
         if (buttons & n.bit) s += (s.empty() ? "" : "+") + std::string(n.name);
     return s.empty() ? "none" : s;
+}
+
+std::string label(const std::string& button) {
+    if (!config::get()->padPlayStation) return button;
+    static const struct { const char* xbox; const char* ps; } kPs[] = {
+        {"A", "Cross"}, {"B", "Circle"}, {"X", "Square"}, {"Y", "Triangle"}, {"LB", "L1"}, {"RB", "R1"},
+        {"LS", "L3"},   {"RS", "R3"},    {"BACK", "Share"}, {"START", "Options"},
+    };
+    for (const auto& p : kPs)
+        if (_stricmp(button.c_str(), p.xbox) == 0) return p.ps;
+    return button; // the D-pad keeps its name
+}
+
+std::string labelCombo(const std::string& combo) {
+    std::string out;
+    size_t at = 0;
+    while (at <= combo.size()) {
+        size_t end = combo.find('+', at);
+        if (end == std::string::npos) end = combo.size();
+        std::string part = combo.substr(at, end - at);
+        while (!part.empty() && part.front() == ' ') part.erase(part.begin());
+        while (!part.empty() && part.back() == ' ') part.pop_back();
+        if (!part.empty()) out += (out.empty() ? "" : "+") + label(part);
+        at = end + 1;
+    }
+    return out.empty() ? "none" : out;
 }
 
 void setBinding(uint16_t buttons, Action action) {

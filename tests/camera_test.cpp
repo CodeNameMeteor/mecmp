@@ -131,6 +131,67 @@ int main() {
         CHECK(radialSlot(50, 50, dz, 0) == -1);
         CHECK(radialSlot(INFINITY, 0, dz, 9) >= 0 && radialSlot(INFINITY, 0, dz, 9) < 9);
     }
+    // The wheel with fewer slots: n equal wedges, wedge 0 still straight up.
+    {
+        using mecmp::game::radialSlot;
+        const float R = 100.f, dz = 20.f;
+        for (int n = 2; n <= 9; ++n) {
+            const float wedge = 360.f / static_cast<float>(n);
+            for (int i = 0; i < n; ++i) {
+                const float a = static_cast<float>(i) * wedge * 3.14159265f / 180.f;
+                CHECK(radialSlot(R * std::sin(a), -R * std::cos(a), dz, n) == i);
+            }
+        }
+        // Two slots: the top half and the bottom half.
+        CHECK(radialSlot(0, -50, dz, 2) == 0 && radialSlot(0, 50, dz, 2) == 1);
+    }
+    // The marker under the crosshair: the nearest to the middle, within the radius.
+    {
+        using mecmp::game::nearestToCentre;
+        using mecmp::game::ScreenPoint;
+        const ScreenPoint pts[3] = {{100, 100}, {965, 545}, {1000, 540}};
+        CHECK(nearestToCentre(pts, 3, 960, 540, 30.f) == 1);
+        CHECK(nearestToCentre(pts, 3, 960, 540, 3.f) == -1);       // none close enough
+        CHECK(nearestToCentre(pts, 0, 960, 540, 30.f) == -1);      // none at all
+        const ScreenPoint bad[1] = {{NAN, 0}};
+        CHECK(nearestToCentre(bad, 1, 0, 0, 30.f) == -1);
+    }
+    // Titles that would cover an icon or another title move straight up, and only up.
+    {
+        using mecmp::game::LabelBox;
+        using mecmp::game::stackLabelsUp;
+        const auto overlap = [](const LabelBox& a, const LabelBox& b) {
+            return std::min(a.x + a.w, b.x + b.w) > std::max(a.x, b.x) && std::min(a.y + a.h, b.y + b.h) > std::max(a.y, b.y);
+        };
+        // Three titles on one spot: the first stays, the others stack upwards, nothing moves sideways.
+        LabelBox pile[3] = {{300, 300, 90, 16}, {300, 300, 90, 16}, {300, 300, 90, 16}};
+        stackLabelsUp(pile, 3, 0, 1.f);
+        CHECK(pile[0].x == 300 && pile[0].y == 300);
+        CHECK(pile[1].x == 300 && pile[1].y < 300 && pile[2].x == 300 && pile[2].y < pile[1].y);
+        CHECK(!overlap(pile[0], pile[1]) && !overlap(pile[1], pile[2]) && !overlap(pile[0], pile[2]));
+        // Side by side and not touching: nothing moves.
+        LabelBox row[2] = {{100, 100, 80, 16}, {200, 100, 80, 16}};
+        stackLabelsUp(row, 2, 0, 1.f);
+        CHECK(row[1].x == 200 && row[1].y == 100);
+        // Icons are obstacles: they stay, and no title ends up on any of them (the first title included).
+        const LabelBox icons[3] = {{300, 300, 40, 40}, {330, 310, 40, 40}, {360, 295, 40, 40}};
+        LabelBox all[6] = {icons[0], icons[1], icons[2], {310, 320, 90, 16}, {305, 325, 90, 16}, {350, 330, 90, 16}};
+        const float xs[3] = {all[3].x, all[4].x, all[5].x};
+        stackLabelsUp(all, 6, 3, 1.f);
+        for (int i = 0; i < 3; ++i) CHECK(all[i].x == icons[i].x && all[i].y == icons[i].y);
+        bool apart = true;
+        for (int t = 3; t < 6; ++t) {
+            CHECK(all[t].x == xs[t - 3]); // up only
+            for (int j = 0; j < t; ++j) apart = apart && !overlap(all[t], all[j]);
+        }
+        CHECK(apart);
+        // The same input gives the same answer (no state, so nothing to flicker between frames).
+        LabelBox again[6] = {icons[0], icons[1], icons[2], {310, 320, 90, 16}, {305, 325, 90, 16}, {350, 330, 90, 16}};
+        stackLabelsUp(again, 6, 3, 1.f);
+        bool same = true;
+        for (int i = 0; i < 6; ++i) same = same && again[i].x == all[i].x && again[i].y == all[i].y;
+        CHECK(same);
+    }
     if (g_failures == 0) std::printf("camera tests: all passed\n");
     return g_failures == 0 ? 0 : 1;
 }

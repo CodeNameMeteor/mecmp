@@ -8,6 +8,7 @@
 #include "game/ghosts.h"
 #include "imgui.h"
 #include "net/net.h"
+#include "ui/overlay.h"
 
 namespace mecmp::ui::nametags {
 namespace {
@@ -15,7 +16,7 @@ constexpr float kHeadHeight = 2.05f; // above the ghost's trajectory bone (its f
 } // namespace
 
 void draw() {
-    if (!config::get()->showNames) return;
+    if (!config::get()->showNames || overlayHidden()) return;
     const auto shown = game::ghosts::shownPeers();
     if (shown.empty()) return;
     game::CameraView cam;

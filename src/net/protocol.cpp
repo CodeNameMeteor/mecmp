@@ -254,6 +254,38 @@ bool readChat(const char* payload, size_t n, uint32_t& id, std::string& text) {
     return !text.empty();
 }
 
+size_t writeReact(char* buf, const Header& h, const React& r) {
+    char* p = buf;
+    put(p, h);
+    put(p, r.id);
+    put(p, r.target);
+    put(p, r.cell);
+    for (const std::string* field : {&r.title, &r.text}) {
+        const std::string t = cleanPingLabel(*field);
+        put(p, static_cast<uint8_t>(t.size()));
+        memcpy(p, t.data(), t.size());
+        p += t.size();
+    }
+    return static_cast<size_t>(p - buf);
+}
+
+bool readReact(const char* payload, size_t n, React& out) {
+    const char* p = payload;
+    const char* end = payload + n;
+    React r;
+    if (!get(p, end, r.id) || !get(p, end, r.target) || !get(p, end, r.cell) || r.cell >= kPingCells) return false;
+    std::string* fields[2] = {&r.title, &r.text};
+    for (std::string* field : fields) {
+        uint8_t len = 0;
+        if (!get(p, end, len) || len > kMaxPingLabelBytes || static_cast<size_t>(end - p) < len) return false;
+        *field = cleanPingLabel(std::string(p, len));
+        p += len;
+    }
+    if (r.text.empty()) return false;
+    out = r;
+    return true;
+}
+
 size_t writeInfoRequest(char* buf, const Header& h) {
     memset(buf, 0, kInfoRequestSize);
     memcpy(buf, &h, sizeof(h));

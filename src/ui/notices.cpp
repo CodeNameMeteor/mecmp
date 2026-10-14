@@ -11,6 +11,7 @@
 #include "core/config.h"
 #include "imgui.h"
 #include "net/net.h"
+#include "ui/overlay.h"
 
 namespace mecmp::ui::notices {
 namespace {
@@ -61,9 +62,15 @@ void draw() {
     }
     g_pingAge.swap(pingAge);
 
+    // Quick answers to my markers: `Foie reacted "On my way" to your "Here" marker`.
+    for (const auto& re : net::takeReactions())
+        if (on)
+            push(re.from + " reacted \"" + re.text + "\" to your " +
+                 (re.title.empty() ? std::string("marker") : "\"" + re.title + "\" marker"));
+
     const DWORD t = GetTickCount();
     while (!g_notices.empty() && t - g_notices.front().at >= kShowMs) g_notices.pop_front();
-    if (g_notices.empty() || !on) return;
+    if (g_notices.empty() || !on || overlayHidden()) return;
 
     const ImGuiIO& io = ImGui::GetIO();
     ImDrawList* dl = ImGui::GetForegroundDrawList();

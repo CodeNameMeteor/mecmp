@@ -15,10 +15,12 @@
 
 namespace mecmp::config {
 
-// The marker wheels (hold the marker key): wheels of nine marker types each. Three come ready-made,
-// and two more can be added in the menu. A slot's title and icon are yours, so every player's wheels
-// can say something different.
+// The marker wheels (hold the marker key): wheels of up to nine marker types each. Three come
+// ready-made, and two more can be added in the menu. A slot's title and icon are yours, so every
+// player's wheels can say something different. Every wheel keeps nine slots on file; a wheel shows
+// the first Settings::wheelSlots of them (kMinSlots..kPingSlots), so shrinking one loses nothing.
 constexpr int kPingSlots = 9;
+constexpr int kMinSlots = 2;
 constexpr int kWheels = 5;        // at most
 constexpr int kDefaultWheels = 3; // the ready-made ones; these cannot be removed
 // The icons a marker can have (drawn by ui/glyph.cpp). The names are what mecmp.ini says.
@@ -31,9 +33,16 @@ struct WheelSlot {
 };
 using Wheel = std::array<WheelSlot, kPingSlots>;
 Wheel defaultWheel(int wheel); // the ready-made wheels; an empty wheel for the others
+// The quick answers wheel (hold the react key while looking at another player's marker): short
+// replies the marker's owner is told about. The same kind of slots as a marker wheel.
+Wheel defaultReactions();
+constexpr int kDefaultReactionSlots = 8;
 
 // A saved spot: where a marker was, with its icon and title. Placing a bookmark puts a marker there again.
 constexpr size_t kMaxBookmarks = 20;
+// The menu's saved server list (Settings::servers) holds at most this many addresses. Each is at most
+// 127 characters (the menu's input), so the list stays under 4,100 characters.
+constexpr size_t kMaxServers = 32;
 struct Bookmark {
     std::string label;
     uint8_t glyph = 0;
@@ -58,6 +67,11 @@ struct Settings {
     std::string pingAccent = "ffffff";    // colour of the detail inside a marker (the diamond's inner diamond)
     std::array<Wheel, kWheels> wheels = defaultWheels();
     int wheelCount = kDefaultWheels;      // how many of them exist: kDefaultWheels..kWheels
+    std::array<int, kWheels> wheelSlots = {kPingSlots, kPingSlots, kPingSlots, kPingSlots, kPingSlots}; // slots each shows
+    std::array<std::string, kWheels> wheelNames; // empty = "Wheel <number>"
+    Wheel reactions = defaultReactions(); // the quick answers
+    int reactionSlots = kDefaultReactionSlots; // how many of them the wheel shows: kMinSlots..kPingSlots
+    int reactLast = 0;                    // the answer picked last (a short press of the react key sends it)
     // [bookmarks]
     std::vector<Bookmark> bookmarks;      // at most kMaxBookmarks
     int pingSeconds = 30;                 // how long your markers stay: 5..300
@@ -72,15 +86,24 @@ struct Settings {
     bool showArrows = true;               // arrows on the screen's edge to players who are off screen
     bool pingPulse = true;                // a new marker flashes briefly when it arrives
     bool pingAim = true;                  // a marker goes where you look (false: where you stand)
-    std::string pingKey = "G";            // press = place a marker, hold = the wheel: a letter, ENTER, or a menu key name; empty = none
+    std::string pingKey = "V";            // press = place a marker, hold = the wheel: a letter, ENTER, or a menu key name; empty = none
     std::string pingPad;                  // gamepad buttons for the same (as menu_pad); empty = none
+    bool wheelInstant = false;            // the wheel opens the moment the key goes down (false: after a short hold)
+    float wheelSensitivity = 1.0f;        // how far the pointer in the open wheel moves per mouse movement
+    std::string reactKey = "C";           // tap = send the last quick answer, hold = its wheel; empty = none
+    std::string reactPad;                 // gamepad buttons for the same; empty = none
+    std::string altKey = "B";             // places a marker the other way (stand <-> look); empty = none
+    std::string hideKey = "Y";            // shows / hides names, markers, arrows, notices and chat lines; empty = none
+    std::string wheelPrevKey = "Q";       // while the wheel is open: the previous wheel; empty = none
+    std::string wheelNextKey = "E";       // ... the next wheel; empty = none
+    bool padPlayStation = false;          // gamepad buttons are named as on a PlayStation pad in hints
     int pingWheel = 0;                    // the wheel that opens (the one used last)
     int pingLastWheel = 0, pingLastSlot = 0; // the marker picked last
     int pingTap = 0;                      // a short press places: 0 = the marker picked last, 1 = always the one below
     int pingFixedWheel = 0, pingFixedSlot = 0;
     // Removing all your markers: hold this key for a moment (in the open wheel the middle mouse button
     // does the same); on a gamepad, press these buttons while the marker buttons are held.
-    std::string pingClearKey = "H";       // as ping_key, or MOUSE3 (middle), MOUSE4, MOUSE5; empty = none
+    std::string pingClearKey = "X";       // as ping_key, or MOUSE3 (middle), MOUSE4, MOUSE5; empty = none
     std::string pingClearPad = "RS";      // gamepad buttons (as menu_pad); empty = none
     // [voice]
     bool mumbleLink = true;               // positional voice through Mumble's Link plugin

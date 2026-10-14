@@ -14,8 +14,8 @@
 
 namespace mecmp::game::ping {
 namespace {
-constexpr int kNone = -2, kTap = -1;
-std::atomic<int> g_requested{kNone}; // kNone, kTap, or wheel * kPingSlots + slot
+constexpr int kNone = -2, kTap = -1, kTapOtherWay = -3;
+std::atomic<int> g_requested{kNone}; // kNone, kTap, kTapOtherWay, or wheel * kPingSlots + slot
 std::atomic<int> g_moveRequested{-1}; // a cell of mine, or -1
 // Markers go out at most this often, so leaning on the key cannot flood the others.
 constexpr int64_t kPauseMs = 300;
@@ -35,14 +35,17 @@ void request(int wheel, int slot) {
 
 void request() { g_requested = kTap; }
 
+void requestAlt() { g_requested = kTapOtherWay; }
+
 void requestMove(int index) { g_moveRequested = index; }
 
-bool pickPoint(float out[3]) {
+bool pickPoint(float out[3], bool otherWay) {
     static net::PlayerState local; // large; game thread only
     if (!net::localState(local)) return false;
     memcpy(out, local.pos, sizeof(local.pos));
     CameraView cam;
-    if (!config::get()->pingAim || !raycast::available() || !camera::read(cam)) return true;
+    const bool aim = config::get()->pingAim != otherWay;
+    if (!aim || !raycast::available() || !camera::read(cam)) return true;
     // The camera looks along minus its forward row (camera_math.h).
     float from[3], to[3];
     for (int i = 0; i < 3; ++i) {
@@ -64,6 +67,28 @@ bool pickPoint(float out[3]) {
     return true;
 }
 
+namespace {
+// Sends the marker that `what` names (a wheel slot, or kTap = the one a short press places) at `pos`.
+void placeAt(const std::shared_ptr<const config::Settings>& cfg, int what, const float pos[3]) {
+    int wheel = what / config::kPingSlots, slot = what % config::kPingSlots;
+    if (what == kTap) {
+        wheel = cfg->pingTap ? cfg->pingFixedWheel : cfg->pingLastWheel;
+        slot = cfg->pingTap ? cfg->pingFixedSlot : cfg->pingLastSlot;
+    }
+    if (wheel < 0 || wheel >= cfg->wheelCount || wheel >= config::kWheels) wheel = slot = 0; // a wheel that was removed
+    if (slot < 0 || slot >= cfg->wheelSlots[wheel]) slot = 0; // a slot the wheel no longer shows
+    const config::WheelSlot& chosen = cfg->wheels[wheel][slot];
+    net::PingStyle style;
+    net::protocol::parseRgb(cfg->pingColor, style.rgb);
+    net::protocol::parseRgb(cfg->pingAccent, style.accent);
+    style.glyph = chosen.glyph;
+    style.label = chosen.label;
+    style.seconds = cfg->pingSeconds;
+    net::sendPing(pos, style, cfg->pingMax);
+    VLOG("ping: wheel %d slot %d '%s' placed at %.1f %.1f %.1f", wheel + 1, slot + 1, chosen.label.c_str(), pos[0], pos[1], pos[2]);
+}
+} // namespace
+
 void tick() {
     static int lastMax = net::protocol::kPingCells; // game thread only
     static int64_t lastPlaced = -kPauseMs;
@@ -82,28 +107,14 @@ void tick() {
     if (now - lastPlaced < kPauseMs) return; // kept for a later tick
     const int what = g_requested.exchange(kNone);
     if (what == kNone) return;
+    const bool otherWay = what == kTapOtherWay;
     float pos[3];
-    if (!pickPoint(pos)) {
+    if (!pickPoint(pos, otherWay)) {
         VLOG("ping: no position right now (not in a level?)");
         return;
     }
-    int wheel = what / config::kPingSlots, slot = what % config::kPingSlots;
-    if (what == kTap) {
-        wheel = cfg->pingTap ? cfg->pingFixedWheel : cfg->pingLastWheel;
-        slot = cfg->pingTap ? cfg->pingFixedSlot : cfg->pingLastSlot;
-    }
-    if (wheel < 0 || wheel >= cfg->wheelCount || wheel >= config::kWheels) wheel = slot = 0; // a wheel that was removed
-    if (slot < 0 || slot >= config::kPingSlots) slot = 0;
-    const config::WheelSlot& chosen = cfg->wheels[wheel][slot];
-    net::PingStyle style;
-    net::protocol::parseRgb(cfg->pingColor, style.rgb);
-    net::protocol::parseRgb(cfg->pingAccent, style.accent);
-    style.glyph = chosen.glyph;
-    style.label = chosen.label;
-    style.seconds = cfg->pingSeconds;
-    net::sendPing(pos, style, cfg->pingMax);
+    placeAt(cfg, otherWay ? kTap : what, pos);
     lastPlaced = now;
-    VLOG("ping: wheel %d slot %d '%s' placed at %.1f %.1f %.1f", wheel + 1, slot + 1, chosen.label.c_str(), pos[0], pos[1], pos[2]);
 }
 
 } // namespace mecmp::game::ping

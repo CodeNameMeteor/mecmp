@@ -72,6 +72,29 @@ static void testForwardsToOthers() {
     CHECK(t.relay.members().size() == 2);
 }
 
+static void testReactForwarded() {
+    // A quick answer is a session packet like a marker: it reaches the others, and an unknown type does not.
+    Harness t;
+    auto hA = hello(1, "alice"), hB = hello(2, "bob");
+    t.relay.onPacket(A, hA.data(), hA.size(), 0);
+    t.relay.onPacket(B, hB.data(), hB.size(), 0);
+    t.sent.clear();
+    char buf[proto::kMaxPacket];
+    const proto::Header h{proto::kMagic, proto::kProtocol, proto::kTypeReact, 1, 5};
+    proto::React r;
+    r.id = 1;
+    r.target = 2;
+    r.text = "On my way";
+    const size_t n = proto::writeReact(buf, h, r);
+    t.relay.onPacket(A, buf, n, 10);
+    CHECK(t.sentTo(B) == 1 && t.sentTo(A) == 0);
+    t.sent.clear();
+    const proto::Header unknown{proto::kMagic, proto::kProtocol, 99, 1, 6};
+    memcpy(buf, &unknown, sizeof(unknown));
+    t.relay.onPacket(A, buf, n, 20);
+    CHECK(t.sentTo(B) == 0);
+}
+
 static void testHelloFlagsCleared() {
     Harness t;
     auto hB = hello(2, "bob");
@@ -292,6 +315,20 @@ static int chatsTo(const Harness& t, const Addr& a, std::string* last = nullptr)
     return n;
 }
 
+static void testSharedNames() {
+    // Two players with the same name: kick and ban refuse the name (it would hit one of them at random);
+    // the id still works.
+    Harness t;
+    auto hA = hello(1, "dup"), hB = hello(2, "dup");
+    t.relay.onPacket(A, hA.data(), hA.size(), 0);
+    t.relay.onPacket(B, hB.data(), hB.size(), 0);
+    CHECK(t.relay.matchPlayers("dup") == 2);
+    CHECK(!t.relay.kick("dup", 100) && t.relay.members().size() == 2);
+    CHECK(t.relay.ban("dup") == 0 && t.relay.bans().empty());
+    CHECK(t.relay.kick("00000002", 100) && t.relay.members().size() == 1);
+    CHECK(t.relay.members()[0].addr == A);
+}
+
 static void testBans() {
     Harness t;
     auto hA = hello(1, "alice"), hB = hello(2, "bob");
@@ -396,10 +433,12 @@ static void testInfo() {
 int main() {
     testInfo();
     testBans();
+    testSharedNames();
     testFullNoticeAndPerIp();
     testMotd();
     testMirror();
     testForwardsToOthers();
+    testReactForwarded();
     testHelloFlagsCleared();
     testServerHello();
     testSessionBinding();

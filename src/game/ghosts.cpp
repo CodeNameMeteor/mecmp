@@ -593,8 +593,19 @@ void renderFrame() {
             pose = v.pose();
             bones = v.bones();
             const uintptr_t idxPtr = v.boneIndices();
-            if (!pose || bones != st.boneCount || !bones || bones > kMaxBones || !idxPtr || !mem::read(idxPtr, idx, bones * 4))
-                continue;
+            // Logged once per change: a ghost that stops being posed stays where it was (seen as "gone").
+            thread_local uint32_t skipPeer = 0, skipCount = ~0u;
+            const bool skip = !pose || bones != st.boneCount || !bones || bones > kMaxBones;
+            if (skip && (skipPeer != targets[i].peer || skipCount != st.boneCount)) {
+                VLOG("ghost: player %08x not posed (ghost has %u bones, packet %u)", targets[i].peer, bones, st.boneCount);
+                skipPeer = targets[i].peer;
+                skipCount = st.boneCount;
+            } else if (!skip && skipPeer == targets[i].peer) {
+                VLOG("ghost: player %08x posed again", targets[i].peer);
+                skipPeer = 0;
+                skipCount = ~0u;
+            }
+            if (skip || !idxPtr || !mem::read(idxPtr, idx, bones * 4)) continue;
         }
         float buf[kMaxBones][8];
         memcpy(buf, st.bones, bones * 0x20);

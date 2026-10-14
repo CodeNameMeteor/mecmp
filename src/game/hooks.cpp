@@ -140,7 +140,10 @@ void uiSystemUpdate(void* uiSystem) {
     g_uiSystem = reinterpret_cast<uintptr_t>(uiSystem);
     uintptr_t controller = 0;
     int32_t saved[2] = {};
-    const bool session = net::running() && (net::hosting() || net::connectedToHost());
+    // Only while you are in a level, as a player: the main menu (which may have no server level at all
+    // after leaving one) keeps its own pause, which its screens ("Your Echo") need; nobody sees you there.
+    const bool session = net::running() && (net::hosting() || net::connectedToHost()) && level::serverWorld() &&
+                         !level::inFrontEnd() && level::playerCharacter();
     if (!session || !mem::read(reinterpret_cast<uintptr_t>(uiSystem) + UISystem_PauseController, controller) || !controller ||
         !mem::read(controller + 8, saved, sizeof(saved))) {
         g_origUISystemUpdate(uiSystem);

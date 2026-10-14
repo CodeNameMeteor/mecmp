@@ -24,6 +24,10 @@ constexpr uintptr_t Fn_PamUISystemUpdate = 0x143b16c50;
 constexpr size_t UISystem_PauseController = 0x8c8;
 constexpr uintptr_t kTypeInfoListHead = 0x14215d028;
 constexpr uintptr_t kServerGameWorld = 0x1425469e0; // ServerGameWorld* (null between levels)
+// world +0x20 = its ServerLevel (base ctor 0x143114e40); level +0x108 = LevelData (an asset: name at
+// +0x10), e.g. "Levels/SP/FrontEnd/FrontEnd" for the main menu (levelLoad_setupWorldObjects 0x14333f2e0).
+constexpr size_t World_Level = 0x20;
+constexpr size_t Level_Data = 0x108;
 // Camera: ClientCameraViewManagers list (ClientCameraViewManagers_postSimUpdateAll, ..._postSimUpdate)
 constexpr uintptr_t kClientCameraViewManagers = 0x142415e50;
 constexpr uintptr_t Code_LoadCameraViewManagers = 0x1431a24fb; // mov rcx, [kClientCameraViewManagers]

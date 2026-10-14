@@ -133,9 +133,13 @@ with the local player's own "Your Echo" style and colour. So every echo ghost sh
 echo look, and changing "Your Echo" changes everyone's ghost; the look a player picks only decides that
 their ghost is an echo. With the flag off only RunVis renders (the other styles' assets are presumably
 not loaded in free roam; time trials load a rival's style before showing it). Showing each player's own
-style would need those assets loaded: open research. Also open: with the mod loaded, the game's own
-"Your Echo" preview can appear and vanish at once; the ghost spawner's list does not change when it does,
-so it is not the preview and our ghosts competing for that spawner. The cause is not known.
+style would need those assets loaded: open research.
+
+**The main menu** (level `Levels/SP/FrontEnd/...`, `level::inFrontEnd()`: world +0x20 level, level +0x108
+LevelData, its asset name) gets no ghosts and keeps its own pause. Its "Your Echo" preview is a projection
+character, and with a session running in the main menu the preview vanished and our ghost (from the
+same kind of spawner) took its place and look; its screens also pause through the same UI pause entities
+the session pause hook hides (`PamUIPauseEntityData` in the front end's level data).
 
 ### Your own look, and Faith's outfits
 

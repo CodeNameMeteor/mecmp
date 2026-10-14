@@ -1,6 +1,8 @@
 #include "game/level.h"
 
 #include <algorithm>
+#include <atomic>
+#include <cctype>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -138,6 +140,31 @@ void reset() {
 }
 
 uintptr_t serverWorld() { return mem::readOr<uintptr_t>(rva(kServerGameWorld)); }
+
+std::string levelName() {
+    const uintptr_t world = serverWorld();
+    const uintptr_t lvl = world ? mem::readOr<uintptr_t>(world + World_Level) : 0;
+    const uintptr_t data = lvl ? mem::readOr<uintptr_t>(lvl + Level_Data) : 0;
+    std::string name;
+    if (data) mem::readCString(mem::readOr<uintptr_t>(data + Asset_Name), name);
+    return name;
+}
+
+bool inFrontEnd() {
+    static std::atomic<uintptr_t> cachedWorld{0};
+    static std::atomic<bool> cached{false};
+    const uintptr_t world = serverWorld();
+    if (!world) return false;
+    if (world != cachedWorld.load()) {
+        const std::string n = levelName();
+        if (n.empty()) return false; // not readable yet: ask again next time
+        std::string lower = n;
+        for (auto& c : lower) c = static_cast<char>(tolower(static_cast<unsigned char>(c)));
+        cached = lower.find("frontend") != std::string::npos;
+        cachedWorld = world;
+    }
+    return cached.load();
+}
 
 void* playerSpawner() {
     std::lock_guard<std::mutex> lock(g_m);

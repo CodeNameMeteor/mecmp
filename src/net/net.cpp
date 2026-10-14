@@ -83,6 +83,9 @@ struct Remote {
     PingCell pings[proto::kPingCells];
     DWORD pingBurstAt = 0; // flood limit
     int pingBurst = 0;
+    proto::RecentIds<16> reactSeen; // quick answers already shown
+    DWORD reactBurstAt = 0;         // flood limit
+    int reactBurst = 0;
     Snap snaps[kSnapCount];
     int head = 0, fill = 0;
 };
@@ -400,6 +403,27 @@ void receivePing(Remote& r, bool own, const char* payload, size_t len) { // call
     putPing(r.pings[p.index], p, now, 0);
 }
 
+// --- Quick answers (REACT) -----------------------------------------------------------------------
+constexpr int kReactBurst = 6; // at most this many answers from one player per kChatBurstMs
+std::deque<ReactionInfo> g_reactions; // answers to our markers, not yet shown; guarded by g_m
+DWORD g_lastReactSent = 0;            // guarded by g_m
+
+void receiveReact(Remote& r, bool own, const char* payload, size_t len) { // caller holds g_m
+    proto::React re;
+    if (!proto::readReact(payload, len, re)) { ++g_dropped; return; }
+    if (own || re.target != g_session) return; // not about us
+    if (!r.reactSeen.add(re.id)) return;       // a repeat
+    const DWORD now = GetTickCount();
+    if (now - r.reactBurstAt > kChatBurstMs) { r.reactBurstAt = now; r.reactBurst = 0; }
+    if (++r.reactBurst > kReactBurst) return;
+    ReactionInfo info;
+    info.from = r.name.empty() ? std::string("Runner") : r.name;
+    info.text = re.text;
+    info.title = re.title;
+    g_reactions.push_back(info);
+    while (g_reactions.size() > 16) g_reactions.pop_front();
+}
+
 void handlePacket(const char* buf, int n, const sockaddr_in& from) {
     proto::Header h;
     if (n < static_cast<int>(sizeof(h))) { ++g_dropped; return; }
@@ -526,6 +550,10 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
     }
     if (h.type == proto::kTypePing) {
         receivePing(r, own, payload, len);
+        return;
+    }
+    if (h.type == proto::kTypeReact) {
+        receiveReact(r, own, payload, len);
         return;
     }
     if (h.type != proto::kTypeState) return;
@@ -879,6 +907,32 @@ void sendPing(const float pos[3], const PingStyle& style, int limit) {
     p.index = static_cast<uint8_t>(proto::choosePingCell(cells, limit, proto::pingGlyph(p.flags), p.label, p.pos));
     putPing(g_myPings[p.index], p, now, ++g_pingOrder);
     if (g_run) queuePing(p);
+}
+
+void sendReact(uint32_t target, uint8_t cell, const std::string& markerTitle, const std::string& text) {
+    if (cell >= proto::kPingCells) return;
+    proto::React re;
+    re.target = target;
+    re.cell = cell;
+    re.title = proto::cleanPingLabel(markerTitle);
+    re.text = proto::cleanPingLabel(text);
+    if (re.text.empty()) return;
+    std::lock_guard<std::mutex> lock(g_m);
+    const DWORD now = GetTickCount();
+    if (now - g_lastReactSent < 300) return; // leaning on the key does not flood the owner
+    g_lastReactSent = now;
+    re.id = nextBurstId();
+    if (!g_run) return;
+    char buf[proto::kMaxPacket];
+    const size_t n = proto::writeReact(buf, proto::Header{}, re);
+    g_outBurst.push_back({proto::kTypeReact, std::vector<char>(buf + sizeof(proto::Header), buf + n), kChatSends});
+}
+
+std::vector<ReactionInfo> takeReactions() {
+    std::lock_guard<std::mutex> lock(g_m);
+    std::vector<ReactionInfo> out(g_reactions.begin(), g_reactions.end());
+    g_reactions.clear();
+    return out;
 }
 
 bool clearPing() {

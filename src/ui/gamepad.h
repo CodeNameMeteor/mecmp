@@ -26,8 +26,16 @@ std::string format(uint16_t buttons);     // bits -> "LS+RS"
 // buttons are hidden from the game until they are released; while the marker wheel is open, so are
 // the right stick and LB/RB.
 // PingClear removes all your markers; it only acts on the pad whose Ping buttons are held.
-enum class Action { Menu, Ping, PingClear, Count };
+// React is the quick answers wheel: a short press sends the last answer to the marker you look at,
+// holding opens the answers wheel (the same stick and cancel rules as Ping).
+enum class Action { Menu, Ping, PingClear, React, Count };
 void setBinding(uint16_t buttons, Action action = Action::Menu); // 0 = none
+
+// A button as the player's pad names it in hints: the Xbox name, or the PlayStation one when
+// [ui] pad_labels=playstation (A = Cross, B = Circle, X = Square, Y = Triangle, LB/RB = L1/R1,
+// LS/RS = L3/R3, BACK = Share, START = Options). The settings themselves always hold Xbox names.
+std::string label(const std::string& button);
+std::string labelCombo(const std::string& combo); // "LS+RS" -> "L3+R3"; "none" for an empty one
 
 // Binding from the menu: start, then poll until it returns true (the buttons held together,
 // reported once all are released). cancelCapture() stops it.

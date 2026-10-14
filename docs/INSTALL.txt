@@ -15,8 +15,11 @@ PLAY
   * Join: paste a friend's join code, or a server's address, and press Join.
   * Servers: add a server's address to see its name, players and ping, and join it.
   * Leave: go offline again. The mod starts offline; nothing is sent until you host or join.
-- Enter opens the chat. Markers: tap G to place one, hold G for the marker wheel.
-- Keys and gamepad buttons can be changed on the Controls tab.
+- Enter opens the chat. Markers: tap V to place one, hold V for the marker wheel.
+- Double tap X removes the marker you look at, hold X removes all of yours. C answers another
+  player's marker (hold for the answers wheel). B places a marker the other way, Y hides the overlay.
+  Q and E switch wheel while the marker wheel is open.
+- Keys and gamepad buttons can be changed on the Controls tab (Mouse 4 and 5 can be bound too).
 
 HOSTING
 The mod asks your router to open UDP port 47800 (UPnP). If your router does not allow that,

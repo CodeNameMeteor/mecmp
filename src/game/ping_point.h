@@ -15,6 +15,7 @@ namespace mecmp::game::ping {
 // it is over; the request is kept, and a newer one replaces it).
 void request(int wheel, int slot); // that slot of that wheel
 void request();                    // what a short press places (config: ping_tap)
+void requestAlt();                 // a short press of the other-way key: the same marker, at the other kind of point
 void requestMove(int index);       // move my marker in that cell (net::PingInfo::index) to where a new one would go
 void tick();                       // server game thread, every tick
 
@@ -22,6 +23,8 @@ void tick();                       // server game thread, every tick
 // game/raycast.h), or the local player's own position (their feet) when that is switched off
 // (config: ping_aim), nothing is in reach, or the ray cast is not available in this build.
 // Server game thread only.
-bool pickPoint(float out[3]);
+// `otherWay`: the other kind of point than the setting says (my feet instead of the aimed one, and the
+// aimed one instead of my feet).
+bool pickPoint(float out[3], bool otherWay = false);
 
 } // namespace mecmp::game::ping

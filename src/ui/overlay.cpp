@@ -17,6 +17,7 @@
 #include "core/mem.h"
 #include "game/ghosts.h"
 #include "game/hooks.h"
+#include "game/ping_point.h"
 #include "game/teleport.h"
 #include "game/mumble_link.h"
 #include "imgui.h"
@@ -52,6 +53,10 @@ std::atomic<bool> g_keyCapture{false};
 std::atomic<bool> g_justOpened{false}; // focus the menu window on the next frame (gamepad navigation)
 std::atomic<int> g_chatKey{'T'};
 std::atomic<int> g_pingKey{0}; // 0 = none
+std::atomic<int> g_reactKey{0}; // the quick answers key; 0 = none
+std::atomic<int> g_altKey{0}, g_hideKey{0}, g_prevKey{0}, g_nextKey{0}; // the other keys; 0 = none
+std::atomic<bool> g_hidden{false};       // the overlay is hidden (see overlayHidden)
+std::atomic<DWORD> g_hiddenNoteAt{0};    // when it was last switched: a short note says so
 std::atomic<int> g_pingClearKey{0}; // a key, or VK_MBUTTON / VK_XBUTTON1 / VK_XBUTTON2; 0 = none
 bool g_eatChar = false; // the character typed by the key that opened the chat (window thread)
 int g_openingChatKey = 0;
@@ -155,6 +160,19 @@ int rawKeyEvent(LPARAM l) {
 }
 bool isRawKeyPress(LPARAM l) { return rawKeyEvent(l) == 1; }
 
+// A raw keyboard event: its virtual key and whether it is a press (not a release). False if it is
+// not the keyboard.
+bool rawKey(LPARAM l, int& vk, bool& press) {
+    RAWINPUT ri{};
+    UINT size = sizeof(ri);
+    if (GetRawInputData(reinterpret_cast<HRAWINPUT>(l), RID_INPUT, &ri, &size, sizeof(RAWINPUTHEADER)) == static_cast<UINT>(-1))
+        return false;
+    if (ri.header.dwType != RIM_TYPEKEYBOARD) return false;
+    vk = ri.data.keyboard.VKey;
+    press = !(ri.data.keyboard.Flags & RI_KEY_BREAK);
+    return true;
+}
+
 bool isMouseMessage(UINT msg) { return msg >= WM_MOUSEFIRST && msg <= WM_MOUSELAST; }
 
 // Raw input while the marker wheel is open: mouse movement steers the wheel, a left click picks and
@@ -173,8 +191,62 @@ bool radialRawMouse(LPARAM l) {
     if (!(m.usFlags & MOUSE_MOVE_ABSOLUTE) && (m.lLastX || m.lLastY))
         radial::moved(static_cast<float>(m.lLastX), static_cast<float>(m.lLastY));
     if (b & RI_MOUSE_LEFT_BUTTON_DOWN) radial::click();
+    if (b & RI_MOUSE_RIGHT_BUTTON_DOWN) radial::dismiss();
     if (b & RI_MOUSE_WHEEL) radial::switchWheel(static_cast<SHORT>(m.usButtonData) > 0 ? -1 : 1);
     return true;
+}
+
+// Keys bound to the mouse's side buttons do not come as key messages, so they are asked for every
+// frame (render thread). The marker and answer keys start the wheel as a key would; its release is
+// noticed by the wheel itself.
+void pollMouseBinds() {
+    static bool was[6] = {};
+    std::atomic<int>* const binds[6] = {&g_pingKey, &g_reactKey, &g_altKey, &g_hideKey, &g_prevKey, &g_nextKey};
+    const bool canAct = gameFocused() && !g_open.load() && !chat::isOpen() && g_ready && !game::hooks::gameMenuOpen();
+    for (int i = 0; i < 6; ++i) {
+        const int vk = binds[i]->load();
+        const bool side = vk == VK_XBUTTON1 || vk == VK_XBUTTON2;
+        const bool now = side && canAct && (GetAsyncKeyState(vk) & 0x8000) != 0;
+        const bool pressed = now && !was[i];
+        was[i] = now;
+        if (!pressed) continue;
+        switch (i) {
+        case 0: radial::keyDown(vk); break;
+        case 1: radial::keyDown(vk, radial::Mode::React); break;
+        case 2: game::ping::requestAlt(); break;
+        case 3: setOverlayHidden(!g_hidden.load()); break;
+        case 4: radial::switchWheel(-1); break;
+        default: radial::switchWheel(1); break;
+        }
+    }
+}
+
+// A moment after the overlay was hidden or shown: a line at the top says which, and how to undo it.
+void drawHiddenNote() {
+    const DWORD at = g_hiddenNoteAt.load();
+    if (!at || GetTickCount() - at > 2500) return;
+    std::string text = g_hidden.load() ? "Overlay hidden" : "Overlay shown";
+    const std::string key = config::get()->hideKey;
+    if (g_hidden.load() && !key.empty()) text += " (" + keyLabel(key) + " shows it again)";
+    ImFont* font = ImGui::GetFont();
+    const float size = ImGui::GetFontSize();
+    const ImVec2 ts = font->CalcTextSizeA(size, FLT_MAX, 0.f, text.c_str());
+    const ImVec2 screen = ImGui::GetIO().DisplaySize;
+    const ImVec2 a((screen.x - ts.x) * 0.5f, screen.y * 0.04f);
+    ImDrawList* dl = ImGui::GetForegroundDrawList();
+    dl->AddRectFilled(ImVec2(a.x - size * 0.5f, a.y - size * 0.25f), ImVec2(a.x + ts.x + size * 0.5f, a.y + ts.y + size * 0.25f),
+                      IM_COL32(12, 12, 18, 190), size * 0.3f);
+    dl->AddText(font, size, a, IM_COL32(255, 255, 255, 255), text.c_str());
+}
+
+// The keys the open wheel uses itself: the digits, the arrows and the previous / next wheel keys. While
+// the marker key is down the game does not get their presses (releases still reach it, as with the
+// chat, so no key is ever left "down" in the game).
+bool wheelKey(int vk) {
+    if (vk >= '1' && vk <= '9') return true;
+    if (vk >= VK_NUMPAD1 && vk <= VK_NUMPAD9) return true;
+    if (vk == VK_LEFT || vk == VK_RIGHT) return true;
+    return (g_prevKey.load() != 0 && vk == g_prevKey.load()) || (g_nextKey.load() != 0 && vk == g_nextKey.load());
 }
 
 LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
@@ -191,19 +263,28 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
     // The marker wheel (ui/radial.h). The keyboard still reaches the game, so keys are only noted here
     // and passed on; while the wheel is open it owns the mouse (the camera stays still).
     if (msg == WM_KILLFOCUS || (msg == WM_ACTIVATEAPP && w == FALSE)) radial::cancel();
-    if (msg == WM_KEYUP && g_pingKey.load() != 0 && static_cast<int>(w) == g_pingKey.load()) radial::keyUp();
+    if (msg == WM_KEYUP && ((g_pingKey.load() != 0 && static_cast<int>(w) == g_pingKey.load()) ||
+                            (g_reactKey.load() != 0 && static_cast<int>(w) == g_reactKey.load())))
+        radial::keyUp();
     if (radial::engaged() && msg == WM_KEYDOWN && !(l & (1 << 30))) {
         const int key = static_cast<int>(w);
         if (key >= '1' && key <= '9') radial::digit(key - '0');
         else if (key >= VK_NUMPAD1 && key <= VK_NUMPAD9) radial::digit(key - VK_NUMPAD0);
-        else if (key == VK_LEFT) radial::switchWheel(-1);
-        else if (key == VK_RIGHT) radial::switchWheel(1);
+        else if (key == VK_LEFT || (g_prevKey.load() && key == g_prevKey.load())) radial::switchWheel(-1);
+        else if (key == VK_RIGHT || (g_nextKey.load() && key == g_nextKey.load())) radial::switchWheel(1);
+    }
+    if (radial::engaged()) {
+        if (msg == WM_KEYDOWN && wheelKey(static_cast<int>(w))) return 0;
+        int vk = 0;
+        bool press = false;
+        if (msg == WM_INPUT && rawKey(l, vk, press) && press && wheelKey(vk)) return DefWindowProcW(hwnd, msg, w, l);
     }
     if (radial::open()) {
         if (msg == WM_INPUT && radialRawMouse(l)) return DefWindowProcW(hwnd, msg, w, l);
         if (isMouseMessage(msg)) {
             if (!g_radialRaw) { // no raw mouse input here: the legacy messages are all there is
                 if (msg == WM_LBUTTONDOWN) radial::click();
+                else if (msg == WM_RBUTTONDOWN) radial::dismiss();
                 else if (msg == WM_MOUSEWHEEL) radial::switchWheel(GET_WHEEL_DELTA_WPARAM(w) > 0 ? -1 : 1);
             }
             return 0;
@@ -236,6 +317,18 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
     if (msg == WM_KEYDOWN && !g_open && !chat::isOpen() && g_ready && g_pingKey.load() != 0 &&
         static_cast<int>(w) == g_pingKey.load() && !(l & (1 << 30)) && !game::hooks::gameMenuOpen())
         radial::keyDown(g_pingKey.load());
+    // The quick answers key: the same, for the answers wheel (it needs a marker under the crosshair).
+    if (msg == WM_KEYDOWN && !g_open && !chat::isOpen() && g_ready && g_reactKey.load() != 0 &&
+        static_cast<int>(w) == g_reactKey.load() && !(l & (1 << 30)) && !game::hooks::gameMenuOpen())
+        radial::keyDown(g_reactKey.load(), radial::Mode::React);
+    // The other-way key: a short press places a marker at the other kind of point.
+    if (msg == WM_KEYDOWN && !g_open && !chat::isOpen() && g_ready && g_altKey.load() != 0 &&
+        static_cast<int>(w) == g_altKey.load() && !(l & (1 << 30)) && !game::hooks::gameMenuOpen())
+        game::ping::requestAlt();
+    // The hide key.
+    if (msg == WM_KEYDOWN && !g_open && !chat::isOpen() && g_ready && g_hideKey.load() != 0 &&
+        static_cast<int>(w) == g_hideKey.load() && !(l & (1 << 30)))
+        setOverlayHidden(!g_hidden.load());
     if (chat::isOpen() && g_ready && !g_open) {
         if (msg == WM_KEYDOWN && w == VK_ESCAPE) { chat::close(); return 0; }
         if (msg == WM_CHAR && g_eatChar) { g_eatChar = false; return 0; }
@@ -342,9 +435,11 @@ HRESULT STDMETHODCALLTYPE presentHook(IDXGISwapChain* sc, UINT sync, UINT flags)
         ImGui::NewFrame();
         if (g_justOpened.exchange(false)) ImGui::SetWindowFocus("###mecmp");
         ImGui::GetIO().MouseDrawCursor = g_open.load();
+        pollMouseBinds();
         nametags::draw();
         markers::draw();
         radial::draw();
+        drawHiddenNote();
         if (const float a = game::teleport::fadeAlpha(); a > 0.f) // "Go to": the game's teleport behind a fade
             ImGui::GetForegroundDrawList()->AddRectFilled(ImVec2(0, 0), ImGui::GetIO().DisplaySize,
                                                           ImGui::GetColorU32(ImVec4(0, 0, 0, a)));
@@ -394,47 +489,47 @@ const MenuKey* menuKeys(int& count) {
     return kMenuKeys;
 }
 void setMenuKey(const std::string& name) { g_toggleKey = keyFromName(name); }
-bool setPingKey(const std::string& name) {
-    if (name.empty()) {
-        g_pingKey = 0;
-        return true;
-    }
-    const int key = actionKeyFromName(name);
-    if (key == 0 || key == g_toggleKey.load() || key == g_chatKey.load() || key == g_pingClearKey.load()) return false;
-    g_pingKey = key;
-    return true;
+namespace {
+// Every key the mod listens to besides the menu key. A key does one job.
+std::atomic<int>* const kBound[] = {&g_pingKey, &g_pingClearKey, &g_chatKey, &g_reactKey,
+                                    &g_altKey,  &g_hideKey,      &g_prevKey, &g_nextKey};
+
+// A key name from mecmp.ini. `mouse`: 0 = the keyboard only, 1 = also MOUSE4 / MOUSE5 (the side
+// buttons), 2 = also MOUSE3 (the middle button, which the "clear markers" key may be).
+int bindFromName(const std::string& n, int mouse) {
+    if (mouse >= 1 && _stricmp(n.c_str(), "MOUSE4") == 0) return VK_XBUTTON1;
+    if (mouse >= 1 && _stricmp(n.c_str(), "MOUSE5") == 0) return VK_XBUTTON2;
+    if (mouse >= 2 && _stricmp(n.c_str(), "MOUSE3") == 0) return VK_MBUTTON;
+    return actionKeyFromName(n);
 }
 
-namespace {
-// As actionKeyFromName, plus the mouse buttons a "clear markers" binding may use.
-int clearKeyFromName(const std::string& n) {
-    if (_stricmp(n.c_str(), "MOUSE3") == 0) return VK_MBUTTON;
-    if (_stricmp(n.c_str(), "MOUSE4") == 0) return VK_XBUTTON1;
-    if (_stricmp(n.c_str(), "MOUSE5") == 0) return VK_XBUTTON2;
-    return actionKeyFromName(n);
+bool setBind(std::atomic<int>& slot, const std::string& name, int mouse) {
+    if (name.empty()) {
+        slot = 0;
+        return true;
+    }
+    const int key = bindFromName(name, mouse);
+    if (key == 0 || key == g_toggleKey.load()) return false;
+    for (const std::atomic<int>* other : kBound)
+        if (other != &slot && other->load() == key) return false;
+    slot = key;
+    return true;
 }
 } // namespace
 
-bool setPingClearKey(const std::string& name) {
-    if (name.empty()) {
-        g_pingClearKey = 0;
-        return true;
-    }
-    const int key = clearKeyFromName(name);
-    if (key == 0 || key == g_toggleKey.load() || key == g_chatKey.load() || key == g_pingKey.load()) return false;
-    g_pingClearKey = key;
-    return true;
-}
+bool setPingKey(const std::string& name) { return setBind(g_pingKey, name, 1); }
+bool setPingClearKey(const std::string& name) { return setBind(g_pingClearKey, name, 2); }
+bool setChatKey(const std::string& name) { return setBind(g_chatKey, name, 0); }
+bool setReactKey(const std::string& name) { return setBind(g_reactKey, name, 1); }
+bool setAltKey(const std::string& name) { return setBind(g_altKey, name, 1); }
+bool setHideKey(const std::string& name) { return setBind(g_hideKey, name, 1); }
+bool setWheelPrevKey(const std::string& name) { return setBind(g_prevKey, name, 1); }
+bool setWheelNextKey(const std::string& name) { return setBind(g_nextKey, name, 1); }
 
-bool setChatKey(const std::string& name) {
-    if (name.empty()) {
-        g_chatKey = 0;
-        return true;
-    }
-    const int key = actionKeyFromName(name);
-    if (key == 0 || key == g_toggleKey.load() || key == g_pingKey.load() || key == g_pingClearKey.load()) return false;
-    g_chatKey = key;
-    return true;
+bool overlayHidden() { return g_hidden.load(); }
+void setOverlayHidden(bool hidden) {
+    g_hidden = hidden;
+    g_hiddenNoteAt = GetTickCount() | 1; // never 0 (that means "never switched")
 }
 
 int pingClearVk() { return g_pingClearKey.load(); }
@@ -465,9 +560,15 @@ bool install() {
     const int pingKey = actionKeyFromName(config::get()->pingKey);
     g_pingKey = pingKey == g_toggleKey.load() || pingKey == g_chatKey.load() ? 0 : pingKey;
     setPingClearKey(config::get()->pingClearKey); // refused (so none) if it is one of the keys above
+    setReactKey(config::get()->reactKey);         // likewise
+    setAltKey(config::get()->altKey);
+    setHideKey(config::get()->hideKey);
+    setWheelPrevKey(config::get()->wheelPrevKey);
+    setWheelNextKey(config::get()->wheelNextKey);
     gamepad::setBinding(gamepad::parse(config::get()->menuPad));
     gamepad::setBinding(gamepad::parse(config::get()->pingPad), gamepad::Action::Ping);
     gamepad::setBinding(gamepad::parse(config::get()->pingClearPad), gamepad::Action::PingClear);
+    gamepad::setBinding(gamepad::parse(config::get()->reactPad), gamepad::Action::React);
     // A throwaway device + swap chain on a hidden window, only to find DXGI's swap-chain vtable.
     WNDCLASSEXW wc{};
     wc.cbSize = sizeof(wc);

@@ -71,7 +71,15 @@ constexpr const char* kDefaultIni =
     "; check question crosshair bolt plus noentry heart magrope minus target eye dot jump slide ladder\r\n"
     "; zipline door wallrun shield bubble vault\r\n"
     "; wheel_count = how many wheels there are (3..5); wheels 4 and 5 are added in the menu\r\n"
-    "wheel_count=3\r\n";
+    "wheel_count=3\r\n"
+    "; wheelN_slots = how many of a wheel's nine slots it shows (2..9); the others are kept, only hidden.\r\n"
+    "; wheelN_name = the title over the wheel (empty = \"Wheel N\")\r\n"
+    "wheel1_slots=9\r\n"
+    "wheel2_slots=9\r\n"
+    "wheel3_slots=9\r\n"
+    "; the quick answers wheel: short replies you send to the owner of a marker you look at (react_key in [ui]).\r\n"
+    "; react_slots = how many of the nine it shows (2..9); react_label_N / react_icon_N as for the marker wheels\r\n"
+    "react_slots=8\r\n";
 // The wheel lines (written from the defaults) go between the two halves.
 constexpr const char* kDefaultIniTail =
     "\r\n"
@@ -100,17 +108,37 @@ constexpr const char* kDefaultIniTail =
     "; markers: a short press of ping_key places one where you stand, holding it opens the marker wheel\r\n"
     "; (a letter A..Z, ENTER, or INSERT/F1../...; empty = no key). ping_pad = gamepad buttons for the same\r\n"
     "; (as menu_pad; empty = none). Both can be changed in the menu.\r\n"
-    "ping_key=G\r\n"
+    "ping_key=V\r\n"
     "ping_pad=\r\n"
+    "; ping_wheel_mode: hold = the wheel opens after a short hold (a tap places), instant = it opens the moment\r\n"
+    "; the key goes down (a very short tap still places). wheel_sensitivity = how far the pointer in the\r\n"
+    "; open wheel moves per mouse movement (0.1..3; raise it for a low mouse sensitivity)\r\n"
+    "ping_wheel_mode=hold\r\n"
+    "wheel_sensitivity=1.0\r\n"
+    "; quick answers: look at another player's marker; a tap sends your last answer, holding opens the\r\n"
+    "; answers wheel. react_key as ping_key, react_pad as ping_pad (empty = none)\r\n"
+    "react_key=C\r\n"
+    "react_pad=\r\n"
+    "; ping_alt_key places a marker the other way: where you stand if markers go where you look, and the\r\n"
+    "; other way round. hide_key shows or hides names, markers, arrows, notices and chat lines (for a\r\n"
+    "; screenshot). wheel_prev_key / wheel_next_key switch wheel while the wheel is open (the arrows and\r\n"
+    "; the mouse wheel work too). Keys as ping_key; ping_key, react_key and these also take MOUSE4 / MOUSE5.\r\n"
+    "ping_alt_key=B\r\n"
+    "hide_key=Y\r\n"
+    "wheel_prev_key=Q\r\n"
+    "wheel_next_key=E\r\n"
+    "; how gamepad buttons are named in hints: xbox or playstation (the settings above keep Xbox names)\r\n"
+    "pad_labels=xbox\r\n"
     "; what a short press places: ping_tap=0 the marker you picked last, ping_tap=1 always the one in\r\n"
     "; ping_tap_wheel (1..5) / ping_tap_slot (1..9)\r\n"
     "ping_tap=0\r\n"
     "ping_tap_wheel=1\r\n"
     "ping_tap_slot=1\r\n"
-    "; removing all your markers: hold ping_clear_key for a moment (a key as ping_key, or MOUSE3 = middle\r\n"
+    "; removing markers: tap ping_clear_key twice to remove the one you look at (or stand at), hold it for a\r\n"
+    "; moment to remove all of yours (a key as ping_key, or MOUSE3 = middle\r\n"
     "; button, MOUSE4, MOUSE5; in the open wheel, holding the middle button does the same);\r\n"
     "; ping_clear_pad = gamepad buttons, pressed while the marker buttons are held. Empty = none\r\n"
-    "ping_clear_key=H\r\n"
+    "ping_clear_key=X\r\n"
     "ping_clear_pad=RS\r\n"
     "; 1 = show the players' markers\r\n"
     "show_pings=1\r\n"
@@ -185,6 +213,15 @@ uint8_t glyphFromName(const std::string& name, uint8_t fallback) {
     for (int i = 0; i < kPingGlyphs; ++i)
         if (_stricmp(name.c_str(), kGlyphNames[i]) == 0) return static_cast<uint8_t>(i);
     return fallback;
+}
+
+Wheel defaultReactions() {
+    Wheel w;
+    for (WheelSlot& s : w) s.glyph = 23;
+    const WheelSlot ready[kDefaultReactionSlots] = {{"On my way", 1}, {"Got it", 12}, {"No", 17},    {"Wait", 3},
+                                                    {"Thanks", 18},   {"Nice!", 6},  {"Help!", 13}, {"Look out", 2}};
+    for (int i = 0; i < kDefaultReactionSlots; ++i) w[i] = ready[i];
+    return w;
 }
 
 Wheel defaultWheel(int wheel) {
@@ -267,7 +304,7 @@ void load(const std::wstring& dir) {
     s.showNotices = readInt(ini, L"ui", L"show_notices", 1) != 0;
     s.showChat = readInt(ini, L"ui", L"show_chat", 1) != 0;
     s.chatKey = readString(ini, L"ui", L"chat_key", "ENTER");
-    s.pingKey = readString(ini, L"ui", L"ping_key", "G");
+    s.pingKey = readString(ini, L"ui", L"ping_key", "V");
     s.pingPad = readString(ini, L"ui", L"ping_pad", "");
     s.showPings = readInt(ini, L"ui", L"show_pings", 1) != 0;
     s.showArrows = readInt(ini, L"ui", L"show_arrows", 1) != 0;
@@ -290,14 +327,42 @@ void load(const std::wstring& dir) {
             s.wheels[w][i].glyph =
                 glyphFromName(readString(ini, L"player", wheelKey(w, L"icon", i).c_str(), ""), defaults[i].glyph);
         }
+        s.wheelSlots[w] = clampInt(readInt(ini, L"player", (L"wheel" + std::to_wstring(w + 1) + L"_slots").c_str(), kPingSlots),
+                                   kMinSlots, kPingSlots);
+        s.wheelNames[w] = net::protocol::cleanPingLabel(
+            readString(ini, L"player", (L"wheel" + std::to_wstring(w + 1) + L"_name").c_str(), ""));
+    }
+    {
+        const Wheel defaults = defaultReactions();
+        for (int i = 0; i < kPingSlots; ++i) {
+            const std::wstring n = std::to_wstring(i + 1);
+            std::string label = readString(ini, L"player", (L"react_label_" + n).c_str(), "\x01");
+            if (label == "\x01") label = defaults[i].label;
+            s.reactions[i].label = net::protocol::cleanPingLabel(label);
+            s.reactions[i].glyph = glyphFromName(readString(ini, L"player", (L"react_icon_" + n).c_str(), ""), defaults[i].glyph);
+        }
+        s.reactionSlots = clampInt(readInt(ini, L"player", L"react_slots", kDefaultReactionSlots), kMinSlots, kPingSlots);
+        s.reactLast = clampInt(readInt(ini, L"ui", L"react_last", 1), 1, s.reactionSlots) - 1;
     }
     s.pingWheel = clampInt(readInt(ini, L"ui", L"ping_wheel", 1), 1, s.wheelCount) - 1;
     s.pingLastWheel = clampInt(readInt(ini, L"ui", L"ping_last_wheel", 1), 1, s.wheelCount) - 1;
-    s.pingLastSlot = clampInt(readInt(ini, L"ui", L"ping_last_slot", 1), 1, kPingSlots) - 1;
+    s.pingLastSlot = clampInt(readInt(ini, L"ui", L"ping_last_slot", 1), 1, s.wheelSlots[s.pingLastWheel]) - 1;
     s.pingTap = readInt(ini, L"ui", L"ping_tap", 0) != 0 ? 1 : 0;
     s.pingFixedWheel = clampInt(readInt(ini, L"ui", L"ping_tap_wheel", 1), 1, s.wheelCount) - 1;
-    s.pingFixedSlot = clampInt(readInt(ini, L"ui", L"ping_tap_slot", 1), 1, kPingSlots) - 1;
-    s.pingClearKey = readString(ini, L"ui", L"ping_clear_key", "H");
+    s.pingFixedSlot = clampInt(readInt(ini, L"ui", L"ping_tap_slot", 1), 1, s.wheelSlots[s.pingFixedWheel]) - 1;
+    s.wheelInstant = _stricmp(readString(ini, L"ui", L"ping_wheel_mode", "hold").c_str(), "instant") == 0;
+    {
+        const float k = static_cast<float>(atof(readString(ini, L"ui", L"wheel_sensitivity", "1.0").c_str()));
+        s.wheelSensitivity = std::isfinite(k) ? (k < 0.1f ? 0.1f : (k > 3.f ? 3.f : k)) : 1.0f;
+    }
+    s.reactKey = readString(ini, L"ui", L"react_key", "C");
+    s.reactPad = readString(ini, L"ui", L"react_pad", "");
+    s.altKey = readString(ini, L"ui", L"ping_alt_key", "B");
+    s.hideKey = readString(ini, L"ui", L"hide_key", "Y");
+    s.wheelPrevKey = readString(ini, L"ui", L"wheel_prev_key", "Q");
+    s.wheelNextKey = readString(ini, L"ui", L"wheel_next_key", "E");
+    s.padPlayStation = _stricmp(readString(ini, L"ui", L"pad_labels", "xbox").c_str(), "playstation") == 0;
+    s.pingClearKey = readString(ini, L"ui", L"ping_clear_key", "X");
     s.pingClearPad = readString(ini, L"ui", L"ping_clear_pad", "RS");
     {
         const int count = clampInt(readInt(ini, L"bookmarks", L"count", 0), 0, static_cast<int>(kMaxBookmarks));
@@ -402,6 +467,30 @@ void applyPending() {
             put(L"player", wheelKey(w, L"label", i).c_str(), snapshot->wheels[w][i].label);
             put(L"player", wheelKey(w, L"icon", i).c_str(), glyphName(snapshot->wheels[w][i].glyph));
         }
+    for (int w = 0; w < snapshot->wheelCount && w < kWheels; ++w) {
+        put(L"player", (L"wheel" + std::to_wstring(w + 1) + L"_slots").c_str(), std::to_string(snapshot->wheelSlots[w]));
+        put(L"player", (L"wheel" + std::to_wstring(w + 1) + L"_name").c_str(), snapshot->wheelNames[w]);
+    }
+    for (int i = 0; i < kPingSlots; ++i) {
+        const std::wstring n = std::to_wstring(i + 1);
+        put(L"player", (L"react_label_" + n).c_str(), snapshot->reactions[i].label);
+        put(L"player", (L"react_icon_" + n).c_str(), glyphName(snapshot->reactions[i].glyph));
+    }
+    put(L"player", L"react_slots", std::to_string(snapshot->reactionSlots));
+    put(L"ui", L"react_last", std::to_string(snapshot->reactLast + 1));
+    put(L"ui", L"ping_wheel_mode", snapshot->wheelInstant ? "instant" : "hold");
+    {
+        char k[16];
+        snprintf(k, sizeof(k), "%.2f", snapshot->wheelSensitivity);
+        put(L"ui", L"wheel_sensitivity", k);
+    }
+    put(L"ui", L"react_key", snapshot->reactKey);
+    put(L"ui", L"react_pad", snapshot->reactPad);
+    put(L"ui", L"ping_alt_key", snapshot->altKey);
+    put(L"ui", L"hide_key", snapshot->hideKey);
+    put(L"ui", L"wheel_prev_key", snapshot->wheelPrevKey);
+    put(L"ui", L"wheel_next_key", snapshot->wheelNextKey);
+    put(L"ui", L"pad_labels", snapshot->padPlayStation ? "playstation" : "xbox");
     put(L"ui", L"ping_wheel", std::to_string(snapshot->pingWheel + 1));
     put(L"ui", L"ping_last_wheel", std::to_string(snapshot->pingLastWheel + 1));
     put(L"ui", L"ping_last_slot", std::to_string(snapshot->pingLastSlot + 1));

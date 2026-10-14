@@ -105,5 +105,7 @@ jobs:
           } >> notes.md
           prerelease=""
           case "$ver" in 0.*) prerelease="--prerelease" ;; esac
+          # If a draft with this tag already exists (made by hand), add the files to it and keep its notes.
           gh release create "$GITHUB_REF_NAME" dist/* --draft $prerelease \
-            --title "MECMP $ver" --notes-file notes.md
+            --title "MECMP $ver" --notes-file notes.md \
+            || gh release upload "$GITHUB_REF_NAME" dist/* --clobber

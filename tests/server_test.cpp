@@ -72,6 +72,29 @@ static void testForwardsToOthers() {
     CHECK(t.relay.members().size() == 2);
 }
 
+static void testReactForwarded() {
+    // A quick answer is a session packet like a marker: it reaches the others, and an unknown type does not.
+    Harness t;
+    auto hA = hello(1, "alice"), hB = hello(2, "bob");
+    t.relay.onPacket(A, hA.data(), hA.size(), 0);
+    t.relay.onPacket(B, hB.data(), hB.size(), 0);
+    t.sent.clear();
+    char buf[proto::kMaxPacket];
+    const proto::Header h{proto::kMagic, proto::kProtocol, proto::kTypeReact, 1, 5};
+    proto::React r;
+    r.id = 1;
+    r.target = 2;
+    r.text = "On my way";
+    const size_t n = proto::writeReact(buf, h, r);
+    t.relay.onPacket(A, buf, n, 10);
+    CHECK(t.sentTo(B) == 1 && t.sentTo(A) == 0);
+    t.sent.clear();
+    const proto::Header unknown{proto::kMagic, proto::kProtocol, 99, 1, 6};
+    memcpy(buf, &unknown, sizeof(unknown));
+    t.relay.onPacket(A, buf, n, 20);
+    CHECK(t.sentTo(B) == 0);
+}
+
 static void testHelloFlagsCleared() {
     Harness t;
     auto hB = hello(2, "bob");
@@ -400,6 +423,7 @@ int main() {
     testMotd();
     testMirror();
     testForwardsToOthers();
+    testReactForwarded();
     testHelloFlagsCleared();
     testServerHello();
     testSessionBinding();

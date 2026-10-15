@@ -97,6 +97,8 @@ struct Options {
     mecmp::server::Config relay;
 };
 Options g_opts;
+std::string g_configPath = "mecmp_server.ini";
+std::vector<std::string> g_args; // the command line (after the program name), applied again by `reset`
 
 // mecmp_server.ini: key=value lines (port, name, max_players, log, log_chat); '#' or ';' comments.
 bool readConfig(const std::string& path, Options& o, bool required) {
@@ -137,8 +139,9 @@ bool readConfig(const std::string& path, Options& o, bool required) {
 void writeDefaultConfig(const std::string& path) {
     std::ofstream out(path);
     if (!out) return;
-    out << "# MECMP dedicated server settings. Lines starting with # or ; are comments; restart the server after\n"
-           "# changing this file. Options on the command line win over these.\n"
+    out << "# MECMP dedicated server settings. Lines starting with # or ; are comments. After a change, type reset at\n"
+           "# the server's console (or restart it). The port, log, bans, public_address and webhook settings only\n"
+           "# take effect at a restart. Options on the command line win over these.\n"
            "name=MECMP server\n"
            "port=47800\n"
            "max_players=16\n"
@@ -172,6 +175,33 @@ void writeDefaultConfig(const std::string& path) {
 void usage() {
     std::printf("mecmp_server [--port 47800] [--name \"My server\"] [--max-players 16]\n"
                 "             [--config mecmp_server.ini] [--log mecmp_server.log] [--bans bans.txt] [--mirror]\n");
+}
+
+// The command line's options. They win over mecmp_server.ini, and `reset` applies them again. False: an option
+// it does not know.
+bool applyCommandLine(Options& o, const std::vector<std::string>& args) {
+    for (size_t i = 0; i < args.size(); ++i) {
+        const std::string& a = args[i];
+        const bool hasValue = i + 1 < args.size();
+        if (a == "--port" && hasValue) o.port = static_cast<uint16_t>(std::atoi(args[++i].c_str()));
+        else if (a == "--name" && hasValue) o.relay.name = args[++i];
+        else if (a == "--max-players" && hasValue) o.relay.maxPlayers = static_cast<size_t>(std::atoi(args[++i].c_str()));
+        else if (a == "--log" && hasValue) o.logPath = args[++i];
+        else if (a == "--mirror") o.relay.mirror = true;
+        else if (a == "--bans" && hasValue) o.bansPath = args[++i];
+        else if (a == "--config" && hasValue) ++i;
+        else return false;
+    }
+    return true;
+}
+
+// The settings that are the same however they were given: a clean name and a player limit from 1 to 64.
+void finishSettings(Options& o) {
+    o.relay.name = mecmp::server::cleanText(o.relay.name);
+    if (o.relay.name.size() > mecmp::net::protocol::kMaxNameBytes)
+        o.relay.name.resize(mecmp::net::protocol::utf8PrefixLength(o.relay.name, mecmp::net::protocol::kMaxNameBytes));
+    if (o.relay.maxPlayers < 1) o.relay.maxPlayers = 1;
+    if (o.relay.maxPlayers > 64) o.relay.maxPlayers = 64;
 }
 
 void onSignal(int) { g_quit = true; }
@@ -411,7 +441,45 @@ void reloadBansIfChanged(mecmp::server::Relay& relay) {
     if (ec ? g_bansSeen : (!g_bansSeen || t != g_bansTime)) loadBans(relay, false);
 }
 
-void runCommand(const std::string& cmd, mecmp::server::Relay& relay) {
+// Two webhook settings are the same (the webhook is built once, at start).
+bool sameWebhook(const mecmp::server::discord::Config& a, const mecmp::server::discord::Config& b) {
+    return a.url == b.url && a.username == b.username && a.joins == b.joins && a.status == b.status &&
+           a.results == b.results && a.live == b.live && a.statusIdFile == b.statusIdFile;
+}
+
+// `reset`: every player is dropped, then mecmp_server.ini is read again (the command line still wins). The settings
+// the running server can take over are applied now; the rest (port, log and bans files, public_address, the Discord
+// webhook) are read at start only, so a change to them is reported and waits for a restart.
+void resetServer(mecmp::server::Relay& relay, mecmp::server::discord::Webhook& webhook) {
+    Options& o = g_opts;
+    if (!std::filesystem::exists(g_configPath)) {
+        logLine(g_configPath + " is gone: the settings stay as they are");
+    } else {
+        Options next;
+        readConfig(g_configPath, next, false);
+        applyCommandLine(next, g_args);
+        finishSettings(next);
+        if (!next.port) {
+            logLine("port in " + g_configPath + " is not a port number: the port stays " + std::to_string(o.port));
+            next.port = o.port;
+        }
+        if (next.port != o.port) logLine("port " + std::to_string(next.port) + " takes effect at the next start");
+        if (next.logPath != o.logPath) logLine("log " + next.logPath + " takes effect at the next start");
+        if (next.bansPath != o.bansPath) logLine("bans " + next.bansPath + " takes effect at the next start");
+        if (next.publicAddress != o.publicAddress) logLine("public_address takes effect at the next start");
+        if (!sameWebhook(next.discord, o.discord)) logLine("the webhook_ settings take effect at the next start");
+        o.relay = next.relay;
+        relay.reconfigure(o.relay);
+        logLine("settings read again from " + g_configPath);
+    }
+    const size_t dropped = relay.members().size();
+    relay.reset();
+    loadBans(relay, true); // bans.txt again (startup form: no "changed" line)
+    logLine("server reset: " + std::to_string(dropped) + " player(s) dropped");
+    if (webhook.enabled()) webhook.setStatus(liveStatus(o, &relay));
+}
+
+void runCommand(const std::string& cmd, mecmp::server::Relay& relay, mecmp::server::discord::Webhook& webhook) {
     const size_t sp = cmd.find(' ');
     const std::string verb = cmd.substr(0, sp), arg = sp == std::string::npos ? "" : trim(cmd.substr(sp + 1));
     if (verb.empty()) return;
@@ -452,8 +520,10 @@ void runCommand(const std::string& cmd, mecmp::server::Relay& relay) {
                 std::to_string(relay.members().size()) + " players, " + std::to_string(s.received) + " received, " +
                 std::to_string(s.relayed) + " relayed, " + std::to_string(s.dropped) + " dropped, " +
                 std::to_string(s.infoAnswered) + " server-list queries answered");
+    } else if (verb == "reset") {
+        resetServer(relay, webhook);
     } else if (verb == "help") {
-        logLine("commands: list | kick <id|name> | ban <id|name|ip> | unban <ip> | bans | say <text> | status | quit");
+        logLine("commands: list | kick <id|name> | ban <id|name|ip> | unban <ip> | bans | say <text> | status | reset | quit");
     } else {
         logLine("unknown command '" + verb + "' (help lists them)");
     }
@@ -462,31 +532,17 @@ void runCommand(const std::string& cmd, mecmp::server::Relay& relay) {
 
 int serverMain(int argc, char** argv) {
     Options& o = g_opts;
-    std::string configPath = "mecmp_server.ini";
+    g_args.assign(argv + 1, argv + argc);
+    for (const auto& a : g_args)
+        if (a == "--help" || a == "-h") { usage(); return 0; }
     bool configGiven = false;
-    for (int i = 1; i < argc; ++i)
-        if (std::string(argv[i]) == "--config" && i + 1 < argc) { configPath = argv[i + 1]; configGiven = true; }
+    for (size_t i = 0; i + 1 < g_args.size(); ++i)
+        if (g_args[i] == "--config") { g_configPath = g_args[i + 1]; configGiven = true; }
     // First run, also with --config (as the systemd unit in docs/SERVER.md does): a commented file to fill in.
-    if (!std::filesystem::exists(configPath)) writeDefaultConfig(configPath);
-    if (!readConfig(configPath, o, configGiven)) return 1;
-    for (int i = 1; i < argc; ++i) {
-        const std::string a = argv[i];
-        const bool hasValue = i + 1 < argc;
-        if (a == "--port" && hasValue) o.port = static_cast<uint16_t>(std::atoi(argv[++i]));
-        else if (a == "--name" && hasValue) o.relay.name = argv[++i];
-        else if (a == "--max-players" && hasValue) o.relay.maxPlayers = static_cast<size_t>(std::atoi(argv[++i]));
-        else if (a == "--log" && hasValue) o.logPath = argv[++i];
-        else if (a == "--mirror") o.relay.mirror = true;
-        else if (a == "--bans" && hasValue) o.bansPath = argv[++i];
-        else if (a == "--config" && hasValue) ++i;
-        else if (a == "--help" || a == "-h") { usage(); return 0; }
-        else { usage(); return 1; }
-    }
-    o.relay.name = mecmp::server::cleanText(o.relay.name);
-    if (o.relay.name.size() > mecmp::net::protocol::kMaxNameBytes)
-        o.relay.name.resize(mecmp::net::protocol::utf8PrefixLength(o.relay.name, mecmp::net::protocol::kMaxNameBytes));
-    if (o.relay.maxPlayers < 1) o.relay.maxPlayers = 1;
-    if (o.relay.maxPlayers > 64) o.relay.maxPlayers = 64;
+    if (!std::filesystem::exists(g_configPath)) writeDefaultConfig(g_configPath);
+    if (!readConfig(g_configPath, o, configGiven)) return 1;
+    if (!applyCommandLine(o, g_args)) { usage(); return 1; }
+    finishSettings(o);
     if (!o.port) { logLine("invalid port"); return 1; }
     if (!o.logPath.empty()) g_logFile.open(o.logPath, std::ios::app);
 
@@ -637,7 +693,7 @@ int serverMain(int argc, char** argv) {
             std::lock_guard<std::mutex> lock(g_cmdM);
             cmds.swap(g_cmds);
         }
-        for (const auto& c : cmds) runCommand(c, relay);
+        for (const auto& c : cmds) runCommand(c, relay, webhook);
         static uint32_t bansCheckedAt = 0;
         if (now - bansCheckedAt >= 5000) {
             bansCheckedAt = now;

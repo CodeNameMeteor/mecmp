@@ -96,6 +96,7 @@ Console commands (type them in the server's window):
 | `bans` | lists banned addresses |
 | `say <text>` | a chat message from the server |
 | `status` | totals |
+| `reset` | drops every player (they can join again at once), clears the counters and reads `mecmp_server.ini` again. Name, max_players, max_per_ip, motd, log_chat and mirror apply at once; the port, the log and bans files, public_address and the webhook settings are reported and apply at the next start. Bans stay |
 | `quit` | stops the server (Ctrl+C works too) |
 
 ## Join it

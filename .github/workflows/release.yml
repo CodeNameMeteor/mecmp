@@ -2,7 +2,7 @@ name: release
 
 # Two channels, chosen by the tag:
 #   v0.9.0         release: Release build, developer keys off, a draft GitHub release (publish it by hand after a last look)
-#   v0.9.1-beta.1  beta: Debug build with the developer keys on (verbose log, F7/F9/F10/F12), a draft pre-release
+#   v0.9.1-beta.1  beta: Release build with the developer keys on (verbose log, F7/F9/F10/F12), a draft pre-release
 # The tag's version must match src/app/mod.h (the part before the first "-"). "Run workflow" by hand builds the
 # packages only, in the channel picked there (beta by default), and makes no release.
 on:
@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
     inputs:
       build:
-        description: "Channel to build: beta (Debug, verbose log, developer keys) or release"
+        description: "Channel to build: beta (developer keys and verbose log on) or release"
         type: choice
         options: [beta, release]
         default: beta
@@ -47,7 +47,9 @@ jobs:
             channel="${BUILD_INPUT:-beta}"
             if [ "$channel" = beta ]; then label="$ver-test.$GITHUB_RUN_NUMBER"; else label="$ver"; fi
           fi
-          if [ "$channel" = beta ]; then build_type=Debug; debug_keys=ON; else build_type=Release; debug_keys=OFF; fi
+          # Both channels are optimised. The beta turns the developer keys on, and with them the verbose log.
+          build_type=Release
+          if [ "$channel" = beta ]; then debug_keys=ON; else debug_keys=OFF; fi
           {
             echo "channel=$channel"
             echo "label=$label"
@@ -81,7 +83,7 @@ jobs:
           test -s "pkg/$name/version.dll" && test -s "pkg/$name/mecmp.dll"
           if [ "${{ needs.plan.outputs.channel }}" = beta ]; then
             {
-              echo "BETA BUILD. This is a debug build: verbose logging is on and the developer keys are enabled"
+              echo "BETA BUILD. Verbose logging is on and the developer keys are enabled"
               echo "(F7, F9, F10, F12). Send mecmp.log with any bug report."
               echo
               cat docs/INSTALL.txt
@@ -106,7 +108,7 @@ jobs:
         run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=${{ needs.plan.outputs.build_type }}
           cmake --build build --target mecmp_server
-          if [ "${{ needs.plan.outputs.build_type }}" = Release ]; then strip build/mecmp_server; fi
+          strip build/mecmp_server
       - name: Server tests
         run: |
           g++ -std=c++17 -Wall -Wextra -Isrc tests/server_test.cpp src/server/relay.cpp src/server/discord.cpp src/net/protocol.cpp -ldl -pthread -o server_test
@@ -147,7 +149,7 @@ jobs:
           section "$ver" > notes.md
           if [ "$CHANNEL" = beta ] && ! grep -q '[^[:space:]]' notes.md; then section "Unreleased" > notes.md; fi
           if [ "$CHANNEL" = beta ]; then
-            printf '\nBeta build: a debug build with verbose logging and the developer keys (F7, F9, F10, F12).\n' >> notes.md
+            printf '\nBeta build: optimised, with verbose logging and the developer keys (F7, F9, F10, F12).\n' >> notes.md
           fi
           # Then the commits since the previous tag (all of them for the first release), newest first.
           prev=$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || true)

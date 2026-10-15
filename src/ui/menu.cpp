@@ -242,19 +242,20 @@ void serversSection() {
 std::set<uint32_t> g_summonPick; // the players ticked for "Summon selected"
 bool g_summonHard = false;       // "pull in" ticked (only offered while it can work)
 
-// Summon (ui/summon.h): call everyone, or the ticked players; the host's rule for members.
+// Session tab, while hosting: the host's rules for the session.
+void hostSettingsSection() {
+    if (!net::hosting()) return;
+    ImGui::SeparatorText("Host settings");
+    bool allow = config::get()->membersMayHardSummon;
+    if (ImGui::Checkbox("Members may pull players in (hard summon)", &allow))
+        config::change([allow](config::Settings& c) { c.membersMayHardSummon = allow; });
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("You can always pull players in. This lets the others do it too.\n"
+                          "A player is only pulled in if they allowed it themselves (You tab).");
+}
+
+// Summon (ui/summon.h): everyone, or the ticked players.
 void summonControls(const std::vector<net::RemoteInfo>& remotes) {
-    const auto cfg = config::get();
-    if (net::hosting()) {
-        bool allow = cfg->membersMayHardSummon;
-        if (ImGui::Checkbox("Members may pull players in (hard summon)", &allow))
-            config::change([allow](config::Settings& c) { c.membersMayHardSummon = allow; });
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("You can always pull players in. This lets the others do it too.\n"
-                              "A player is only pulled in if they allowed it themselves (Controls tab).");
-    }
-    if (remotes.empty()) return;
-    ImGui::Spacing();
     const bool canHard = net::canHardSummon();
     ImGui::BeginDisabled(!canHard);
     ImGui::Checkbox("Pull in (hard)", &g_summonHard);
@@ -275,7 +276,17 @@ void summonControls(const std::vector<net::RemoteInfo>& remotes) {
     snprintf(label, sizeof(label), "Summon selected (%d)", static_cast<int>(picked.size()));
     if (ImGui::Button(label)) summon::send(picked, hard);
     ImGui::EndDisabled();
-    ImGui::TextDisabled("They get a marker where you stand. Tick players in the list to call only them.");
+    ImGui::TextDisabled("They get a marker where you stand. Tick players in the list to summon only them.");
+}
+
+// Show / hide the other players' ghosts (for when one is missing or in the way).
+void ghostsRow() {
+    ImGui::SeparatorText("Ghosts");
+    if (ImGui::Button("Show ghosts")) game::ghosts::requestSpawnOrRefresh();
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Brings the other players' ghosts back if they are missing");
+    ImGui::SameLine();
+    if (ImGui::Button("Hide ghosts")) game::ghosts::requestHideAll();
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Hides the other players' ghosts until you show them again");
 }
 
 void playersSection() {
@@ -283,7 +294,7 @@ void playersSection() {
     const auto remotes = net::remotes(5000);
     if (remotes.empty()) {
         ImGui::TextDisabled("Nobody else here yet.");
-        summonControls(remotes);
+        ghostsRow();
         return;
     }
     if (ImGui::BeginTable("players", 4, ImGuiTableFlags_SizingStretchProp)) {
@@ -297,7 +308,7 @@ void playersSection() {
                     if (on) g_summonPick.insert(r.id);
                     else g_summonPick.erase(r.id);
                 }
-                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Tick to call this player with \"Summon selected\"");
+                if (ImGui::IsItemHovered()) ImGui::SetTooltip("Tick to summon this player with \"Summon selected\"");
                 ImGui::SameLine();
             }
             ImGui::PopID();
@@ -327,7 +338,9 @@ void playersSection() {
         }
         ImGui::EndTable();
     }
+    ImGui::SeparatorText("Summon");
     summonControls(remotes);
+    ghostsRow();
 }
 
 // Colour swatches for the echo colour names (the game's own colours are shader parameters).
@@ -501,7 +514,26 @@ void voiceStatus() {
     ImGui::Unindent();
 }
 
-void lookSection() {
+// You tab: what the player shares or allows.
+void privacySection() {
+    const auto cfg = config::get();
+    ImGui::SeparatorText("Privacy");
+    bool share = cfg->shareProfile;
+    if (ImGui::Checkbox("Share my EA profile", &share)) config::change([share](config::Settings& c) { c.shareProfile = share; });
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Sends your EA online id and profile name to the players in your session, so their map\n"
+                          "shows your Runner Tag where you are. Off: you are not on their maps.");
+    bool forced = cfg->allowForcedSummon;
+    if (ImGui::Checkbox("Allow being pulled in (hard summon)", &forced))
+        config::change([forced](config::Settings& c) { c.allowForcedSummon = forced; });
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Off: every summon only asks you.\n"
+                          "On: when the host (or a member the host allows) pulls you in, you are taken to them after a\n"
+                          "countdown. You can cancel it in that time. Never from anyone else.");
+}
+
+// Display tab: sizes, what is drawn in the game, voice.
+void displaySection() {
     static struct { float value = 1.f; bool editing = false; } g_scaleEdit; // saved when the slider is let go
     ImGui::SeparatorText("Interface size");
     ImGui::SetNextItemWidth(ImGui::GetFontSize() * 10);
@@ -524,10 +556,13 @@ void lookSection() {
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Size of the menu, markers, wheel and notices. 1.0 follows the game window's height.\n"
                           "Applies when you let go of the slider.");
-    ImGui::SeparatorText("Other players");
+    ImGui::SeparatorText("Shown in game");
     bool showNames = config::get()->showNames;
     if (ImGui::Checkbox("Names above players", &showNames))
         config::change([showNames](config::Settings& c) { c.showNames = showNames; });
+    bool showArrows = config::get()->showArrows;
+    if (ImGui::Checkbox("Player arrows", &showArrows)) config::change([showArrows](config::Settings& c) { c.showArrows = showArrows; });
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Shows an arrow on the edge of the screen towards each player you cannot see");
     bool showNotices = config::get()->showNotices;
     if (ImGui::Checkbox("Notices (join/leave, markers)", &showNotices))
         config::change([showNotices](config::Settings& c) { c.showNotices = showNotices; });
@@ -539,14 +574,17 @@ void lookSection() {
     if (ImGui::Checkbox("Players on the map", &onMap)) config::change([onMap](config::Settings& c) { c.playersOnMap = onMap; });
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Shows the session's players on the game's map, as it shows friends, with their Runner Tag.\n"
-                          "Needs online services (Beat Revival), and only players who share their profile.");
-    bool share = config::get()->shareProfile;
-    if (ImGui::Checkbox("Share my EA profile", &share)) config::change([share](config::Settings& c) { c.shareProfile = share; });
+                          "Needs online services (Beat Revival), and only players who share their profile\n"
+                          "(Share my EA profile, You tab).");
+    bool hideAll = ui::overlayHidden();
+    if (ImGui::Checkbox("Hide names, markers, arrows, notices and chat now", &hideAll)) ui::setOverlayHidden(hideAll);
     if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Sends your EA online id and profile name to the players in your session, so their map\n"
-                          "shows your Runner Tag where you are. Off: you are not on their maps.");
-    ImGui::SameLine();
-    ImGui::TextDisabled("(%s to type)", config::get()->chatKey.c_str());
+        ImGui::SetTooltip("For a screenshot or a recording. Holding the hide key (Controls tab) for a second does the same.");
+}
+
+// Players tab: hearing the session's players (Mumble positional audio).
+void voiceSection() {
+    ImGui::SeparatorText("Voice");
     bool mumble = config::get()->mumbleLink;
     if (ImGui::Checkbox("Positional voice (Mumble)", &mumble))
         config::change([mumble](config::Settings& c) { c.mumbleLink = mumble; });
@@ -554,11 +592,6 @@ void lookSection() {
         ImGui::SetTooltip("With Mumble running (Positional Audio and the Link plugin on, everyone on the same\n"
                           "Mumble server), players in this session hear each other from where they are.");
     voiceStatus();
-    if (ImGui::Button("Show ghosts")) game::ghosts::requestSpawnOrRefresh();
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Brings the other players' ghosts back if they are missing");
-    ImGui::SameLine();
-    if (ImGui::Button("Hide ghosts")) game::ghosts::requestHideAll();
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Hides the other players' ghosts until you show them again");
 }
 
 // The action key pressed this frame (as ping_key names it: a letter, a digit, ENTER or a menu key), if any.
@@ -695,28 +728,30 @@ struct KeyBind {
     const char* tip;
     std::string config::Settings::*field;
     bool (*set)(const std::string&);
-    int mouse;  // 0 = the keyboard only, 1 = also Mouse 4 / 5, 2 = also the middle button
+    int mouse;  // 0 = the keyboard only, 1 = also the middle button and Mouse 4 / 5
 };
 const KeyBind kKeyBinds[11] = {
     {"Tap to place a marker. Hold to open the marker wheel.", &config::Settings::pingKey, &ui::setPingKey, 1},
     {"Tap twice to remove the marker you look at (or stand at). Hold for a moment to remove all your markers.",
-     &config::Settings::pingClearKey, &ui::setPingClearKey, 2},
+     &config::Settings::pingClearKey, &ui::setPingClearKey, 1},
     {"Opens the chat line (Enter sends, Escape cancels).", &config::Settings::chatKey, &ui::setChatKey, 0},
     {"Look at another player's marker: tap sends your last quick answer to them, hold opens the answers wheel.",
      &config::Settings::reactKey, &ui::setReactKey, 1},
     {"Places a marker the other way: where you stand if your markers go where you look, and where you look if they go "
      "where you stand.",
      &config::Settings::altKey, &ui::setAltKey, 1},
-    {"Hides names, markers, arrows, notices and chat lines (for a screenshot or a recording). Press again to show them.",
+    {"Hold for a second to hide names, markers, arrows, notices and chat lines (for a screenshot or a recording). "
+     "Hold it again to show them.",
      &config::Settings::hideKey, &ui::setHideKey, 1},
     {"While the marker wheel is open: the previous wheel. The Left arrow and the mouse wheel do the same.",
      &config::Settings::wheelPrevKey, &ui::setWheelPrevKey, 1},
     {"While the marker wheel is open: the next wheel. The Right arrow and the mouse wheel do the same.",
      &config::Settings::wheelNextKey, &ui::setWheelNextKey, 1},
-    {"Tap to call everyone to where you stand. Hold for a second to pull them in (hard summon, if you may). "
-     "Hold it while your call is open to withdraw it.",
+    {"Tap to summon everyone to where you stand. Hold for a second to pull them in (hard summon, if you may). "
+     "Hold it while your summon is open to withdraw it.",
      &config::Settings::summonKey, &ui::setSummonKey, 1},
-    {"While a summon is shown to you: hold for a second to go to the caller.",
+    {"While a summon is shown to you: hold for a second to go to the player who summoned you. While \"Go back?\" "
+     "is shown after a summon: hold for a second to hide it.",
      &config::Settings::summonAcceptKey, &ui::setSummonAcceptKey, 1},
     {"While a summon is shown to you: hold for a second to say no. After a summon took you somewhere, hold it "
      "for 3 seconds within a minute to go back.",
@@ -740,7 +775,7 @@ void keyRow(const config::Settings& cfg, int which) {
             g_bindCapture = -1;
         } else {
             bool got = pressedActionKey(name);
-            for (int m = bind.mouse >= 2 ? 2 : 3; m <= 4 && !got && bind.mouse; ++m)
+            for (int m = 2; m <= 4 && !got && bind.mouse; ++m) // middle, Mouse 4, Mouse 5
                 if (ImGui::IsMouseClicked(m)) {
                     name = "MOUSE" + std::to_string(m + 1);
                     got = true;
@@ -1188,12 +1223,6 @@ void markersSection() {
     ImGui::SameLine();
     if (ImGui::SmallButton("Clear my markers")) net::clearPing();
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Removes all your markers for everyone");
-    bool showArrows = cfg.showArrows;
-    if (ImGui::Checkbox("Player arrows", &showArrows)) config::change([showArrows](config::Settings& c) { c.showArrows = showArrows; });
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Shows an arrow on the edge of the screen towards each player you cannot see");
-    bool hideAll = ui::overlayHidden();
-    if (ImGui::Checkbox("Hide names, markers, arrows and notices", &hideAll)) ui::setOverlayHidden(hideAll);
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("For a screenshot or a recording. The hide key (Controls tab) does the same.");
     bool pingPulse = cfg.pingPulse;
     if (ImGui::Checkbox("Flash markers when placed", &pingPulse))
         config::change([pingPulse](config::Settings& c) { c.pingPulse = pingPulse; });
@@ -1371,15 +1400,16 @@ void controlsSection() {
            "The same on a gamepad: tap sends your last answer, hold opens the answers wheel.");
 
     ImGui::SeparatorText("Summon");
-    ImGui::TextUnformatted("Call players to you");
+    ImGui::TextUnformatted("Summon players to you");
     ImGui::Indent();
     keyRow(*cfg, 8);
     ImGui::Unindent();
-    ImGui::TextUnformatted("Answer a summon: go (hold)");
+    ImGui::TextUnformatted("Answer a summon: go (hold), and hide \"Go back?\"");
     ImGui::Indent();
     keyRow(*cfg, 9);
     padRow("Gamepad:", gamepad::Action::SummonAccept, cfg->summonAcceptPad, &config::Settings::summonAcceptPad,
-           "Hold these buttons for a second to go to the player who called you. The game does not see them while a summon is shown.");
+           "Hold these buttons for a second to go to the player who summoned you; after a summon took you somewhere,\n"
+           "hold them to hide the \"Go back?\" bar. The game does not see them while a summon or that bar is shown.");
     ImGui::Unindent();
     ImGui::TextUnformatted("Answer a summon: no (hold), and go back");
     ImGui::Indent();
@@ -1387,20 +1417,12 @@ void controlsSection() {
     padRow("Gamepad:", gamepad::Action::SummonDecline, cfg->summonDeclinePad, &config::Settings::summonDeclinePad,
            "Hold for a second to say no; after a summon took you somewhere, hold for 3 seconds to go back.");
     ImGui::Unindent();
-    bool forced = cfg->allowForcedSummon;
-    if (ImGui::Checkbox("Allow being pulled in (hard summon)", &forced))
-        config::change([forced](config::Settings& c) { c.allowForcedSummon = forced; });
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Off: every summon only asks you.\n"
-                          "On: when the host (or a member the host allows) pulls you in, you are taken to them after a\n"
-                          "countdown. You can cancel it in that time. Never from anyone else.");
+    ImGui::TextDisabled("Whether you can be pulled in is on the You tab.");
 
     ImGui::SeparatorText("Overlay");
-    ImGui::TextUnformatted("Show / hide names, markers, arrows, notices and chat");
+    ImGui::TextUnformatted("Hide / show names, markers, arrows, notices and chat (hold)");
     ImGui::Indent();
     keyRow(*cfg, 5);
-    bool hidden = ui::overlayHidden();
-    if (ImGui::Checkbox("Hidden now", &hidden)) ui::setOverlayHidden(hidden);
     ImGui::Unindent();
 
     ImGui::SeparatorText("Gamepad");
@@ -1468,7 +1490,7 @@ void draw(bool open) {
     ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + vp->WorkSize.y * 0.5f),
                             ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
     // One size for all tabs (the longer ones scroll), never taller than the screen.
-    ImGui::SetNextWindowSize(ImVec2(ImGui::GetFontSize() * 30, vp->WorkSize.y * 0.7f), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(ImGui::GetFontSize() * 32, vp->WorkSize.y * 0.7f), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSizeConstraints(ImVec2(0, 0), ImVec2(FLT_MAX, vp->WorkSize.y * 0.94f));
     char title[64];
     snprintf(title, sizeof(title), "MECMP %s###mecmp", app::kVersion);
@@ -1476,17 +1498,26 @@ void draw(bool open) {
     if (ImGui::BeginTabBar("##tabs")) {
         if (ImGui::BeginTabItem("Session")) {
             sessionSection();
+            hostSettingsSection();
             serversSection();
             ImGui::EndTabItem();
         }
         if (ImGui::BeginTabItem("Players")) {
             playersSection();
+            voiceSection();
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("You")) {
             myLookSection();
-            lookSection();
+            privacySection();
             ImGui::EndTabItem();
         }
         if (ImGui::BeginTabItem("Markers")) {
             markersSection();
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Display")) {
+            displaySection();
             ImGui::EndTabItem();
         }
         if (ImGui::BeginTabItem("Controls")) {

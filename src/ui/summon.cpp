@@ -73,8 +73,8 @@ struct Hold {
     }
     void reset() { since = 0; armed = false; }
 };
-Hold g_accept, g_decline, g_return;
-float g_acceptProgress = 0.f, g_declineProgress = 0.f, g_returnProgress = 0.f;
+Hold g_accept, g_decline, g_return, g_dismiss; // g_dismiss: the accept key hiding the "Go back?" bar
+float g_acceptProgress = 0.f, g_declineProgress = 0.f, g_returnProgress = 0.f, g_dismissProgress = 0.f;
 uint32_t g_topId = 0; // which pending summon the holds belong to
 
 // The send key: a tap calls everyone, a one-second hold pulls them in, or withdraws an open call.
@@ -203,9 +203,12 @@ void drawPending(const Panel& pn, const Pending& p, DWORD now, float distance, c
     holdButton(pn.dl, f, size, ImVec2(x, by), declineKey, no, g_declineProgress, IM_COL32(200, 200, 210, 255));
 }
 
-void drawReturn(const Panel& pn, uint32_t leftMs, const std::string& declineKey) {
-    char text[96];
-    snprintf(text, sizeof(text), "Go back?  Hold [%s]  %s", declineKey.c_str(), mmss(leftMs).c_str());
+// "Go back?" for a minute after a summon took us: holding the decline key goes back, holding the accept
+// key hides the bar (and gives up going back). The bar fills for whichever is held.
+void drawReturn(const Panel& pn, uint32_t leftMs, const std::string& acceptKey, const std::string& declineKey) {
+    char text[128];
+    snprintf(text, sizeof(text), "Go back?  Hold [%s]  %s    Hold [%s] to hide", declineKey.c_str(), mmss(leftMs).c_str(),
+             acceptKey.c_str());
     const float size = pn.size;
     const ImVec2 ts = pn.font->CalcTextSizeA(size, FLT_MAX, 0.f, text);
     const float pad = size * 0.55f;
@@ -216,6 +219,9 @@ void drawReturn(const Panel& pn, uint32_t leftMs, const std::string& declineKey)
     if (g_returnProgress > 0.f)
         pn.dl->AddRectFilled(a, ImVec2(a.x + (b.x - a.x) * std::clamp(g_returnProgress, 0.f, 1.f), b.y),
                              IM_COL32(120, 170, 255, 200), size * 0.3f);
+    else if (g_dismissProgress > 0.f)
+        pn.dl->AddRectFilled(a, ImVec2(a.x + (b.x - a.x) * std::clamp(g_dismissProgress, 0.f, 1.f), b.y),
+                             IM_COL32(150, 150, 160, 200), size * 0.3f);
     pn.dl->AddRect(a, b, IM_COL32(120, 170, 255, 255), size * 0.3f, 0, 2.f);
     pn.dl->AddText(pn.font, size, ImVec2(a.x + pad, a.y + pad * 0.5f), IM_COL32(255, 255, 255, 255), text);
 }
@@ -272,23 +278,23 @@ bool takesDeclineKey() { return g_takeDecline.load(); }
 bool send(const std::vector<uint32_t>& targets, bool hard) {
     static net::PlayerState st; // large; render thread only
     if (!net::localState(st)) {
-        notices::push("Can't call anyone from here");
+        notices::push("Can't summon anyone from here");
         return false;
     }
     const bool canHard = net::canHardSummon();
     const bool asHard = hard && canHard;
     if (!net::sendSummon(st.pos, st.yaw, targets, asHard)) {
         const uint32_t left = net::summonCooldownLeftMs();
-        notices::push(left ? "Wait " + std::to_string((left + 999) / 1000) + " s before calling again"
-                           : std::string("Nobody to call"));
+        notices::push(left ? "Wait " + std::to_string((left + 999) / 1000) + " s before summoning again"
+                           : std::string("Nobody to summon"));
         return false;
     }
     const std::string who = targets.empty() ? std::string("everyone")
                             : targets.size() == 1 ? std::string("1 player")
                                                   : std::to_string(targets.size()) + " players";
-    notices::push(asHard ? "Pulling " + who + " to you" : "Calling " + who + " to you");
+    notices::push(asHard ? "Pulling " + who + " to you" : "Summoning " + who + " to you");
     if (hard && !canHard)
-        notices::push("Only the host (or a member it allows) can pull players in: called as a plain summon");
+        notices::push("Only the host (or a member it allows) can pull players in: sent as a plain summon");
     return true;
 }
 
@@ -386,13 +392,14 @@ void update(const Input& in) {
         g_decline.reset();
     }
     const uint32_t returnLeft = game::teleport::returnLeftMs();
-    g_takeAccept = pendingShown;
+    g_takeAccept = pendingShown || returnLeft > 0;
     g_takeDecline = pendingShown || returnLeft > 0;
-    g_acceptProgress = g_declineProgress = g_returnProgress = 0.f;
+    g_acceptProgress = g_declineProgress = g_returnProgress = g_dismissProgress = 0.f;
     if (!in.canAct) {
         g_accept.reset();
         g_decline.reset();
         g_return.reset();
+        g_dismiss.reset();
         return;
     }
     bool done = false;
@@ -415,16 +422,20 @@ void update(const Input& in) {
             return;
         }
         g_return.reset();
+        g_dismiss.reset();
     } else if (returnLeft > 0) {
         g_returnProgress = g_return.step(in.declineDown, now, kReturnHoldMs, done);
         if (done) {
             if (game::teleport::requestReturn()) notices::push("Going back");
             return;
         }
+        g_dismissProgress = g_dismiss.step(in.acceptDown, now, kHoldMs, done);
+        if (done) game::teleport::forgetReturn(); // the bar goes, and going back with it
     } else {
         g_accept.reset();
         g_decline.reset();
         g_return.reset();
+        g_dismiss.reset();
     }
 }
 
@@ -449,7 +460,8 @@ void draw() {
         return;
     }
     if (const uint32_t left = game::teleport::returnLeftMs(); left > 0 && !game::teleport::busy())
-        drawReturn(pn, left, keyHint(cfg->summonDeclineKey, cfg->summonDeclinePad));
+        drawReturn(pn, left, keyHint(cfg->summonAcceptKey, cfg->summonAcceptPad),
+                   keyHint(cfg->summonDeclineKey, cfg->summonDeclinePad));
     // The send key's hold: a bar near the middle of the screen. It shows only once the key has been held
     // for kHintDelayMs (a tap that places a plain summon never flashes it) and fades in and out over
     // kHintFadeMs.
@@ -460,7 +472,7 @@ void draw() {
         const auto fade = [k](int a) { return static_cast<int>(static_cast<float>(a) * k); };
         const char* what = g_hintWithdraw ? "Withdrawing the summon..."
                            : g_hintCanHard ? "Pulling players in..."
-                                           : "Calling everyone (only the host can pull players in)";
+                                           : "Summoning everyone (only the host can pull players in)";
         const float size = pn.size;
         const ImVec2 ts = pn.font->CalcTextSizeA(size, FLT_MAX, 0.f, what);
         const float pad = size * 0.5f;

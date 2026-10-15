@@ -224,17 +224,18 @@ bool radialRawMouse(LPARAM l) {
     return true;
 }
 
-// Keys bound to the mouse's side buttons do not come as key messages, so they are asked for every
-// frame (render thread). The marker and answer keys start the wheel as a key would; its release is
-// noticed by the wheel itself.
+// Keys bound to the mouse's middle and side buttons do not come as key messages, so they are asked
+// for every frame (render thread). The marker and answer keys start the wheel as a key would; its
+// release is noticed by the wheel itself. The hide key is not here: pollHideKey asks for it, any key.
 void pollMouseBinds() {
     static bool was[6] = {};
     std::atomic<int>* const binds[6] = {&g_pingKey, &g_reactKey, &g_altKey, &g_hideKey, &g_prevKey, &g_nextKey};
     const bool canAct = gameFocused() && !g_open.load() && !chat::isOpen() && g_ready && !game::hooks::gameMenuOpen();
     for (int i = 0; i < 6; ++i) {
+        if (i == 3) continue;
         const int vk = binds[i]->load();
-        const bool side = vk == VK_XBUTTON1 || vk == VK_XBUTTON2;
-        const bool now = side && canAct && (GetAsyncKeyState(vk) & 0x8000) != 0;
+        const bool mouse = vk == VK_MBUTTON || vk == VK_XBUTTON1 || vk == VK_XBUTTON2;
+        const bool now = mouse && canAct && (GetAsyncKeyState(vk) & 0x8000) != 0;
         const bool pressed = now && !was[i];
         was[i] = now;
         if (!pressed) continue;
@@ -242,29 +243,75 @@ void pollMouseBinds() {
         case 0: radial::keyDown(vk); break;
         case 1: radial::keyDown(vk, radial::Mode::React); break;
         case 2: game::ping::requestAlt(); break;
-        case 3: setOverlayHidden(!g_hidden.load()); break;
         case 4: radial::switchWheel(-1); break;
         default: radial::switchWheel(1); break;
         }
     }
 }
 
-// A moment after the overlay was hidden or shown: a line at the top says which, and how to undo it.
-void drawHiddenNote() {
-    const DWORD at = g_hiddenNoteAt.load();
-    if (!at || GetTickCount() - at > 2500) return;
-    std::string text = g_hidden.load() ? "Overlay hidden" : "Overlay shown";
-    const std::string key = config::get()->hideKey;
-    if (g_hidden.load() && !key.empty()) text += " (" + keyLabel(key) + " shows it again)";
+constexpr DWORD kHideHoldMs = 1000; // how long the hide key is held to hide or show (a stray press must do nothing)
+float g_hideProgress = 0.f;         // how far that hold is, 0..1 (render thread only)
+
+// The hide key (render thread, every frame). Hiding and showing again both take a hold of kHideHoldMs.
+// Asked for here rather than through key messages, so it is the same for a mouse button.
+void pollHideKey() {
+    static bool held = false, done = false;
+    static DWORD since = 0;
+    g_hideProgress = 0.f;
+    const int vk = g_hideKey.load();
+    const bool now = vk != 0 && gameFocused() && !g_open.load() && !chat::isOpen() && g_ready &&
+                     (GetAsyncKeyState(vk) & 0x8000) != 0;
+    if (!now) {
+        held = done = false;
+        return;
+    }
+    if (!held) {
+        held = true;
+        since = GetTickCount();
+    }
+    if (done) return;
+    const DWORD elapsed = GetTickCount() - since;
+    if (elapsed >= kHideHoldMs) {
+        done = true;
+        setOverlayHidden(!g_hidden.load());
+        return;
+    }
+    g_hideProgress = static_cast<float>(elapsed) / static_cast<float>(kHideHoldMs);
+}
+
+// A pill of text at the top of the screen; `progress` above 0 fills a bar along its bottom edge.
+void drawTopPill(const std::string& text, float progress) {
     ImFont* font = ImGui::GetFont();
     const float size = ImGui::GetFontSize();
     const ImVec2 ts = font->CalcTextSizeA(size, FLT_MAX, 0.f, text.c_str());
     const ImVec2 screen = ImGui::GetIO().DisplaySize;
     const ImVec2 a((screen.x - ts.x) * 0.5f, screen.y * 0.04f);
+    const ImVec2 p0(a.x - size * 0.5f, a.y - size * 0.25f), p1(a.x + ts.x + size * 0.5f, a.y + ts.y + size * 0.25f);
     ImDrawList* dl = ImGui::GetForegroundDrawList();
-    dl->AddRectFilled(ImVec2(a.x - size * 0.5f, a.y - size * 0.25f), ImVec2(a.x + ts.x + size * 0.5f, a.y + ts.y + size * 0.25f),
-                      IM_COL32(12, 12, 18, 190), size * 0.3f);
+    dl->AddRectFilled(p0, p1, IM_COL32(12, 12, 18, 190), size * 0.3f);
+    if (progress > 0.f) {
+        const float inset = size * 0.3f, bar = std::max(2.f, size * 0.12f);
+        const float w = (p1.x - p0.x - 2.f * inset) * std::min(progress, 1.f);
+        dl->AddRectFilled(ImVec2(p0.x + inset, p1.y - bar - 1.f), ImVec2(p0.x + inset + w, p1.y - 1.f),
+                          IM_COL32(255, 110, 70, 230), bar * 0.5f);
+    }
     dl->AddText(font, size, a, IM_COL32(255, 255, 255, 255), text.c_str());
+}
+
+// While the hide key is held: how long to go. A moment after the overlay was hidden or shown: a line
+// at the top says which, and how to undo it.
+void drawHiddenNote() {
+    const std::string key = config::get()->hideKey;
+    if (g_hideProgress > 0.1f) {
+        drawTopPill("Keep holding " + keyLabel(key) + (g_hidden.load() ? " to show the overlay" : " to hide the overlay"),
+                    g_hideProgress);
+        return;
+    }
+    const DWORD at = g_hiddenNoteAt.load();
+    if (!at || GetTickCount() - at > 2500) return;
+    std::string text = g_hidden.load() ? "Overlay hidden" : "Overlay shown";
+    if (g_hidden.load() && !key.empty()) text += " (" + keyLabel(key) + " shows it again)";
+    drawTopPill(text, 0.f);
 }
 
 // The keys the open wheel uses itself: the digits, the arrows and the previous / next wheel keys. While
@@ -370,10 +417,7 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
     if (msg == WM_KEYDOWN && !g_open && !chat::isOpen() && g_ready && g_altKey.load() != 0 &&
         static_cast<int>(w) == g_altKey.load() && !(l & (1 << 30)) && !game::hooks::gameMenuOpen())
         game::ping::requestAlt();
-    // The hide key.
-    if (msg == WM_KEYDOWN && !g_open && !chat::isOpen() && g_ready && g_hideKey.load() != 0 &&
-        static_cast<int>(w) == g_hideKey.load() && !(l & (1 << 30)))
-        setOverlayHidden(!g_hidden.load());
+    // (The hide key is polled every frame: pollHideKey.)
     if (chat::isOpen() && g_ready && !g_open) {
         if (msg == WM_KEYDOWN && w == VK_ESCAPE) { chat::close(); return 0; }
         if (msg == WM_CHAR && g_eatChar) { g_eatChar = false; return 0; }
@@ -526,6 +570,7 @@ HRESULT STDMETHODCALLTYPE presentHook(IDXGISwapChain* sc, UINT sync, UINT flags)
         if (g_justOpened.exchange(false)) ImGui::SetWindowFocus("###mecmp");
         ImGui::GetIO().MouseDrawCursor = g_open.load();
         pollMouseBinds();
+        pollHideKey();
         {
             // Summon (ui/summon.h): held keys are read here, every frame, so tap and hold are told apart.
             auto down = [](int vk) { return vk != 0 && (GetAsyncKeyState(vk) & 0x8000) != 0; };
@@ -596,12 +641,12 @@ std::atomic<int>* const kBound[] = {&g_pingKey, &g_pingClearKey, &g_chatKey, &g_
                                     &g_hideKey, &g_prevKey,      &g_nextKey, &g_summonKey, &g_summonAcceptKey,
                                     &g_summonDeclineKey};
 
-// A key name from mecmp.ini. `mouse`: 0 = the keyboard only, 1 = also MOUSE4 / MOUSE5 (the side
-// buttons), 2 = also MOUSE3 (the middle button, which the "clear markers" key may be).
-int bindFromName(const std::string& n, int mouse) {
-    if (mouse >= 1 && _stricmp(n.c_str(), "MOUSE4") == 0) return VK_XBUTTON1;
-    if (mouse >= 1 && _stricmp(n.c_str(), "MOUSE5") == 0) return VK_XBUTTON2;
-    if (mouse >= 2 && _stricmp(n.c_str(), "MOUSE3") == 0) return VK_MBUTTON;
+// A key name from mecmp.ini. `mouse`: false = the keyboard only, true = also MOUSE3 (the middle
+// button), MOUSE4 and MOUSE5 (the side buttons).
+int bindFromName(const std::string& n, bool mouse) {
+    if (mouse && _stricmp(n.c_str(), "MOUSE3") == 0) return VK_MBUTTON;
+    if (mouse && _stricmp(n.c_str(), "MOUSE4") == 0) return VK_XBUTTON1;
+    if (mouse && _stricmp(n.c_str(), "MOUSE5") == 0) return VK_XBUTTON2;
     return actionKeyFromName(n);
 }
 
@@ -621,7 +666,7 @@ void setPadBinding(const std::string& combo, gamepad::Action action, const char*
     gamepad::setBinding(bits, action);
 }
 
-bool setBind(std::atomic<int>& slot, const std::string& name, int mouse) {
+bool setBind(std::atomic<int>& slot, const std::string& name, bool mouse) {
     if (name.empty()) {
         slot = 0;
         return true;
@@ -644,17 +689,23 @@ bool setMenuKey(const std::string& name) {
     g_toggleKey = key;
     return true;
 }
-bool setPingKey(const std::string& name) { return setBind(g_pingKey, name, 1); }
-bool setPingClearKey(const std::string& name) { return setBind(g_pingClearKey, name, 2); }
-bool setChatKey(const std::string& name) { return setBind(g_chatKey, name, 0); }
-bool setReactKey(const std::string& name) { return setBind(g_reactKey, name, 1); }
-bool setAltKey(const std::string& name) { return setBind(g_altKey, name, 1); }
-bool setHideKey(const std::string& name) { return setBind(g_hideKey, name, 1); }
-bool setWheelPrevKey(const std::string& name) { return setBind(g_prevKey, name, 1); }
-bool setWheelNextKey(const std::string& name) { return setBind(g_nextKey, name, 1); }
-bool setSummonKey(const std::string& name) { return setBind(g_summonKey, name, 1); }
-bool setSummonAcceptKey(const std::string& name) { return setBind(g_summonAcceptKey, name, 1); }
-bool setSummonDeclineKey(const std::string& name) { return setBind(g_summonDeclineKey, name, 1); }
+bool setPingKey(const std::string& name) { return setBind(g_pingKey, name, true); }
+bool setPingClearKey(const std::string& name) { return setBind(g_pingClearKey, name, true); }
+bool setChatKey(const std::string& name) { return setBind(g_chatKey, name, false); }
+bool setReactKey(const std::string& name) { return setBind(g_reactKey, name, true); }
+bool setAltKey(const std::string& name) { return setBind(g_altKey, name, true); }
+bool setHideKey(const std::string& name) { return setBind(g_hideKey, name, true); }
+bool setWheelPrevKey(const std::string& name) { return setBind(g_prevKey, name, true); }
+bool setWheelNextKey(const std::string& name) { return setBind(g_nextKey, name, true); }
+bool setSummonKey(const std::string& name) { return setBind(g_summonKey, name, true); }
+bool setSummonAcceptKey(const std::string& name) { return setBind(g_summonAcceptKey, name, true); }
+bool setSummonDeclineKey(const std::string& name) { return setBind(g_summonDeclineKey, name, true); }
+
+bool middleButtonIsABind() {
+    for (const std::atomic<int>* k : kBound)
+        if (k != &g_pingClearKey && k->load() == VK_MBUTTON) return true;
+    return false;
+}
 
 bool overlayHidden() { return g_hidden.load(); }
 void setOverlayHidden(bool hidden) {

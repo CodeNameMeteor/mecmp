@@ -595,4 +595,71 @@ std::string resultText(const std::string& player, const Result& r) {
     return s;
 }
 
+// --- Admission cookies (see kTypeChallenge in protocol.h) -----------------------------------------------
+namespace {
+uint64_t le64(const uint8_t* p) {
+    uint64_t v = 0;
+    for (int i = 7; i >= 0; --i) v = (v << 8) | p[i];
+    return v;
+}
+inline uint64_t rotl64(uint64_t x, int b) { return (x << b) | (x >> (64 - b)); }
+} // namespace
+
+uint64_t siphash24(const uint8_t key[16], const uint8_t* in, size_t len) {
+    const uint64_t k0 = le64(key), k1 = le64(key + 8);
+    uint64_t v0 = 0x736f6d6570736575ULL ^ k0;
+    uint64_t v1 = 0x646f72616e646f6dULL ^ k1;
+    uint64_t v2 = 0x6c7967656e657261ULL ^ k0;
+    uint64_t v3 = 0x7465646279746573ULL ^ k1;
+    auto round = [&] {
+        v0 += v1; v1 = rotl64(v1, 13); v1 ^= v0; v0 = rotl64(v0, 32);
+        v2 += v3; v3 = rotl64(v3, 16); v3 ^= v2;
+        v0 += v3; v3 = rotl64(v3, 21); v3 ^= v0;
+        v2 += v1; v1 = rotl64(v1, 17); v1 ^= v2; v2 = rotl64(v2, 32);
+    };
+    const size_t whole = len - len % 8;
+    for (size_t i = 0; i < whole; i += 8) {
+        const uint64_t m = le64(in + i);
+        v3 ^= m;
+        round();
+        round();
+        v0 ^= m;
+    }
+    uint64_t last = static_cast<uint64_t>(len) << 56;
+    for (size_t i = 0; i < len % 8; ++i) last |= static_cast<uint64_t>(in[whole + i]) << (8 * i);
+    v3 ^= last;
+    round();
+    round();
+    v0 ^= last;
+    v2 ^= 0xff;
+    round();
+    round();
+    round();
+    round();
+    return v0 ^ v1 ^ v2 ^ v3;
+}
+
+uint64_t admissionCookie(const uint8_t key[16], uint32_t ip, uint16_t port, uint32_t minute) {
+    uint8_t msg[10];
+    for (int i = 0; i < 4; ++i) msg[i] = static_cast<uint8_t>(ip >> (24 - 8 * i));
+    msg[4] = static_cast<uint8_t>(port >> 8);
+    msg[5] = static_cast<uint8_t>(port);
+    for (int i = 0; i < 4; ++i) msg[6 + i] = static_cast<uint8_t>(minute >> (24 - 8 * i));
+    return siphash24(key, msg, sizeof(msg));
+}
+
+size_t writeCookie(char* buf, const Header& h, uint64_t cookie) {
+    char* p = buf;
+    put(p, h);
+    put(p, cookie);
+    return static_cast<size_t>(p - buf);
+}
+
+bool readCookie(const char* payload, size_t n, uint64_t& cookie) {
+    if (n < kCookieLen) return false;
+    const uint8_t* p = reinterpret_cast<const uint8_t*>(payload);
+    cookie = le64(p);
+    return true;
+}
+
 } // namespace mecmp::net::protocol

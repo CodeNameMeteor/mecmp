@@ -41,6 +41,28 @@ struct Harness {
         for (const auto& s : sent) n += s.to == a;
         return n;
     }
+    // Delivers a packet from `from`. A stranger's HELLO gets a challenge, which the player answers at once, as
+    // the game does (and then sends the HELLO again, which the relay now takes as a player's).
+    void deliver(const Addr& from, const std::vector<char>& pkt, uint32_t now) {
+        const size_t before = sent.size();
+        relay.onPacket(from, pkt.data(), pkt.size(), now);
+        for (size_t i = before; i < sent.size(); ++i) {
+            const Sent& s = sent[i];
+            if (!(s.to == from) || s.data.size() < sizeof(proto::Header) + proto::kCookieLen) continue;
+            proto::Header h;
+            memcpy(&h, s.data.data(), sizeof(h));
+            if (h.type != proto::kTypeChallenge) continue;
+            uint64_t cookie = 0;
+            proto::readCookie(s.data.data() + sizeof(h), s.data.size() - sizeof(h), cookie);
+            proto::Header hello;
+            memcpy(&hello, pkt.data(), sizeof(hello));
+            const proto::Header ah{proto::kMagic, proto::kProtocol, proto::kTypeAnswer, hello.session, 1};
+            char buf[proto::kMaxPacket];
+            relay.onPacket(from, buf, proto::writeCookie(buf, ah, cookie), now);
+            relay.onPacket(from, pkt.data(), pkt.size(), now); // the HELLO again, now from a player: its name counts
+            break;
+        }
+    }
 };
 
 static std::vector<char> hello(uint32_t session, const char* name, uint8_t flags = 0, uint32_t seq = 1) {
@@ -63,11 +85,11 @@ static const Addr A{0x0a000001, 5000}, B{0x0a000002, 5000}, C{0x0a000003, 5000};
 static void testForwardsToOthers() {
     Harness t;
     auto hA = hello(1, "alice"), hB = hello(2, "bob");
-    t.relay.onPacket(A, hA.data(), hA.size(), 0);
-    t.relay.onPacket(B, hB.data(), hB.size(), 0);
+    t.deliver(A, hA, 0);
+    t.deliver(B, hB, 0);
     t.sent.clear();
     auto s = state(1);
-    t.relay.onPacket(A, s.data(), s.size(), 10);
+    t.deliver(A, s, 10);
     CHECK(t.sentTo(B) == 1);
     CHECK(t.sentTo(A) == 0);
     CHECK(t.relay.members().size() == 2);
@@ -77,8 +99,8 @@ static void testReactForwarded() {
     // A quick answer is a session packet like a marker: it reaches the others, and an unknown type does not.
     Harness t;
     auto hA = hello(1, "alice"), hB = hello(2, "bob");
-    t.relay.onPacket(A, hA.data(), hA.size(), 0);
-    t.relay.onPacket(B, hB.data(), hB.size(), 0);
+    t.deliver(A, hA, 0);
+    t.deliver(B, hB, 0);
     t.sent.clear();
     char buf[proto::kMaxPacket];
     const proto::Header h{proto::kMagic, proto::kProtocol, proto::kTypeReact, 1, 5};
@@ -101,8 +123,8 @@ static void testSummonForwarded() {
     // bytes as they are (it is the receivers that refuse to trust a vouch from it, not the server).
     Harness t;
     auto hA = hello(1, "alice"), hB = hello(2, "bob");
-    t.relay.onPacket(A, hA.data(), hA.size(), 0);
-    t.relay.onPacket(B, hB.data(), hB.size(), 0);
+    t.deliver(A, hA, 0);
+    t.deliver(B, hB, 0);
     t.sent.clear();
     char buf[proto::kMaxPacket];
     const proto::Header h{proto::kMagic, proto::kProtocol, proto::kTypeSummon, 1, 5};
@@ -128,10 +150,10 @@ static void testSummonForwarded() {
 static void testHelloFlagsCleared() {
     Harness t;
     auto hB = hello(2, "bob");
-    t.relay.onPacket(B, hB.data(), hB.size(), 0);
+    t.deliver(B, hB, 0);
     t.sent.clear();
     auto hA = hello(1, "mallory", proto::kHelloHost | proto::kHelloServer);
-    t.relay.onPacket(A, hA.data(), hA.size(), 0);
+    t.deliver(A, hA, 0);
     CHECK(t.sentTo(B) == 1);
     for (const auto& s : t.sent)
         if (s.to == B) {
@@ -149,7 +171,7 @@ static void testServerHello() {
     cfg.name = "Beat Link";
     Harness t(cfg);
     auto hA = hello(1, "alice");
-    t.relay.onPacket(A, hA.data(), hA.size(), 0);
+    t.deliver(A, hA, 0);
     t.sent.clear();
     t.relay.tick(0); // a newcomer is greeted at once
     CHECK(t.sentTo(A) == 1);
@@ -171,48 +193,49 @@ static void testServerHello() {
 static void testSessionBinding() {
     Harness t;
     auto hA = hello(1, "alice"), hB = hello(2, "bob");
-    t.relay.onPacket(A, hA.data(), hA.size(), 0);
-    t.relay.onPacket(B, hB.data(), hB.size(), 0);
+    t.deliver(A, hA, 0);
+    t.deliver(B, hB, 0);
     t.sent.clear();
     // C claims alice's id: refused, nothing forwarded, no new member.
     auto spoof = state(1);
-    t.relay.onPacket(C, spoof.data(), spoof.size(), 10);
+    t.deliver(C, spoof, 10);
     CHECK(t.sent.empty());
     CHECK(t.relay.members().size() == 2);
     // C claims the server's id: refused.
     auto spoofServer = hello(0xabcdef01, "server?");
-    t.relay.onPacket(C, spoofServer.data(), spoofServer.size(), 10);
+    t.deliver(C, spoofServer, 10);
     CHECK(t.relay.members().size() == 2);
     // B sends a STATE with alice's id: dropped.
-    t.relay.onPacket(B, spoof.data(), spoof.size(), 10);
+    t.sent.clear();
+    t.deliver(B, spoof, 10);
     CHECK(t.sent.empty());
     // B restarts its game: a HELLO with a new id rebinds it.
     auto hB2 = hello(7, "bob");
-    t.relay.onPacket(B, hB2.data(), hB2.size(), 20);
+    t.deliver(B, hB2, 20);
     CHECK(t.relay.members()[1].session == 7);
     CHECK(t.sentTo(A) == 1);
     // ...but not to an id someone else has.
     auto hB3 = hello(1, "bob");
-    t.relay.onPacket(B, hB3.data(), hB3.size(), 30);
+    t.deliver(B, hB3, 30);
     CHECK(t.relay.members()[1].session == 7);
 }
 
 static void testBadPackets() {
     Harness t;
     auto hB = hello(2, "bob");
-    t.relay.onPacket(B, hB.data(), hB.size(), 0);
+    t.deliver(B, hB, 0);
     t.sent.clear();
     auto s = state(1);
     std::vector<char> wrongProto = s;
     reinterpret_cast<proto::Header*>(wrongProto.data())->protocol = proto::kProtocol + 1;
-    t.relay.onPacket(A, wrongProto.data(), wrongProto.size(), 0);
+    t.deliver(A, wrongProto, 0);
     std::vector<char> unknownType = s;
     reinterpret_cast<proto::Header*>(unknownType.data())->type = 99;
-    t.relay.onPacket(A, unknownType.data(), unknownType.size(), 0);
+    t.deliver(A, unknownType, 0);
     t.relay.onPacket(A, s.data(), 8, 0); // shorter than a header
     std::vector<char> huge(proto::kMaxPacket + 1, 0);
     memcpy(huge.data(), s.data(), sizeof(proto::Header));
-    t.relay.onPacket(A, huge.data(), huge.size(), 0);
+    t.deliver(A, huge, 0);
     CHECK(t.sent.empty());
     CHECK(t.relay.members().size() == 1);
     CHECK(t.relay.stats().dropped == 4);
@@ -223,18 +246,18 @@ static void testFullAndTimeout() {
     cfg.maxPlayers = 2;
     Harness t(cfg);
     auto hA = hello(1, "a"), hB = hello(2, "b"), hC = hello(3, "c");
-    t.relay.onPacket(A, hA.data(), hA.size(), 0);
-    t.relay.onPacket(B, hB.data(), hB.size(), 0);
-    t.relay.onPacket(C, hC.data(), hC.size(), 0);
+    t.deliver(A, hA, 0);
+    t.deliver(B, hB, 0);
+    t.deliver(C, hC, 0);
     CHECK(t.relay.members().size() == 2);
     // A keeps talking, B goes silent.
     for (uint32_t ms = 1000; ms <= 12000; ms += 1000) {
         auto s = state(1, ms);
-        t.relay.onPacket(A, s.data(), s.size(), ms);
+        t.deliver(A, s, ms);
         t.relay.tick(ms);
     }
     CHECK(t.relay.members().size() == 1);
-    t.relay.onPacket(C, hC.data(), hC.size(), 12100); // room again
+    t.deliver(C, hC, 12100); // room again
     CHECK(t.relay.members().size() == 2);
 }
 
@@ -243,30 +266,31 @@ static void testRateLimit() {
     cfg.ratePerSec = 10;
     cfg.burst = 5;
     Harness t(cfg);
-    auto hB = hello(2, "b");
-    t.relay.onPacket(B, hB.data(), hB.size(), 0);
+    auto hB = hello(2, "b"), hA = hello(1, "a");
+    t.deliver(B, hB, 0);
+    t.deliver(A, hA, 0);
     t.sent.clear();
     for (int i = 0; i < 20; ++i) {
         auto s = state(1, 10 + i);
-        t.relay.onPacket(A, s.data(), s.size(), 0); // 20 at once: only the burst gets through
+        t.deliver(A, s, 10000); // 20 at once (the hellos above used tokens; the bucket is full again by now)
     }
     CHECK(t.sentTo(B) == 5);
     t.sent.clear();
     auto s = state(1, 100);
-    t.relay.onPacket(A, s.data(), s.size(), 1000); // a second later: 10 more allowed
+    t.deliver(A, s, 11000); // a second later: 10 more allowed (the burst caps them at 5)
     CHECK(t.sentTo(B) == 1);
 }
 
 static void testKickAndSay() {
     Harness t;
     auto hA = hello(1, "alice"), hB = hello(2, "bob");
-    t.relay.onPacket(A, hA.data(), hA.size(), 0);
-    t.relay.onPacket(B, hB.data(), hB.size(), 0);
+    t.deliver(A, hA, 0);
+    t.deliver(B, hB, 0);
     CHECK(t.relay.kick("alice", 100));
     CHECK(t.relay.members().size() == 1);
-    t.relay.onPacket(A, hA.data(), hA.size(), 200); // blocked for a while
+    t.deliver(A, hA, 200); // blocked for a while
     CHECK(t.relay.members().size() == 1);
-    t.relay.onPacket(A, hA.data(), hA.size(), 100 + 60000);
+    t.deliver(A, hA, 100 + 60000);
     CHECK(t.relay.members().size() == 2);
     CHECK(t.relay.kick("00000002", 60200)); // by id
     CHECK(!t.relay.kick("nobody", 60200));
@@ -292,8 +316,8 @@ static void testKickAndSay() {
 static void testChatLoggedOnce() {
     Harness t;
     auto hA = hello(1, "alice"), hB = hello(2, "bob");
-    t.relay.onPacket(A, hA.data(), hA.size(), 0);
-    t.relay.onPacket(B, hB.data(), hB.size(), 0);
+    t.deliver(A, hA, 0);
+    t.deliver(B, hB, 0);
     char buf[proto::kMaxPacket];
     for (uint32_t seq = 10; seq < 13; ++seq) {
         const proto::Header h{proto::kMagic, proto::kProtocol, proto::kTypeChat, 1, seq};
@@ -310,8 +334,8 @@ static void testMirror() {
     cfg.mirror = true;
     Harness t(cfg);
     auto hA = hello(1, "alice");
-    t.relay.onPacket(A, hA.data(), hA.size(), 0);
-    CHECK(t.sentTo(A) == 1); // its own HELLO back, as the mirror
+    t.deliver(A, hA, 0);
+    CHECK(t.sentTo(A) == 2); // its challenge, then its own HELLO back, as the mirror
     t.sent.clear();
     char buf[proto::kMaxPacket];
     net::PlayerState st;
@@ -349,12 +373,12 @@ static void testKickBlocksWholeAddress() {
     // A kicked player is refused from the same address on any port for the kick time, not just the old port.
     Harness t;
     auto hA = hello(1, "alice");
-    t.relay.onPacket(A, hA.data(), hA.size(), 0);
+    t.deliver(A, hA, 0);
     CHECK(t.relay.kick("alice", 100));
     const Addr A2{A.ip, 7000};
-    t.relay.onPacket(A2, hA.data(), hA.size(), 200);
+    t.deliver(A2, hA, 200);
     CHECK(t.relay.members().empty());
-    t.relay.onPacket(A2, hA.data(), hA.size(), 100 + 60000); // after the kick time: welcome again
+    t.deliver(A2, hA, 100 + 60000); // after the kick time: welcome again
     CHECK(t.relay.members().size() == 1);
 }
 
@@ -362,7 +386,7 @@ static void testLogBudget() {
     // One player cannot fill the log: its chat lines are cut to a few per window, with one note.
     Harness t;
     auto hA = hello(1, "alice");
-    t.relay.onPacket(A, hA.data(), hA.size(), 0);
+    t.deliver(A, hA, 0);
     t.log.clear();
     for (uint32_t i = 0; i < 20; ++i) {
         const proto::Header h{proto::kMagic, proto::kProtocol, proto::kTypeChat, 1, i + 2};
@@ -384,17 +408,17 @@ static void testSessionGrace() {
     // its own address can come back, and after that the id is free.
     Harness t;
     auto hA = hello(1, "alice"), hB = hello(2, "bob");
-    t.relay.onPacket(A, hA.data(), hA.size(), 0);
-    t.relay.onPacket(B, hB.data(), hB.size(), 0);
+    t.deliver(A, hA, 0);
+    t.deliver(B, hB, 0);
     for (uint32_t ms = 1000; ms <= 70000; ms += 1000) { // bob keeps talking; alice goes silent
-        t.relay.onPacket(B, hB.data(), hB.size(), ms);
+        t.deliver(B, hB, ms);
         t.relay.tick(ms);
         if (ms == 11000) {
             CHECK(t.relay.members().size() == 1 && t.relay.members()[0].addr == B); // alice timed out
             const Addr C{0x0a000003, 5000};
-            t.relay.onPacket(C, hA.data(), hA.size(), ms); // an impostor with alice's id: refused
+            t.deliver(C, hA, ms); // an impostor with alice's id: refused
             CHECK(t.relay.members().size() == 1);
-            t.relay.onPacket(A, hA.data(), hA.size(), ms); // alice itself, from its own address: back
+            t.deliver(A, hA, ms); // alice itself, from its own address: back
             CHECK(t.relay.members().size() == 2);
             // Alice is silent from here on: she times out at 61000 (last heard at 11000), so her id is
             // reserved until 61000 + 60000 = 121000.
@@ -402,15 +426,70 @@ static void testSessionGrace() {
     }
     // Still reserved for alice at 70500 (until 121000): the impostor is refused.
     const Addr C{0x0a000003, 5000};
-    t.relay.onPacket(C, hA.data(), hA.size(), 70500);
+    t.deliver(C, hA, 70500);
     bool cAdmitted = false;
     for (const auto& m : t.relay.members()) cAdmitted = cAdmitted || m.addr == C;
     CHECK(!cAdmitted);
     t.relay.tick(130000); // after the grace time
-    t.relay.onPacket(C, hA.data(), hA.size(), 130000);
+    t.deliver(C, hA, 130000);
     cAdmitted = false;
     for (const auto& m : t.relay.members()) cAdmitted = cAdmitted || m.addr == C;
     CHECK(cAdmitted);
+}
+
+// The cookie in a CHALLENGE the relay sent, and an ANSWER packet for it.
+static uint64_t challengeCookie(const Sent& s) {
+    uint64_t cookie = 0;
+    proto::readCookie(s.data.data() + sizeof(proto::Header), s.data.size() - sizeof(proto::Header), cookie);
+    return cookie;
+}
+static std::vector<char> answerPacket(uint32_t session, uint64_t cookie) {
+    char buf[proto::kMaxPacket];
+    const proto::Header h{proto::kMagic, proto::kProtocol, proto::kTypeAnswer, session, 1};
+    const size_t n = proto::writeCookie(buf, h, cookie);
+    return std::vector<char>(buf, buf + n);
+}
+
+static void testAdmissionCookie() {
+    // A stranger is heard only with a HELLO, which is answered with a challenge. It is let in only with the
+    // cookie from that challenge.
+    Harness t;
+    auto hA = hello(1, "alice");
+    t.relay.onPacket(A, hA.data(), hA.size(), 0);
+    CHECK(t.relay.members().empty());
+    CHECK(t.sent.size() == 1 && t.sent[0].data.size() == sizeof(proto::Header) + proto::kCookieLen);
+    const uint64_t cookie = challengeCookie(t.sent[0]);
+    // A stranger's STATE, even with a plausible header, is dropped.
+    auto s = state(1, 100);
+    t.relay.onPacket(A, s.data(), s.size(), 0);
+    CHECK(t.relay.members().empty());
+    // A wrong cookie is refused; the right one admits.
+    auto wrong = answerPacket(1, cookie ^ 1);
+    t.relay.onPacket(A, wrong.data(), wrong.size(), 0);
+    CHECK(t.relay.members().empty());
+    auto right = answerPacket(1, cookie);
+    t.relay.onPacket(A, right.data(), right.size(), 0);
+    CHECK(t.relay.members().size() == 1 && t.relay.members()[0].addr == A);
+}
+
+static void testCookieAddressAndAge() {
+    // A cookie is for the address it was given to, and valid for its minute and the next one only.
+    Harness t;
+    auto hA = hello(1, "alice");
+    t.relay.onPacket(A, hA.data(), hA.size(), 59000); // challenged in minute 0
+    const uint64_t cookie = challengeCookie(t.sent[0]);
+    auto answer = answerPacket(1, cookie);
+    t.relay.onPacket(B, answer.data(), answer.size(), 61000); // another address with A's cookie: refused
+    CHECK(t.relay.members().empty());
+    t.relay.onPacket(A, answer.data(), answer.size(), 61000); // minute 1: still accepted
+    CHECK(t.relay.members().size() == 1);
+
+    Harness old;
+    old.relay.onPacket(A, hA.data(), hA.size(), 59000);
+    const uint64_t oldCookie = challengeCookie(old.sent[0]);
+    auto late = answerPacket(1, oldCookie);
+    old.relay.onPacket(A, late.data(), late.size(), 130000); // minute 2: the minute-0 cookie is too old
+    CHECK(old.relay.members().empty());
 }
 
 static void testActivityLog() {
@@ -430,8 +509,8 @@ static void testSharedNames() {
     // the id still works.
     Harness t;
     auto hA = hello(1, "dup"), hB = hello(2, "dup");
-    t.relay.onPacket(A, hA.data(), hA.size(), 0);
-    t.relay.onPacket(B, hB.data(), hB.size(), 0);
+    t.deliver(A, hA, 0);
+    t.deliver(B, hB, 0);
     CHECK(t.relay.matchPlayers("dup") == 2);
     CHECK(!t.relay.kick("dup", 100) && t.relay.members().size() == 2);
     CHECK(t.relay.ban("dup") == 0 && t.relay.bans().empty());
@@ -442,25 +521,25 @@ static void testSharedNames() {
 static void testBans() {
     Harness t;
     auto hA = hello(1, "alice"), hB = hello(2, "bob");
-    t.relay.onPacket(A, hA.data(), hA.size(), 0);
-    t.relay.onPacket(B, hB.data(), hB.size(), 0);
+    t.deliver(A, hA, 0);
+    t.deliver(B, hB, 0);
     CHECK(t.relay.ban("alice") == A.ip);
     CHECK(t.relay.members().size() == 1);
     t.sent.clear();
-    t.relay.onPacket(A, hA.data(), hA.size(), 100); // refused, told why (HELLO + the line twice)
+    t.deliver(A, hA, 100); // refused, told why (HELLO + the line twice)
     CHECK(t.relay.members().size() == 1);
     std::string text;
     CHECK(chatsTo(t, A, &text) == 2);
     CHECK(text == "You are banned from this server.");
     t.sent.clear();
-    t.relay.onPacket(A, hA.data(), hA.size(), 5000); // not told again so soon
+    t.deliver(A, hA, 5000); // not told again so soon
     CHECK(t.sent.empty());
     const Addr A2{A.ip, 6000}; // another port, same address: still banned
-    t.relay.onPacket(A2, hA.data(), hA.size(), 5000);
+    t.deliver(A2, hA, 5000);
     CHECK(t.relay.members().size() == 1);
     CHECK(t.relay.unban("10.0.0.1"));
     CHECK(!t.relay.unban("10.0.0.1"));
-    t.relay.onPacket(A, hA.data(), hA.size(), 6000);
+    t.deliver(A, hA, 6000);
     CHECK(t.relay.members().size() == 2);
     CHECK(t.relay.ban("10.0.0.9") == 0x0a000009); // an IP nobody uses yet
     CHECK(t.relay.ban("nobody") == 0);
@@ -478,9 +557,9 @@ static void testFullNoticeAndPerIp() {
     cfg.maxPlayers = 1;
     Harness t(cfg);
     auto hA = hello(1, "a"), hB = hello(2, "b");
-    t.relay.onPacket(A, hA.data(), hA.size(), 0);
+    t.deliver(A, hA, 0);
     t.sent.clear();
-    t.relay.onPacket(B, hB.data(), hB.size(), 0);
+    t.deliver(B, hB, 0);
     std::string text;
     CHECK(chatsTo(t, B, &text) == 2 && text == "This server is full (1/1). Try again later.");
 
@@ -489,7 +568,7 @@ static void testFullNoticeAndPerIp() {
     Harness u(cfg2);
     for (uint16_t port = 1; port <= 3; ++port) {
         auto h = hello(100 + port, "x");
-        u.relay.onPacket({A.ip, port}, h.data(), h.size(), 0);
+        u.deliver({A.ip, port}, h, 0);
     }
     CHECK(u.relay.members().size() == 2);
     CHECK(chatsTo(u, Addr{A.ip, 3}) == 2);
@@ -500,9 +579,9 @@ static void testMotd() {
     cfg.motd = "Welcome to Beat Link";
     Harness t(cfg);
     auto hA = hello(1, "alice"), hB = hello(2, "bob");
-    t.relay.onPacket(A, hA.data(), hA.size(), 0);
-    t.relay.onPacket(B, hB.data(), hB.size(), 0);
-    t.relay.onPacket(A, hA.data(), hA.size(), 10); // a second HELLO: no second welcome
+    t.deliver(A, hA, 0);
+    t.deliver(B, hB, 0);
+    t.deliver(A, hA, 10); // a second HELLO: no second welcome
     t.sent.clear();
     for (uint32_t ms = 50; ms <= 300; ms += 50) t.relay.tick(ms);
     std::string text;
@@ -516,7 +595,7 @@ static void testInfo() {
     cfg.maxPlayers = 12;
     Harness t(cfg);
     auto hB = hello(2, "bob");
-    t.relay.onPacket(B, hB.data(), hB.size(), 0);
+    t.deliver(B, hB, 0);
     t.sent.clear();
     char req[proto::kMaxPacket];
     proto::Header h{proto::kMagic, static_cast<uint16_t>(proto::kProtocol + 3), proto::kTypeInfo, 0x55, 77};
@@ -548,16 +627,16 @@ static void testEvents() {
     std::vector<server::Event> ev;
     t.relay.setOnEvent([&ev](const server::Event& e) { ev.push_back(e); });
     auto hA = hello(1, "alice"), hB = hello(2, "bob");
-    t.relay.onPacket(A, hA.data(), hA.size(), 0);
-    t.relay.onPacket(B, hB.data(), hB.size(), 0);
-    t.relay.onPacket(A, hA.data(), hA.size(), 100); // a second HELLO: no second "joined"
+    t.deliver(A, hA, 0);
+    t.deliver(B, hB, 0);
+    t.deliver(A, hA, 100); // a second HELLO: no second "joined"
     auto s = state(3);
-    t.relay.onPacket(C, s.data(), s.size(), 100); // not named yet: no event, now or when it leaves
+    t.deliver(C, s, 100); // not named yet: no event, now or when it leaves
     CHECK(ev.size() == 2 && ev[0].kind == server::Event::Joined && ev[0].name == "alice" && ev[0].players == 1 &&
           ev[1].name == "bob" && ev[1].players == 2);
     t.relay.onPacket(A, s.data(), 0, 900); // (nothing)
     auto sA = state(1);
-    t.relay.onPacket(A, sA.data(), sA.size(), 900);
+    t.deliver(A, sA, 900);
     t.relay.tick(1500); // bob and the unnamed player time out; alice was heard at 900
     CHECK(ev.size() == 3 && ev[2].kind == server::Event::Left && ev[2].name == "bob");
     CHECK(t.relay.kick("alice", 1600));
@@ -607,8 +686,8 @@ static void testResultEvents() {
     std::vector<server::Event> ev;
     t.relay.setOnEvent([&ev](const server::Event& e) { if (e.kind == server::Event::Result) ev.push_back(e); });
     auto hA = hello(1, "alice"), hB = hello(2, "bob");
-    t.relay.onPacket(A, hA.data(), hA.size(), 0);
-    t.relay.onPacket(B, hB.data(), hB.size(), 0);
+    t.deliver(A, hA, 0);
+    t.deliver(B, hB, 0);
     char buf[proto::kMaxPacket];
     proto::Result r;
     r.id = 5;
@@ -638,6 +717,8 @@ int main() {
     testInfo();
     testBans();
     testSharedNames();
+    testAdmissionCookie();
+    testCookieAddressAndAge();
     testKickBlocksWholeAddress();
     testSessionGrace();
     testActivityLog();

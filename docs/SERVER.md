@@ -182,6 +182,8 @@ changes can come back. There are no accounts to ban instead.
 ## What the server checks
 
 - Packets must be MECMP packets of the server's protocol version and a known type, at most 1 KB.
+- Joining takes two packets. A new address's HELLO is answered with a challenge (a cookie that proves the address);
+  the player answers with it, and only then is it a player. Nothing else from a new address is heard.
 - A player is an address. Their first packet ties their player id to that address: packets with
   another player's id are dropped, so nobody can move or speak as someone else. A restarted game
   (new id, same address) is accepted with its HELLO. A player who times out keeps its id reserved for

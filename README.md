@@ -59,8 +59,9 @@ Developer builds (CMake option `MECMP_DEBUG_KEYS`, on by default, off for releas
 | F9 | Write a status line to `mecmp.log` (with the ghost update's cost) |
 | F10 | Developer: log the camera matrices (used to find the name tags' camera; needs a level) |
 
-Versions: everyone in a session needs the same wire protocol (this version uses protocol 6). Packets
-from a different protocol are ignored and the log says which version the other side runs.
+Versions: everyone in a session needs the same wire protocol (this version uses protocol 7). Packets
+from a different protocol are ignored and the log says which version the other side runs. Protocol 7
+also lets a host or server admit only players who answer a challenge, so older versions cannot join.
 
 While you are in a session, the game's own menus (pause menu, map) no longer pause the game: the
 other players keep moving and you keep sending your position.

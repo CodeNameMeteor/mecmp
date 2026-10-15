@@ -284,7 +284,10 @@ UDP, one socket. Sessions have one host and any number of joiners (up to 16).
   session id it joined with (only a HELLO may change it, to an unused id; a player who went silent keeps
   its id for a minute, for its own address only), and at most 80 packets a
   second per joiner (burst 160); anything beyond that is dropped, not forwarded.
-- **Join**: send to the host only; everyone else's packets arrive through the host.
+- **Join**: send to the host only; everyone else's packets arrive through the host. The host (and the server)
+  answers a stranger's HELLO with a CHALLENGE carrying a cookie: a keyed hash (SipHash-2-4) of the address and
+  the minute, under a key made at start. The joiner answers with an ANSWER (the same cookie) and its HELLO; only
+  then is it let in. Nothing is kept for strangers, and a cookie is valid for its minute and the next.
 - **Dedicated server** (`tools/server/mecmp_server.cpp`, rules in `server/relay.cpp`, docs/SERVER.md):
   relays like a host but is not a player. Its HELLO (about once a second, flags host | server, name =
   the server's name) gives clients the session id (Mumble context) and the name for the menu; it sends

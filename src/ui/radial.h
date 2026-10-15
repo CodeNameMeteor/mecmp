@@ -24,7 +24,13 @@ namespace mecmp::ui::radial {
 constexpr unsigned kHoldMs = 250;
 
 // What the wheel is for: placing markers, or answering the marker the player looks at.
-enum class Mode { Markers, React };
+//
+// Players is not a wheel but a panel in the middle of the screen with the other players' names (players_key,
+// held): the same pointer, a click on a name picks that player for a summon, a right click goes to them, 1-9
+// go to that slot and the previous / next wheel keys turn the page. The button below summons the picked
+// players or everyone (or withdraws our open summon); who may pull players in also gets "Hard summon".
+// Letting go of the key only closes it, so a stray release never teleports.
+enum class Mode { Markers, React, Players };
 
 bool open();    // the wheel is shown (any thread)
 bool engaged(); // the marker key is down and not used up yet: digits pick a slot (any thread)
@@ -33,17 +39,23 @@ bool engaged(); // the marker key is down and not used up yet: digits pick a slo
 void keyDown(int key, Mode mode = Mode::Markers); // the key `key` went down (not a repeat)
 void keyUp(int key);           // the key `key` was released: ends the wheel that key opened, no other
 void digit(int n);              // 1..9 was pressed while engaged
-void moved(float dx, float dy); // raw mouse movement while open (pixels)
-void click();                   // left click while open: place what is pointed at and close
-void dismiss();                 // right click while open: close, place nothing
+// Raw mouse movement while open (counts). `cursorScale` = the overlay cursor's speed (Windows pointer speed times
+// menu_mouse_speed): the players panel pointer moves like the menu cursor, the wheels' pointer too (times
+// wheel_sensitivity).
+void moved(float dx, float dy, float cursorScale = 1.f);
+void click();                   // left click while open: place what is pointed at and close (players: go to)
+void dismiss();                 // right click while open: close, place nothing (players: summon who is pointed at)
 void switchWheel(int step);     // +1 / -1 while open
 void cancel();                  // lost focus, or the menu or the chat opened: close, place nothing
 
 // Game's input thread, for the pad whose buttons are (or just were) held, on every read. `mode` is
 // what the held buttons are for. `pressed` = the buttons went down on this read; x, y = the right
 // stick, -1..1 with y down; prev / next = LB / RB went down; clear = the "clear markers" buttons went
-// down. True while the wheel is open: the stick and LB/RB are the wheel's.
-bool padUpdate(Mode mode, bool pressed, bool held, float x, float y, bool prev, bool next, bool clear);
+// down. True while the wheel is open: the stick and LB/RB are the wheel's. Players panel: the stick moves
+// the pointer (it stays where it was let go), go / call = RT / LT went down: a click (pick the player, the
+// buttons) / a right click (go to the player).
+bool padUpdate(Mode mode, bool pressed, bool held, float x, float y, bool prev, bool next, bool clear, bool go = false,
+               bool call = false);
 
 // Render thread, every frame (after NewFrame): opens the wheel when the key was held long enough,
 // draws it, and closes it if the key is no longer held. Also watches the "clear markers" key.

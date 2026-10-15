@@ -43,6 +43,7 @@ struct Pending {
     float pos[3] = {0, 0, 0};
     float yaw = 0;
     bool hard = false;
+    bool visit = false; // not a summon: `from` asks to come to us (VISIT); no position, no beacon
     DWORD at = 0;
 };
 std::vector<Pending> g_pending; // render thread only; the one shown in the panel is the oldest
@@ -77,19 +78,6 @@ Hold g_accept, g_decline, g_return, g_dismiss; // g_dismiss: the accept key hidi
 float g_acceptProgress = 0.f, g_declineProgress = 0.f, g_returnProgress = 0.f, g_dismissProgress = 0.f;
 uint32_t g_topId = 0; // which pending summon the holds belong to
 
-// The send key: a tap calls everyone, a one-second hold pulls them in, or withdraws an open call.
-DWORD g_sendSince = 0;
-bool g_sendFired = false, g_sendWithdraws = false;
-float g_sendProgress = 0.f;
-// The hold's bar: shown after kHintDelayMs of holding, faded in and out over kHintFadeMs.
-constexpr DWORD kHintDelayMs = 250;
-constexpr DWORD kHintFadeMs = 100;
-bool g_hintTarget = false;    // the bar should be shown now
-bool g_hintWithdraw = false;  // what it says (kept while it fades out)
-bool g_hintCanHard = false;   // ...and whether holding on will really pull players in
-float g_hintProgress = 0.f;   // how full it is (kept while it fades out)
-float g_hintAlpha = 0.f;      // 0..1, as drawn
-
 std::string mmss(uint32_t ms) {
     char b[16];
     const uint32_t s = (ms + 999) / 1000;
@@ -110,6 +98,12 @@ void removePending(uint32_t id, uint32_t from) {
 }
 
 void go(const Pending& p) {
+    if (p.visit) { // yes: they come to us
+        net::sendVisit(p.from, net::protocol::kVisitYes, p.id);
+        notices::push(p.name + " is coming to you");
+        removePending(p.id, p.from);
+        return;
+    }
     const std::string name = p.name;
     const bool ok = game::teleport::requestToPos(p.pos, p.yaw);
     net::sendSummonReply(p.id, p.from, ok ? net::protocol::kSummonTeleporting : net::protocol::kSummonBusy);
@@ -119,7 +113,8 @@ void go(const Pending& p) {
 }
 
 void decline(const Pending& p) {
-    net::sendSummonReply(p.id, p.from, net::protocol::kSummonDeclined);
+    if (p.visit) net::sendVisit(p.from, net::protocol::kVisitNo, p.id);
+    else net::sendSummonReply(p.id, p.from, net::protocol::kSummonDeclined);
     removePending(p.id, p.from);
 }
 
@@ -165,7 +160,9 @@ void drawPending(const Panel& pn, const Pending& p, DWORD now, float distance, c
                  const std::string& declineKey) {
     const auto cfg = config::get();
     char title[160];
-    if (p.hard) {
+    if (p.visit) {
+        snprintf(title, sizeof(title), "%s wants to come to you", p.name.c_str());
+    } else if (p.hard) {
         const DWORD grace = static_cast<DWORD>(cfg->hardSummonGraceMs);
         const DWORD since = now - p.at;
         const DWORD left = since >= grace ? 0 : grace - since;
@@ -190,7 +187,7 @@ void drawPending(const Panel& pn, const Pending& p, DWORD now, float distance, c
         pn.dl->AddRectFilled(ImVec2(a.x + 4, b.y - 4), ImVec2(a.x + 4 + (b.x - a.x - 8) * f, b.y - 1), tint);
     }
     // The two buttons side by side under it.
-    const char* yes = p.hard ? "Go now" : "Go";
+    const char* yes = p.visit ? "Yes" : p.hard ? "Go now" : "Go";
     const char* no = p.hard ? "Cancel" : "No";
     ImFont* f = pn.font;
     const ImVec2 t1 = f->CalcTextSizeA(size, FLT_MAX, 0.f, (std::string("[") + acceptKey + "]  " + yes).c_str());
@@ -234,6 +231,7 @@ void drawBeacons(const Panel& pn) {
     const float margin = unit * 2.2f;
     const float pulse = 0.5f + 0.5f * std::sin(static_cast<float>(GetTickCount() % 100000) * 0.006f);
     for (const Pending& p : g_pending) {
+        if (p.visit) continue; // a visitor comes here: no point to show
         const float at[3] = {p.pos[0], p.pos[1] + net::protocol::kPingLift, p.pos[2]};
         game::EdgeIndicator e;
         if (!game::edgeIndicator(cam, at, pn.screen.x, pn.screen.y, margin, e)) continue;
@@ -275,7 +273,7 @@ void drawBeacons(const Panel& pn) {
 bool takesAcceptKey() { return g_takeAccept.load(); }
 bool takesDeclineKey() { return g_takeDecline.load(); }
 
-bool send(const std::vector<uint32_t>& targets, bool hard) {
+bool send(const std::vector<uint32_t>& targets, bool hard, const std::string& name) {
     static net::PlayerState st; // large; render thread only
     if (!net::localState(st)) {
         notices::push("Can't summon anyone from here");
@@ -290,11 +288,96 @@ bool send(const std::vector<uint32_t>& targets, bool hard) {
         return false;
     }
     const std::string who = targets.empty() ? std::string("everyone")
-                            : targets.size() == 1 ? std::string("1 player")
+                            : targets.size() == 1 ? (name.empty() ? std::string("1 player") : name)
                                                   : std::to_string(targets.size()) + " players";
     notices::push(asHard ? "Pulling " + who + " to you" : "Summoning " + who + " to you");
     if (hard && !canHard)
         notices::push("Only the host (or a member it allows) can pull players in: sent as a plain summon");
+    return true;
+}
+
+// Our own Go to on a player who asks first (VISIT): one at a time. target 0 = none.
+namespace {
+struct Asking {
+    uint32_t target = 0, id = 0;
+    std::string name;
+    DWORD at = 0;
+};
+Asking g_asking;
+// No answer in this long: given up. A little longer than the other side's window (sp::kSoftWindowMs), so a
+// yes given at its very end still arrives while we wait.
+constexpr DWORD kAskWindowMs = sp::kSoftWindowMs + 5000;
+
+// VISIT packets addressed to us: someone asks to come (or gave up asking), or answers our own ask.
+void takeVisits(DWORD now) {
+    for (const net::VisitInfo& v : net::takeVisits()) {
+        switch (v.kind) {
+        case net::protocol::kVisitAsk: {
+            // Switched off since our HELLO said so: just say yes (not in a run: then it waits like any ask).
+            if (!config::get()->askBeforeVisit && !net::inRun()) {
+                net::sendVisit(v.from, net::protocol::kVisitYes, v.id);
+                break;
+            }
+            g_pending.erase(std::remove_if(g_pending.begin(), g_pending.end(),
+                                           [&](const Pending& p) { return p.from == v.from && p.visit; }),
+                            g_pending.end()); // a new ask from the same player replaces the old one
+            Pending p;
+            p.id = v.id;
+            p.from = v.from;
+            p.name = v.name;
+            p.visit = true;
+            p.at = now;
+            g_pending.push_back(p);
+            while (g_pending.size() > kMaxPending) g_pending.erase(g_pending.begin());
+            notices::push(net::inRun() ? v.name + " wants to come to you: you can answer when your run is over"
+                                       : v.name + " wants to come to you");
+            break;
+        }
+        case net::protocol::kVisitWithdraw: removePending(v.id, v.from); break;
+        case net::protocol::kVisitYes:
+        case net::protocol::kVisitNo: {
+            if (!g_asking.target || v.from != g_asking.target || v.id != g_asking.id) break; // not (or no longer) ours
+            const Asking a = g_asking;
+            g_asking = Asking{};
+            if (v.kind == net::protocol::kVisitNo) {
+                notices::push(a.name + " said no");
+            } else if (net::inRun()) {
+                notices::push(a.name + " said yes, but you are in a run");
+            } else if (!game::teleport::available() || game::teleport::busy()) {
+                notices::push(a.name + " said yes, but you can't go right now");
+            } else {
+                game::teleport::requestGoTo(a.target);
+                notices::push("Going to " + a.name);
+            }
+            break;
+        }
+        default: break;
+        }
+    }
+    if (g_asking.target && now - g_asking.at >= kAskWindowMs) {
+        net::sendVisit(g_asking.target, net::protocol::kVisitWithdraw, g_asking.id);
+        notices::push(g_asking.name + " did not answer");
+        g_asking = Asking{};
+    }
+}
+} // namespace
+
+bool askVisit(uint32_t target, const std::string& name) {
+    if (g_asking.target == target) { // the same player again: give up asking
+        net::sendVisit(target, net::protocol::kVisitWithdraw, g_asking.id);
+        notices::push("Stopped asking " + name);
+        g_asking = Asking{};
+        return false;
+    }
+    if (g_asking.target) net::sendVisit(g_asking.target, net::protocol::kVisitWithdraw, g_asking.id); // one at a time
+    const uint32_t id = net::sendVisit(target, net::protocol::kVisitAsk);
+    if (!id) {
+        notices::push("Not in a session");
+        g_asking = Asking{};
+        return false;
+    }
+    g_asking = {target, id, name, GetTickCount()};
+    notices::push("Asked " + name + " if you can come");
     return true;
 }
 
@@ -306,6 +389,8 @@ void update(const Input& in) {
     const DWORD now = GetTickCount();
     if (g_levelChanged.exchange(false)) {
         g_pending.clear();
+        if (g_asking.target) net::sendVisit(g_asking.target, net::protocol::kVisitWithdraw, g_asking.id);
+        g_asking = Asking{}; // a yes for the old level must not move us
         g_takeAccept = false;
         g_takeDecline = false;
     }
@@ -317,7 +402,8 @@ void update(const Input& in) {
             removePending(s.id, s.from);
             continue;
         }
-        g_pending.erase(std::remove_if(g_pending.begin(), g_pending.end(), [&](const Pending& p) { return p.from == s.from; }),
+        g_pending.erase(std::remove_if(g_pending.begin(), g_pending.end(),
+                                       [&](const Pending& p) { return p.from == s.from && !p.visit; }),
                         g_pending.end()); // a new call from the same player replaces its old one
         Pending p;
         p.id = s.id;
@@ -329,8 +415,15 @@ void update(const Input& in) {
         p.at = now;
         g_pending.push_back(p);
         while (g_pending.size() > kMaxPending) g_pending.erase(g_pending.begin());
-        if (!s.hard) notices::push(s.name + " summons you");
+        if (net::inRun()) notices::push(s.name + " summons you: you can answer when your run is over");
+        else if (!s.hard) notices::push(s.name + " summons you");
     }
+    takeVisits(now);
+    // In a run (a time trial, a dash): summons wait, unseen, and their time (a hard one's countdown too)
+    // starts only once the run is over, finished or quit.
+    const bool running = net::inRun();
+    if (running)
+        for (Pending& p : g_pending) p.at = now;
     // What happened to ours.
     for (const std::string& line : net::takeSummonReports()) notices::push(line);
 
@@ -340,7 +433,7 @@ void update(const Input& in) {
     for (size_t i = 0; i < g_pending.size();) {
         const Pending& p = g_pending[i];
         bool drop = !p.hard && now - p.at >= sp::kSoftWindowMs;
-        if (haveMe) {
+        if (haveMe && !p.visit) {
             float d2 = 0.f;
             for (int k = 0; k < 3; ++k) d2 += (p.pos[k] - me[k]) * (p.pos[k] - me[k]);
             if (d2 < kNearEnoughM * kNearEnoughM) {
@@ -352,39 +445,8 @@ void update(const Input& in) {
         else ++i;
     }
 
-    // The send key.
-    if (!in.canAct || !in.sendDown) {
-        const bool tap = in.canAct && g_sendSince && !g_sendFired && !g_sendWithdraws && now - g_sendSince < kHoldMs;
-        g_sendSince = 0;
-        g_sendFired = false;
-        g_sendProgress = 0.f;
-        g_hintTarget = false; // the bar fades out with the progress it had
-        if (tap) send({}, false);
-    } else {
-        if (!g_sendSince) {
-            g_sendSince = now | 1;
-            g_sendFired = false;
-            g_sendWithdraws = net::summonOpen();
-            g_hintCanHard = net::canHardSummon();
-        }
-        const DWORD held = now - g_sendSince;
-        g_sendProgress = std::min(1.f, static_cast<float>(held) / static_cast<float>(kHoldMs));
-        g_hintTarget = !g_sendFired && held >= kHintDelayMs;
-        g_hintWithdraw = g_sendWithdraws;
-        g_hintProgress = g_sendProgress;
-        if (!g_sendFired && held >= kHoldMs) {
-            g_sendFired = true;
-            if (g_sendWithdraws) {
-                net::cancelSummon();
-                notices::push("Summon withdrawn");
-            } else {
-                send({}, true);
-            }
-        }
-    }
-
     // The panel's keys: hold one for a second.
-    const bool pendingShown = !g_pending.empty();
+    const bool pendingShown = !g_pending.empty() && !running;
     const uint32_t topId = pendingShown ? g_pending.front().id : 0;
     if (topId != g_topId) { // a different summon is on top: keys held from before do not count
         g_topId = topId;
@@ -444,9 +506,25 @@ void draw() {
     const ImGuiIO& io = ImGui::GetIO();
     Panel pn{ImGui::GetForegroundDrawList(), ImGui::GetFont(), ImGui::GetFontSize(), io.DisplaySize};
     const DWORD now = GetTickCount();
-    if (!overlayHidden()) drawBeacons(pn);
+    if (g_asking.target && !overlayHidden()) {
+        const std::string line = "Waiting for " + g_asking.name + " to answer";
+        const ImVec2 ts = pn.font->CalcTextSizeA(pn.size * 0.85f, FLT_MAX, 0.f, line.c_str());
+        textShadow(pn.dl, pn.font, pn.size * 0.85f, ImVec2(pn.screen.x * 0.5f - ts.x * 0.5f, pn.screen.y * 0.06f + pn.size * 1.2f),
+                   IM_COL32(255, 255, 255, 200), line.c_str());
+    }
+    if (net::inRun()) { // summons wait for the end of the run (update)
+        if (!g_pending.empty() && !overlayHidden()) {
+            const std::string line = g_pending.size() == 1 ? g_pending.front().name + " summoned you: answer after your run"
+                                                           : std::to_string(g_pending.size()) + " summons wait for the end of your run";
+            const ImVec2 ts = pn.font->CalcTextSizeA(pn.size * 0.85f, FLT_MAX, 0.f, line.c_str());
+            textShadow(pn.dl, pn.font, pn.size * 0.85f, ImVec2(pn.screen.x * 0.5f - ts.x * 0.5f, pn.screen.y * 0.06f),
+                       IM_COL32(255, 255, 255, 200), line.c_str());
+        }
+    } else if (!overlayHidden()) {
+        drawBeacons(pn);
+    }
     // The panel is a warning (a hard summon is about to move the player), so it is not hidden with the overlay.
-    if (!g_pending.empty()) {
+    if (!g_pending.empty() && !net::inRun()) {
         float me[3] = {0, 0, 0};
         const bool haveMe = here(me);
         const Pending& p = g_pending.front();
@@ -462,26 +540,6 @@ void draw() {
     if (const uint32_t left = game::teleport::returnLeftMs(); left > 0 && !game::teleport::busy())
         drawReturn(pn, left, keyHint(cfg->summonAcceptKey, cfg->summonAcceptPad),
                    keyHint(cfg->summonDeclineKey, cfg->summonDeclinePad));
-    // The send key's hold: a bar near the middle of the screen. It shows only once the key has been held
-    // for kHintDelayMs (a tap that places a plain summon never flashes it) and fades in and out over
-    // kHintFadeMs.
-    const float dt = std::clamp(io.DeltaTime, 0.f, 0.1f);
-    g_hintAlpha = std::clamp(g_hintAlpha + (g_hintTarget ? dt : -dt) / (static_cast<float>(kHintFadeMs) / 1000.f), 0.f, 1.f);
-    if (g_hintAlpha > 0.f) {
-        const float k = g_hintAlpha;
-        const auto fade = [k](int a) { return static_cast<int>(static_cast<float>(a) * k); };
-        const char* what = g_hintWithdraw ? "Withdrawing the summon..."
-                           : g_hintCanHard ? "Pulling players in..."
-                                           : "Summoning everyone (only the host can pull players in)";
-        const float size = pn.size;
-        const ImVec2 ts = pn.font->CalcTextSizeA(size, FLT_MAX, 0.f, what);
-        const float pad = size * 0.5f;
-        const ImVec2 a(pn.screen.x * 0.5f - ts.x * 0.5f - pad, pn.screen.y * 0.62f);
-        const ImVec2 b(a.x + ts.x + 2 * pad, a.y + ts.y + pad);
-        pn.dl->AddRectFilled(a, b, IM_COL32(12, 12, 18, fade(215)), size * 0.3f);
-        pn.dl->AddRectFilled(a, ImVec2(a.x + (b.x - a.x) * g_hintProgress, b.y), IM_COL32(255, 110, 70, fade(200)), size * 0.3f);
-        pn.dl->AddText(pn.font, size, ImVec2(a.x + pad, a.y + pad * 0.5f), IM_COL32(255, 255, 255, fade(255)), what);
-    }
 }
 
 } // namespace mecmp::ui::summon

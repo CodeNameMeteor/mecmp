@@ -1,8 +1,8 @@
 #pragma once
 // Summon, the player's side ("come to me"; packets in net/protocol.h, rules in net/summon_policy.h).
 //
-//   - calling: a tap on summon_key calls everyone, holding it for a second pulls them in (hard), holding
-//     it while the call is open withdraws it (the menu's Players tab can call chosen players too);
+//   - calling: from the players panel (hold players_key, ui/radial.h) or the menu's Players tab: one player,
+//     the picked ones or everyone, hard for the host; an open call can be withdrawn there too;
 //   - being called: a panel at the top says who calls, a marker ("Summon point") shows where, and
 //     holding the accept key for a second goes there, holding the decline key says no. A hard summon
 //     counts down first and the player may cancel it in that time;
@@ -12,6 +12,7 @@
 // Everything runs on the render thread except takesAcceptKey / takesDeclineKey.
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
 namespace mecmp::ui::summon {
@@ -21,7 +22,6 @@ namespace mecmp::ui::summon {
 // wheel) is using it.
 struct Input {
     bool canAct = false;
-    bool sendDown = false;
     bool acceptDown = false;
     bool declineDown = false;
 };
@@ -37,7 +37,12 @@ bool takesAcceptKey();
 bool takesDeclineKey();
 
 // Calls `targets` (session ids; empty = everyone) to where we stand, hard or not. Says what happened
-// in a notice. False when nothing was sent.
-bool send(const std::vector<uint32_t>& targets, bool hard);
+// in a notice (`name`: the one target's name for it, if known). False when nothing was sent.
+bool send(const std::vector<uint32_t>& targets, bool hard, const std::string& name = {});
+
+// Go to on a player who wants to be asked first (RemoteInfo::asksVisit): asks them, and goes once they say
+// yes (the answer is shown like a summon on their side). Asking the same player again gives up. One ask at a
+// time. False when nothing is asked now. Render thread.
+bool askVisit(uint32_t target, const std::string& name);
 
 } // namespace mecmp::ui::summon

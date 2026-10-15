@@ -60,6 +60,8 @@ constexpr const char* kDefaultIni =
     "; 1 = a hard summon (from the host, or a member the host allows) takes you to its sender after a\r\n"
     "; countdown you can cancel; 0 = you are only asked, as with any summon\r\n"
     "allow_forced_summon=0\r\n"
+    "; 1 = players who use Go to on you wait until you say yes (the summon accept / decline keys); 0 = anyone may\r\n"
+    "ask_before_go_to=0\r\n"
     "; 1 = share your EA online id and profile name with the session, so the game's map shows your Runner Tag\r\n"
     ";     where you are (on the others' maps; needs online services such as Beat Revival). 0 = don't share\r\n"
     "share_profile=0\r\n"
@@ -138,6 +140,9 @@ constexpr const char* kDefaultIniTail =
     "; open wheel moves per mouse movement (0.1..3; raise it for a low mouse sensitivity)\r\n"
     "ping_wheel_mode=hold\r\n"
     "wheel_sensitivity=1.0\r\n"
+    "; menu_mouse_speed: the mod's menu cursor, the players panel and the wheels' pointer, on top of the Windows\r\n"
+    "; pointer speed (0.25..3; 1.0 = as fast as the Windows cursor; the wheels also use wheel_sensitivity)\r\n"
+    "menu_mouse_speed=1.0\r\n"
     "; ui_scale = size of the overlay (menu, markers, wheel, notices) on top of the automatic size that follows\r\n"
     "; the game window height: 0.5..2, 1.0 = automatic\r\n"
     "ui_scale=1.0\r\n"
@@ -154,17 +159,21 @@ constexpr const char* kDefaultIniTail =
     "hide_key=Y\r\n"
     "wheel_prev_key=Q\r\n"
     "wheel_next_key=E\r\n"
-    "; summon: a tap on summon_key summons everyone to where you stand, holding it for a second pulls them in\r\n"
-    "; (a hard summon, see allow_forced_summon in [player] and members_may_hard_summon in [net]), and\r\n"
-    "; holding it while your summon is open withdraws it. While a summon is shown to you, hold\r\n"
-    "; summon_accept_key (go; after a summon it hides \"Go back?\") or summon_decline_key (no; after a\r\n"
+    "; summon: sent from the players panel (players_key below) or the menu's Players tab (a hard summon: see\r\n"
+    "; allow_forced_summon in [player] and members_may_hard_summon in [net]). While a summon is shown to you,\r\n"
+    "; hold summon_accept_key (go; after a summon it hides \"Go back?\") or summon_decline_key (no; after a\r\n"
     "; summon it takes you back) for a second;\r\n"
     "; the _pad entries are gamepad buttons for those two. hard_summon_grace_ms = the countdown (0..15000).\r\n"
-    "summon_key=G\r\n"
     "summon_accept_key=1\r\n"
     "summon_decline_key=2\r\n"
     "summon_accept_pad=LEFT\r\n"
     "summon_decline_pad=RIGHT\r\n"
+    "; players_key: hold it for the players panel; a right click on a player goes to them, a click picks them\r\n"
+    "; for the summon button below, 1-9 go to that player, wheel_prev_key / wheel_next_key turn the page. As\r\n"
+    "; ping_key; empty = none. players_pad: the same on a gamepad (hold the buttons; right stick points, RT\r\n"
+    "; clicks, LT goes to, LB turns the page)\r\n"
+    "players_key=T\r\n"
+    "players_pad=DOWN+RB\r\n"
     "hard_summon_grace_ms=5000\r\n"
     "; how gamepad buttons are named in hints: xbox or playstation (the settings above keep Xbox names)\r\n"
     "pad_labels=xbox\r\n"
@@ -497,6 +506,8 @@ void load(const std::wstring& dir) {
     {
         const float k = static_cast<float>(atof(readString(ini, L"ui", L"wheel_sensitivity", "1.0").c_str()));
         s.wheelSensitivity = std::isfinite(k) ? (k < 0.1f ? 0.1f : (k > 3.f ? 3.f : k)) : 1.0f;
+        const float m = static_cast<float>(atof(readString(ini, L"ui", L"menu_mouse_speed", "1.0").c_str()));
+        s.menuMouseSpeed = std::isfinite(m) ? (m < 0.25f ? 0.25f : (m > 3.f ? 3.f : m)) : 1.0f;
     }
     {
         const float k = static_cast<float>(atof(readString(ini, L"ui", L"ui_scale", "1.0").c_str()));
@@ -508,13 +519,15 @@ void load(const std::wstring& dir) {
     s.hideKey = readString(ini, L"ui", L"hide_key", "Y");
     s.wheelPrevKey = readString(ini, L"ui", L"wheel_prev_key", "Q");
     s.wheelNextKey = readString(ini, L"ui", L"wheel_next_key", "E");
-    s.summonKey = readString(ini, L"ui", L"summon_key", "G");
     s.summonAcceptKey = readString(ini, L"ui", L"summon_accept_key", "1");
     s.summonDeclineKey = readString(ini, L"ui", L"summon_decline_key", "2");
     s.summonAcceptPad = readString(ini, L"ui", L"summon_accept_pad", "LEFT");
     s.summonDeclinePad = readString(ini, L"ui", L"summon_decline_pad", "RIGHT");
+    s.playersKey = readString(ini, L"ui", L"players_key", "T");
+    s.playersPad = readString(ini, L"ui", L"players_pad", "DOWN+RB");
     s.hardSummonGraceMs = clampInt(readInt(ini, L"ui", L"hard_summon_grace_ms", 5000), 0, 15000);
     s.allowForcedSummon = readInt(ini, L"player", L"allow_forced_summon", 0) != 0;
+    s.askBeforeVisit = readInt(ini, L"player", L"ask_before_go_to", 0) != 0;
     s.shareProfile = readInt(ini, L"player", L"share_profile", 0) != 0;
     s.membersMayHardSummon = readInt(ini, L"net", L"members_may_hard_summon", 0) != 0;
     s.padPlayStation = _stricmp(readString(ini, L"ui", L"pad_labels", "xbox").c_str(), "playstation") == 0;
@@ -666,6 +679,8 @@ void applyPending() {
         char k[16];
         snprintf(k, sizeof(k), "%.2f", snapshot->wheelSensitivity);
         put(L"ui", L"wheel_sensitivity", k);
+        snprintf(k, sizeof(k), "%.2f", snapshot->menuMouseSpeed);
+        put(L"ui", L"menu_mouse_speed", k);
         snprintf(k, sizeof(k), "%.2f", snapshot->uiScale);
         put(L"ui", L"ui_scale", k);
     }
@@ -675,13 +690,15 @@ void applyPending() {
     put(L"ui", L"hide_key", snapshot->hideKey);
     put(L"ui", L"wheel_prev_key", snapshot->wheelPrevKey);
     put(L"ui", L"wheel_next_key", snapshot->wheelNextKey);
-    put(L"ui", L"summon_key", snapshot->summonKey);
     put(L"ui", L"summon_accept_key", snapshot->summonAcceptKey);
     put(L"ui", L"summon_decline_key", snapshot->summonDeclineKey);
     put(L"ui", L"summon_accept_pad", snapshot->summonAcceptPad);
     put(L"ui", L"summon_decline_pad", snapshot->summonDeclinePad);
+    put(L"ui", L"players_key", snapshot->playersKey);
+    put(L"ui", L"players_pad", snapshot->playersPad);
     put(L"ui", L"hard_summon_grace_ms", std::to_string(snapshot->hardSummonGraceMs));
     put(L"player", L"allow_forced_summon", snapshot->allowForcedSummon ? "1" : "0");
+    put(L"player", L"ask_before_go_to", snapshot->askBeforeVisit ? "1" : "0");
     put(L"player", L"share_profile", snapshot->shareProfile ? "1" : "0");
     put(L"net", L"members_may_hard_summon", snapshot->membersMayHardSummon ? "1" : "0");
     put(L"ui", L"pad_labels", snapshot->padPlayStation ? "playstation" : "xbox");

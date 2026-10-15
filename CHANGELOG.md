@@ -16,7 +16,7 @@
   marker's own color and secondary color. A faded swatch follows the main color; right-click a set one to
   go back to it. The wheel, the menu and the marker everyone sees use them (`wheelN_color_S` /
   `wheelN_accent_S` in mecmp.ini). A bookmark of such a marker keeps its colors.
-- **Two resets**: *Reset colors* puts main and secondary back to yellow and white and leaves own colors
+- **Two resets**: *Reset colors* puts main and secondary back to red and white and leaves own colors
   alone; *Reset own colors* sends every marker back to the main ones.
 - **Red is the default color** (main red, secondary white) for new settings; existing mecmp.ini files keep
   their colors.
@@ -39,8 +39,35 @@
   "and N more". A new answer comes in on the right and the row stays centered. Answers have colors of
   their own like markers (`react_color_N` / `react_accent_N`). Old versions ignore the added bytes and
   show the usual notice; an answer from an old version shows as a white speech bubble.
-- **The Markers tab is sorted** into Markers, Colors, Wheels and On the map now (placed markers,
+- **The Markers tab is sorted** into Markers, Colors, Wheels and Manage markers (placed markers,
   bookmarks, the others' markers and *Clear my markers*).
+- **Fixed: an answer to a marker that was replaced meanwhile** showed under the new marker in that cell; and
+  answering many players' markers could drop an answer to yours (the flood limit counted all of them).
+
+### Players panel
+- **Hold T** (`players_key`; `players_pad`, DOWN+RB on a gamepad) for a panel with the other players' names in
+  the middle of the screen, nine to a page. Right-click a name to **go to** that player, click names to
+  **pick** them (they turn red); 1-9 go to that slot, Q / E turn the page. Letting go of the key only closes
+  the panel, so a stray release never teleports anyone. On a gamepad the right stick moves the pointer, RT
+  clicks, LT goes to, LB turns the page.
+- **Summon from the panel, for everyone**: the button below is *Summon picked* (or *Summon everyone* with
+  nobody picked); while your summon waits for answers the same button withdraws it. The host (or a member the
+  host allows) also gets a *Hard summon* box that makes it pull players in. The menu's Players tab got a
+  *Withdraw summon* button too.
+- **The summon key (G, `summon_key`) is gone**: the panel does what it did. The accept and decline keys stay.
+- **Summon again after 5 s** instead of 10 s.
+- **The Controls tab folds**: Markers, Players panel and Summon answers start open; Quick answers, Chat, Overlay,
+  Menu and Gamepad are closed, and *Advanced* holds how the wheel opens and the pointer speeds.
+- **The mod's mouse cursor follows the Windows pointer speed** (the menu, the panel and the marker wheels' pointer;
+  it used the mouse's raw counts, much too fast with a high-DPI mouse), plus a *Menu mouse speed* setting
+  (`menu_mouse_speed`).
+- **Runs**: a player in a time trial or a dash is marked *in a run*. A Go to on them waits and goes once their
+  run is over (right-click them again to call it off). A summon is sent; on their side it waits, unseen, and its
+  time starts when the run ends. While you are in a run yourself, the panel does not teleport or summon.
+- **Ask me before others go to me** (You tab, Privacy; `ask_before_go_to` in [player]): a Go to on you then asks
+  first, shown like a summon (hold the accept key for yes, the decline key for no). The menu's Go to button
+  asks too. New VISIT packet (type 13, no protocol bump): older versions never ask and are never asked; a
+  dedicated server must be updated to pass it on.
 
 ## 0.9.0: first public beta
 

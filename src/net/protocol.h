@@ -38,6 +38,7 @@ constexpr uint16_t kTypeSummon = 7; // "come to me" (see SUMMON below)
 constexpr uint16_t kTypeSummonReply = 8; // a summoned player's answer (see SUMMON_REPLY below)
 constexpr uint16_t kTypeResult = 9; // a finished dash or other run, with its time (see RESULT below)
 constexpr uint16_t kTypeActivity = 10; // the run the sender is in now, with its clock (see ACTIVITY below)
+constexpr uint16_t kTypeVisit = 13; // "may I come to you?" and its answer (see VISIT below)
 // type 5 INFO: a server list's question "who are you?" and a dedicated server's answer. Not a session
 // packet: it is not in knownType (never stored or forwarded), and a server answers it whatever the
 // protocol in the header, so a list can say "other version" instead of nothing.
@@ -58,7 +59,8 @@ constexpr size_t kCookieLen = 8;
 // be forwarded, so a new type needs no protocol bump: older versions simply ignore it.
 constexpr bool knownType(uint16_t type) {
     return type == kTypeState || type == kTypeHello || type == kTypeChat || type == kTypePing || type == kTypeReact ||
-           type == kTypeSummon || type == kTypeSummonReply || type == kTypeResult || type == kTypeActivity;
+           type == kTypeSummon || type == kTypeSummonReply || type == kTypeResult || type == kTypeActivity ||
+           type == kTypeVisit;
 }
 constexpr size_t kMaxChatBytes = 120; // UTF-8, after cleaning
 constexpr size_t kNameLen = 24;
@@ -339,6 +341,22 @@ size_t writeSummonReply(char* buf, const Header& h, const SummonReply& r);
 // False for a short packet or a result code nobody knows.
 bool readSummonReply(const char* payload, size_t n, SummonReply& out);
 
+// type 13 VISIT: u32 id | u32 target | u8 kind.
+// Go to someone who asks first (their HELLO has kHelloAskVisit): the visitor sends kVisitAsk to `target`, who
+// answers with kVisitYes or kVisitNo for the same `id` (target = the visitor then); kVisitWithdraw = the visitor
+// gave up asking. Everyone receives it, only `target` acts. Sent a few times, `id` + sender make the repeats
+// one event. Older versions do not know the type and drop it; they never set kHelloAskVisit either, so
+// nobody waits for them.
+enum VisitKind : uint8_t { kVisitAsk = 0, kVisitYes = 1, kVisitNo = 2, kVisitWithdraw = 3 };
+struct Visit {
+    uint32_t id = 0;
+    uint32_t target = 0;
+    uint8_t kind = kVisitAsk;
+};
+size_t writeVisit(char* buf, const Header& h, const Visit& v);
+// False for a short packet or a kind nobody knows.
+bool readVisit(const char* payload, size_t n, Visit& out);
+
 // "ffd23c" or "#ffd23c" -> r, g, b. False (rgb untouched) for anything else.
 bool parseRgb(const std::string& hex, uint8_t rgb[3]);
 std::string formatRgb(const uint8_t rgb[3]);
@@ -371,6 +389,8 @@ constexpr uint8_t kHelloServer = 2;
 // member's menu can say whether holding the summon key will pull players in. Like kHelloHost, it is
 // cleared from what a host or a server forwards for a joiner, and a joiner reads it from the host only.
 constexpr uint8_t kHelloMembersHard = 4;
+// bit 3: the sender wants to be asked before anyone goes to them (VISIT). Passed on as it is.
+constexpr uint8_t kHelloAskVisit = 8;
 // `wear`: what a player whose look is 0 (Faith) changed about her outfit; 0 = nothing, each viewer
 // shows her as in their own game. The bits are game::models::Wear. Hosts and servers pass the byte on
 // with the rest of the packet; older versions do not send it and ignore it.

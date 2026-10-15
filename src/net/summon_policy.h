@@ -14,7 +14,7 @@
 namespace mecmp::net::summon {
 
 constexpr uint32_t kMinGapMs = 5000;        // one sender may start a summon this often at most
-constexpr uint32_t kSendCooldownMs = 10000; // we start one this often at most
+constexpr uint32_t kSendCooldownMs = 5000; // we start one this often at most (not below kMinGapMs)
 constexpr uint32_t kSoftWindowMs = 60000;   // a summon stays open for the receiver this long
 constexpr uint32_t kReportWindowMs = 65000; // the sender waits for answers this long (a little over)
 

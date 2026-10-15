@@ -60,8 +60,9 @@ std::atomic<bool> g_justOpened{false}; // focus the menu window on the next fram
 std::atomic<int> g_chatKey{'T'};
 std::atomic<int> g_pingKey{0}; // 0 = none
 std::atomic<int> g_reactKey{0}; // the quick answers key; 0 = none
+std::atomic<int> g_playersKey{0}; // the players panel key; 0 = none
 std::atomic<int> g_altKey{0}, g_hideKey{0}, g_prevKey{0}, g_nextKey{0}; // the other keys; 0 = none
-std::atomic<int> g_summonKey{0}, g_summonAcceptKey{0}, g_summonDeclineKey{0}; // summon (ui/summon.h); 0 = none
+std::atomic<int> g_summonAcceptKey{0}, g_summonDeclineKey{0}; // answering a summon (ui/summon.h); 0 = none
 std::atomic<bool> g_hidden{false};       // the overlay is hidden (see overlayHidden)
 std::atomic<DWORD> g_hiddenNoteAt{0};    // when it was last switched: a short note says so
 std::atomic<int> g_pingClearKey{0}; // a key, or VK_MBUTTON / VK_XBUTTON1 / VK_XBUTTON2; 0 = none
@@ -95,6 +96,20 @@ bool isInputMessage(UINT msg) {
 // are only used if no raw input arrives (e.g. in the game's own menus).
 std::atomic<float> g_cursorX{0}, g_cursorY{0};
 std::atomic<bool> g_rawMouse{false};
+// Raw input is the mouse's own counts, without the Windows pointer speed: a fast mouse with a lowered speed in
+// Windows would run away in the menu. Windows' factor for its speed setting times menu_mouse_speed; refreshed
+// by the render thread (refreshMouseScale), read by the window thread.
+std::atomic<float> g_mouseScale{1.f};
+
+void refreshMouseScale() {
+    int speed = 10; // 1..20, Windows' default 10 = the counts as they are
+    if (!SystemParametersInfoW(SPI_GETMOUSESPEED, 0, &speed, 0)) speed = 10;
+    speed = speed < 1 ? 1 : (speed > 20 ? 20 : speed);
+    // Windows' own table: 1/32, 1/16, then eighths up to 1 at 10; above 10, a quarter more per step.
+    const float win = speed == 1 ? 1.f / 32.f : speed == 2 ? 1.f / 16.f : speed <= 10 ? (speed - 2) / 8.f : 1.f + (speed - 10) * 0.25f;
+    const float own = std::clamp(config::get()->menuMouseSpeed, 0.25f, 3.f);
+    g_mouseScale = win * own;
+}
 
 void clampCursor() {
     RECT rc{};
@@ -140,8 +155,8 @@ void handleRawMouse(LPARAM l) {
     if (ri.header.dwType != RIM_TYPEMOUSE) return;
     const RAWMOUSE& m = ri.data.mouse;
     if (!(m.usFlags & MOUSE_MOVE_ABSOLUTE) && (m.lLastX || m.lLastY)) {
-        g_cursorX = g_cursorX + static_cast<float>(m.lLastX);
-        g_cursorY = g_cursorY + static_cast<float>(m.lLastY);
+        g_cursorX = g_cursorX + static_cast<float>(m.lLastX) * g_mouseScale.load();
+        g_cursorY = g_cursorY + static_cast<float>(m.lLastY) * g_mouseScale.load();
         clampCursor();
     }
     const USHORT b = m.usButtonFlags;
@@ -218,7 +233,7 @@ bool radialRawMouse(LPARAM l) {
     const USHORT b = m.usButtonFlags;
     g_radialRaw = true;
     if (!(m.usFlags & MOUSE_MOVE_ABSOLUTE) && (m.lLastX || m.lLastY))
-        radial::moved(static_cast<float>(m.lLastX), static_cast<float>(m.lLastY));
+        radial::moved(static_cast<float>(m.lLastX), static_cast<float>(m.lLastY), g_mouseScale.load());
     if (b & RI_MOUSE_LEFT_BUTTON_DOWN) radial::click();
     if (b & RI_MOUSE_RIGHT_BUTTON_DOWN) radial::dismiss();
     if (b & RI_MOUSE_WHEEL) radial::switchWheel(static_cast<SHORT>(m.usButtonData) > 0 ? -1 : 1);
@@ -229,10 +244,10 @@ bool radialRawMouse(LPARAM l) {
 // for every frame (render thread). The marker and answer keys start the wheel as a key would; its
 // release is noticed by the wheel itself. The hide key is not here: pollHideKey asks for it, any key.
 void pollMouseBinds() {
-    static bool was[6] = {};
-    std::atomic<int>* const binds[6] = {&g_pingKey, &g_reactKey, &g_altKey, &g_hideKey, &g_prevKey, &g_nextKey};
+    static bool was[7] = {};
+    std::atomic<int>* const binds[7] = {&g_pingKey, &g_reactKey, &g_altKey, &g_hideKey, &g_prevKey, &g_nextKey, &g_playersKey};
     const bool canAct = gameFocused() && !g_open.load() && !chat::isOpen() && g_ready && !game::hooks::gameMenuOpen();
-    for (int i = 0; i < 6; ++i) {
+    for (int i = 0; i < 7; ++i) {
         if (i == 3) continue;
         const int vk = binds[i]->load();
         const bool mouse = vk == VK_MBUTTON || vk == VK_XBUTTON1 || vk == VK_XBUTTON2;
@@ -245,7 +260,8 @@ void pollMouseBinds() {
         case 1: radial::keyDown(vk, radial::Mode::React); break;
         case 2: game::ping::requestAlt(); break;
         case 4: radial::switchWheel(-1); break;
-        default: radial::switchWheel(1); break;
+        case 5: radial::switchWheel(1); break;
+        default: radial::keyDown(vk, radial::Mode::Players); break;
         }
     }
 }
@@ -342,7 +358,8 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
     // and passed on; while the wheel is open it owns the mouse (the camera stays still).
     if (msg == WM_KILLFOCUS || (msg == WM_ACTIVATEAPP && w == FALSE)) radial::cancel();
     if (msg == WM_KEYUP && ((g_pingKey.load() != 0 && static_cast<int>(w) == g_pingKey.load()) ||
-                            (g_reactKey.load() != 0 && static_cast<int>(w) == g_reactKey.load())))
+                            (g_reactKey.load() != 0 && static_cast<int>(w) == g_reactKey.load()) ||
+                            (g_playersKey.load() != 0 && static_cast<int>(w) == g_playersKey.load())))
         radial::keyUp(static_cast<int>(w));
     if (radial::engaged() && msg == WM_KEYDOWN && !(l & (1 << 30))) {
         const int key = static_cast<int>(w);
@@ -414,6 +431,10 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
     if (msg == WM_KEYDOWN && !g_open && !chat::isOpen() && g_ready && g_reactKey.load() != 0 &&
         static_cast<int>(w) == g_reactKey.load() && !(l & (1 << 30)) && !game::hooks::gameMenuOpen())
         radial::keyDown(g_reactKey.load(), radial::Mode::React);
+    // The players key: held, the players panel (go to / summon).
+    if (msg == WM_KEYDOWN && !g_open && !chat::isOpen() && g_ready && g_playersKey.load() != 0 &&
+        static_cast<int>(w) == g_playersKey.load() && !(l & (1 << 30)) && !game::hooks::gameMenuOpen())
+        radial::keyDown(g_playersKey.load(), radial::Mode::Players);
     // The other-way key: a short press places a marker at the other kind of point.
     if (msg == WM_KEYDOWN && !g_open && !chat::isOpen() && g_ready && g_altKey.load() != 0 &&
         static_cast<int>(w) == g_altKey.load() && !(l & (1 << 30)) && !game::hooks::gameMenuOpen())
@@ -597,14 +618,20 @@ HRESULT STDMETHODCALLTYPE presentHook(IDXGISwapChain* sc, UINT sync, UINT flags)
         ImGui::NewFrame();
         if (g_justOpened.exchange(false)) ImGui::SetWindowFocus("###mecmp");
         ImGui::GetIO().MouseDrawCursor = g_open.load();
+        {
+            static DWORD scaleAt = 0; // the Windows setting may change while the game runs: asked twice a second
+            if (GetTickCount() - scaleAt > 500) {
+                scaleAt = GetTickCount();
+                refreshMouseScale();
+            }
+        }
         pollMouseBinds();
         pollHideKey();
         {
-            // Summon (ui/summon.h): held keys are read here, every frame, so tap and hold are told apart.
+            // Summon (ui/summon.h): the answer keys are read here, every frame, as held keys.
             auto down = [](int vk) { return vk != 0 && (GetAsyncKeyState(vk) & 0x8000) != 0; };
             summon::Input in;
             in.canAct = gameFocused() && !g_open.load() && !chat::isOpen() && !game::hooks::gameMenuOpen() && !radial::engaged();
-            in.sendDown = down(g_summonKey.load());
             in.acceptDown = down(g_summonAcceptKey.load()) || gamepad::held(gamepad::Action::SummonAccept);
             in.declineDown = down(g_summonDeclineKey.load()) || gamepad::held(gamepad::Action::SummonDecline);
             summon::update(in);
@@ -675,8 +702,8 @@ const MenuKey* menuKeys(int& count) {
 namespace {
 // Every key the mod listens to besides the menu key. A key does one job.
 std::atomic<int>* const kBound[] = {&g_pingKey, &g_pingClearKey, &g_chatKey, &g_reactKey, &g_altKey,
-                                    &g_hideKey, &g_prevKey,      &g_nextKey, &g_summonKey, &g_summonAcceptKey,
-                                    &g_summonDeclineKey};
+                                    &g_hideKey, &g_prevKey,      &g_nextKey, &g_summonAcceptKey,
+                                    &g_summonDeclineKey, &g_playersKey};
 
 // A key name from mecmp.ini. `mouse`: false = the keyboard only, true = also MOUSE3 (the middle
 // button), MOUSE4 and MOUSE5 (the side buttons).
@@ -734,9 +761,9 @@ bool setAltKey(const std::string& name) { return setBind(g_altKey, name, true); 
 bool setHideKey(const std::string& name) { return setBind(g_hideKey, name, true); }
 bool setWheelPrevKey(const std::string& name) { return setBind(g_prevKey, name, true); }
 bool setWheelNextKey(const std::string& name) { return setBind(g_nextKey, name, true); }
-bool setSummonKey(const std::string& name) { return setBind(g_summonKey, name, true); }
 bool setSummonAcceptKey(const std::string& name) { return setBind(g_summonAcceptKey, name, true); }
 bool setSummonDeclineKey(const std::string& name) { return setBind(g_summonDeclineKey, name, true); }
+bool setPlayersKey(const std::string& name) { return setBind(g_playersKey, name, true); }
 
 bool middleButtonIsABind() {
     for (const std::atomic<int>* k : kBound)
@@ -786,9 +813,9 @@ bool install() {
     noteRefused(setHideKey(config::get()->hideKey), "hide_key", config::get()->hideKey);
     noteRefused(setWheelPrevKey(config::get()->wheelPrevKey), "wheel_prev_key", config::get()->wheelPrevKey);
     noteRefused(setWheelNextKey(config::get()->wheelNextKey), "wheel_next_key", config::get()->wheelNextKey);
-    noteRefused(setSummonKey(config::get()->summonKey), "summon_key", config::get()->summonKey);
     noteRefused(setSummonAcceptKey(config::get()->summonAcceptKey), "summon_accept_key", config::get()->summonAcceptKey);
     noteRefused(setSummonDeclineKey(config::get()->summonDeclineKey), "summon_decline_key", config::get()->summonDeclineKey);
+    noteRefused(setPlayersKey(config::get()->playersKey), "players_key", config::get()->playersKey);
     // Gamepad combinations: the menu's first, so it wins over an identical one.
     setPadBinding(config::get()->menuPad, gamepad::Action::Menu, "menu_pad");
     setPadBinding(config::get()->pingPad, gamepad::Action::Ping, "ping_pad");
@@ -796,6 +823,7 @@ bool install() {
     setPadBinding(config::get()->reactPad, gamepad::Action::React, "react_pad");
     setPadBinding(config::get()->summonAcceptPad, gamepad::Action::SummonAccept, "summon_accept_pad");
     setPadBinding(config::get()->summonDeclinePad, gamepad::Action::SummonDecline, "summon_decline_pad");
+    setPadBinding(config::get()->playersPad, gamepad::Action::Players, "players_pad");
     // A throwaway device + swap chain on a hidden window, only to find DXGI's swap-chain vtable.
     WNDCLASSEXW wc{};
     wc.cbSize = sizeof(wc);

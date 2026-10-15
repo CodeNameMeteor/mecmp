@@ -44,6 +44,7 @@ struct RemoteInfo {
     uint8_t runKind = 0xff; // the run they are in (protocol::ResultKind); 0xff = none (protocol::kActivityNone)
     uint32_t runMs = 0;     // how long that run has been going, counted on to now
     std::string runTitle;   // its name
+    bool asksVisit = false; // they want to be asked before anyone goes to them (VISIT, protocol.h)
 };
 
 // join: empty = host; otherwise a join code or ip:port of the host. Calling it again switches
@@ -133,6 +134,7 @@ std::vector<std::string> takeResults();
 // The run we are in now (ACTIVITY, protocol.h): kind = protocol::ResultKind, startedTick = GetTickCount when it
 // started; kind protocol::kActivityNone = none (sent a few times so the others' name tags clear). Any thread.
 void setActivity(uint8_t kind, uint32_t startedTick, const std::string& title);
+bool inRun(); // we are in a run now (setActivity's kind is not kActivityNone). Any thread.
 // Our chat box is open: a flag in our STATE packets, shown by the others' name tags. Any thread.
 void setTyping(bool typing);
 
@@ -163,6 +165,17 @@ struct SummonInfo {
 std::vector<SummonInfo> takeSummons();
 // Answers summon `id` of player `to` (protocol::SummonResult).
 void sendSummonReply(uint32_t id, uint32_t to, uint8_t result);
+// VISIT (protocol.h): asking someone who wants to be asked before others go to them, and the answers.
+// sendVisit sends `kind` (protocol::VisitKind) to `target`; id 0 = a new request (its id is returned; 0 =
+// not sent). takeVisits = the ones addressed to us, oldest first. Any thread.
+struct VisitInfo {
+    uint32_t id = 0;
+    uint32_t from = 0; // the sender's session id
+    std::string name;
+    uint8_t kind = 0;
+};
+uint32_t sendVisit(uint32_t target, uint8_t kind, uint32_t id = 0);
+std::vector<VisitInfo> takeVisits();
 // What happened to our summon, as sentences for the notices: one line once everyone called answered
 // or the time ran out.
 std::vector<std::string> takeSummonReports();

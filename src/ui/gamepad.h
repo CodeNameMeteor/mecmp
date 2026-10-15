@@ -30,7 +30,10 @@ std::string format(uint16_t buttons);     // bits -> "LS+RS"
 // holding opens the answers wheel (the same stick and cancel rules as Ping).
 // SummonAccept / SummonDecline are held (not pressed) buttons that answer a summon (ui/summon.h);
 // they are read with held() and hidden from the game only while setSummonHidden asks for it.
-enum class Action { Menu, Ping, PingClear, React, SummonAccept, SummonDecline, Count };
+// Players opens the players panel while held (radial::Mode::Players): the right stick moves the pointer, RT
+// clicks (picks the player under it for a summon, the summon row's buttons), LT goes to them, LB turns the
+// page; the triggers are hidden from the game then.
+enum class Action { Menu, Ping, PingClear, React, SummonAccept, SummonDecline, Players, Count };
 void setBinding(uint16_t buttons, Action action = Action::Menu); // 0 = none
 // False if another action already has exactly these buttons (a press would do two things at once).
 bool bindingFree(uint16_t buttons, Action action);

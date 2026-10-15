@@ -65,6 +65,7 @@ struct Settings {
     // [player]
     bool shareProfile = false;            // send your EA online id and profile name, so others' maps show your Runner Tag
     bool allowForcedSummon = false;       // a hard summon from the host (or a member it allows) takes you after a countdown
+    bool askBeforeVisit = false;          // Go to on you waits for your yes (VISIT, net/protocol.h)
     std::string name = "Runner";
     std::string look = "faith";           // how you look to others: faith, or echo:<hash> (a ghost style + colour)
     int outfit = 0;                       // with look = faith: what is changed about her outfit (net::protocol::kWear... bits)
@@ -96,6 +97,7 @@ struct Settings {
     std::string pingPad;                  // gamepad buttons for the same (as menu_pad); empty = none
     bool wheelInstant = false;            // the wheel opens the moment the key goes down (false: after a short hold)
     float wheelSensitivity = 1.0f;        // how far the pointer in the open wheel moves per mouse movement
+    float menuMouseSpeed = 1.0f;          // the overlay cursor, on top of the Windows pointer speed (0.25..3)
     float uiScale = 1.0f;                 // size of all overlay text and markers, on top of the automatic size (0.5..2)
     std::string reactKey = "C";           // tap = send the last quick answer, hold = its wheel; empty = none
     std::string reactPad;                 // gamepad buttons for the same; empty = none
@@ -103,15 +105,14 @@ struct Settings {
     std::string hideKey = "Y";            // shows / hides names, markers, arrows, notices and chat lines; empty = none
     std::string wheelPrevKey = "Q";       // while the wheel is open: the previous wheel; empty = none
     std::string wheelNextKey = "E";       // ... the next wheel; empty = none
-    // Summon ("come to me", net/summon_policy.h). A tap on summon_key calls everyone to where you stand,
-    // holding it for a second pulls them in (hard, see allowForcedSummon / membersMayHardSummon), and
-    // holding it while your call is still open withdraws it. The accept and decline keys work only while a
-    // summon is shown to you: hold one for a second.
-    std::string summonKey = "G";          // as ping_key; empty = none
+    // Summon ("come to me", net/summon_policy.h). Sent from the players panel (playersKey) or the menu. The
+    // accept and decline keys work only while a summon is shown to you: hold one for a second.
     std::string summonAcceptKey = "1";    // a letter, a digit or a menu key name; empty = none
     std::string summonDeclineKey = "2";   // also "go back" after a summon took you somewhere
     std::string summonAcceptPad = "LEFT"; // gamepad buttons (as menu_pad); empty = none
     std::string summonDeclinePad = "RIGHT";
+    std::string playersKey = "T";         // hold: the players panel (click = go to, right click = summon); as ping_key
+    std::string playersPad = "DOWN+RB";   // the same on a gamepad (right stick points, RT = go to, LT = summon)
     int hardSummonGraceMs = 5000;         // a hard summon counts down this long before it takes you (0..15000)
     bool padPlayStation = false;          // gamepad buttons are named as on a PlayStation pad in hints
     int pingWheel = 0;                    // the wheel that opens (the one used last)

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <map>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -124,10 +125,12 @@ void scanForMissing() {
         if (name == kGhostBlueprint) ghosts.push_back({e, data});
         else considerSpawner(reinterpret_cast<void*>(e), data, true);
     }
-    std::sort(ghosts.begin(), ghosts.end(), [&](const auto& a, const auto& b) {
-        auto count = [&](uintptr_t d) { return std::count_if(ghosts.begin(), ghosts.end(), [d](const auto& g) { return g.second == d; }); };
-        return count(a.second) < count(b.second);
-    });
+    // How many spawners share each one's data, counted before sorting: counting inside the comparator read the
+    // vector while std::sort was moving its elements, which can make the order inconsistent.
+    std::map<uintptr_t, size_t> shared;
+    for (const auto& g : ghosts) ++shared[g.second];
+    std::stable_sort(ghosts.begin(), ghosts.end(),
+                     [&](const auto& a, const auto& b) { return shared[a.second] < shared[b.second]; });
     for (const auto& g : ghosts) considerSpawner(reinterpret_cast<void*>(g.first), g.second, true);
     for (uintptr_t c : comps) onForeignClientReplayComp(reinterpret_cast<void*>(c));
     MLOG("level: scanned %llu MB in %.1f s: %llu spawners (%llu ghost), %llu ghost clients; player spawner %s, ghost spawner %s",

@@ -125,6 +125,35 @@ inline bool readCString(uintptr_t addr, std::string& out, size_t maxLen = 256) {
     return false;
 }
 
+// As readCString, but for text players wrote (a time trial's name): UTF-8 is kept. Control characters and
+// bytes that are not valid UTF-8 still make it false, so a wrong pointer is not taken for a name.
+inline bool readUtf8String(uintptr_t addr, std::string& out, size_t maxLen = 256) {
+    out.clear();
+    std::string raw;
+    char c = 0;
+    while (raw.size() <= maxLen) {
+        if (!read(addr + raw.size(), c)) return false;
+        if (c == 0) break;
+        raw.push_back(c);
+    }
+    if (raw.empty() || raw.size() > maxLen) return false;
+    for (size_t i = 0; i < raw.size();) {
+        const unsigned char b = static_cast<unsigned char>(raw[i]);
+        if (b < 0x80) {
+            if (b < 0x20 || b == 0x7f) return false;
+            ++i;
+            continue;
+        }
+        const size_t n = (b >> 5) == 6 ? 2 : (b >> 4) == 14 ? 3 : (b >> 3) == 30 ? 4 : 0;
+        if (!n || (n == 2 && b < 0xC2) || b > 0xF4 || i + n > raw.size()) return false;
+        for (size_t k = 1; k < n; ++k)
+            if ((static_cast<unsigned char>(raw[i + k]) >> 6) != 2) return false;
+        i += n;
+    }
+    out = raw;
+    return true;
+}
+
 // Writes one pointer-sized value into read-only data (a vtable slot). Returns the old value.
 inline bool patchPointer(uintptr_t addr, uintptr_t value, uintptr_t* old) {
     DWORD prot = 0;

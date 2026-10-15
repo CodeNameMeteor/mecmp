@@ -86,7 +86,7 @@ std::string timeTrialName(const uint8_t* contentId) {
             continue;
         memcpy(&name, head + Marker_Name, sizeof(name));
         std::string s;
-        if (name && mem::readCString(name, s, 96)) return s;
+        if (name && mem::readUtf8String(name, s, 96)) return s; // a player wrote it: any language
     }
     return {};
 }

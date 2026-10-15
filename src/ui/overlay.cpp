@@ -11,6 +11,7 @@
 #include <atomic>
 #include <cctype>
 #include <mutex>
+#include <string>
 #include <vector>
 
 #include "backends/imgui_impl_dx11.h"
@@ -477,11 +478,27 @@ float targetFontPx() {
 // Segoe UI at `px`. Names, chat and marker titles are the players' own text, so the font carries more
 // than Latin: Latin Extended, Greek and Cyrillic from Segoe UI, and the common Chinese characters from
 // Microsoft YaHei where Windows has it. Anything else still shows as "?".
+// A file in Windows' Fonts folder, as a UTF-8 path for ImGui (Windows need not be on C:). Empty if it is missing.
+std::string windowsFont(const wchar_t* file) {
+    wchar_t dir[MAX_PATH];
+    const UINT n = GetWindowsDirectoryW(dir, MAX_PATH);
+    if (n == 0 || n >= MAX_PATH) return {};
+    const std::wstring path = std::wstring(dir) + L"\\Fonts\\" + file;
+    if (GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES) return {};
+    const int bytes = WideCharToMultiByte(CP_UTF8, 0, path.c_str(), -1, nullptr, 0, nullptr, nullptr);
+    if (bytes <= 1) return {};
+    std::string out(static_cast<size_t>(bytes), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, path.c_str(), -1, &out[0], bytes, nullptr, nullptr);
+    out.resize(static_cast<size_t>(bytes - 1));
+    return out;
+}
+
 void buildFonts(float px) {
     ImGuiIO& io = ImGui::GetIO();
     io.Fonts->Clear();
     ImFont* font = nullptr;
-    if (GetFileAttributesW(L"C:\\Windows\\Fonts\\segoeui.ttf") != INVALID_FILE_ATTRIBUTES) {
+    const std::string segoe = windowsFont(L"segoeui.ttf"), yahei = windowsFont(L"msyh.ttc");
+    if (!segoe.empty()) {
         static ImVector<ImWchar> ranges; // the atlas reads it when it is built, on the next frame
         static const ImWchar kMore[] = {0x0100, 0x024F, 0x0370, 0x03FF, 0x2000, 0x206F, 0};
         ranges.clear();
@@ -490,11 +507,11 @@ void buildFonts(float px) {
         builder.AddRanges(io.Fonts->GetGlyphRangesCyrillic());
         builder.AddRanges(kMore);
         builder.BuildRanges(&ranges);
-        font = io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\segoeui.ttf", px, nullptr, ranges.Data);
-        if (font && GetFileAttributesW(L"C:\\Windows\\Fonts\\msyh.ttc") != INVALID_FILE_ATTRIBUTES) {
+        font = io.Fonts->AddFontFromFileTTF(segoe.c_str(), px, nullptr, ranges.Data);
+        if (font && !yahei.empty()) {
             ImFontConfig merge;
             merge.MergeMode = true;
-            io.Fonts->AddFontFromFileTTF("C:\\Windows\\Fonts\\msyh.ttc", px, &merge, io.Fonts->GetGlyphRangesChineseSimplifiedCommon());
+            io.Fonts->AddFontFromFileTTF(yahei.c_str(), px, &merge, io.Fonts->GetGlyphRangesChineseSimplifiedCommon());
         }
     }
     if (!font) {
@@ -544,13 +561,24 @@ bool init(IDXGISwapChain* sc) {
     menu::applyStyle();
     ImGui_ImplWin32_Init(g_window);
     ImGui_ImplDX11_Init(g_device, g_context);
-    g_origWndProc = reinterpret_cast<WNDPROC>(SetWindowLongPtrW(g_window, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(&wndProc)));
+    // The game's window procedure is stored before ours goes in: the window thread may call ours at once,
+    // and it passes everything on to g_origWndProc. (Any thread of the game's own process may swap it.)
+    g_origWndProc = reinterpret_cast<WNDPROC>(GetWindowLongPtrW(g_window, GWLP_WNDPROC));
+    SetLastError(0);
+    const LONG_PTR previous = SetWindowLongPtrW(g_window, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(&wndProc));
+    if (!previous && GetLastError() != 0) {
+        MLOG("ui: could not take the game window's input (error %lu); the menu keys will not work", GetLastError());
+    } else if (previous && reinterpret_cast<WNDPROC>(previous) != g_origWndProc) {
+        g_origWndProc = reinterpret_cast<WNDPROC>(previous); // changed by someone else in between
+    }
     MLOG("ui: overlay ready (%ldx%ld). Press %s in game for the MECMP menu.", rc.right - rc.left, rc.bottom - rc.top,
          config::get()->menuKey.c_str());
     return true;
 }
 
 HRESULT STDMETHODCALLTYPE presentHook(IDXGISwapChain* sc, UINT sync, UINT flags) {
+    // A test present (is the window visible?) shows nothing: no frame is drawn for it.
+    if (flags & DXGI_PRESENT_TEST) return g_origPresent(sc, sync, flags);
     if (!g_ready && !g_swapChain) g_ready = init(sc);
     // Ghosts move every frame, not per server tick. Normally written by the client replay updater
     // (on the game's thread, just before it reads them); from here only until that hook is in.
@@ -595,8 +623,17 @@ HRESULT STDMETHODCALLTYPE presentHook(IDXGISwapChain* sc, UINT sync, UINT flags)
         chat::draw();
         menu::draw(g_open.load());
         ImGui::Render();
+        // The backend restores most of the pipeline state it changes, but not the render targets: the game's
+        // are put back after our draw.
+        ID3D11RenderTargetView* gameRtvs[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {};
+        ID3D11DepthStencilView* gameDsv = nullptr;
+        g_context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, gameRtvs, &gameDsv);
         g_context->OMSetRenderTargets(1, &g_rtv, nullptr);
         ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+        g_context->OMSetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, gameRtvs, gameDsv);
+        for (ID3D11RenderTargetView* v : gameRtvs)
+            if (v) v->Release();
+        if (gameDsv) gameDsv->Release();
     }
     return g_origPresent(sc, sync, flags);
 }

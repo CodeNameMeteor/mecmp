@@ -10,6 +10,8 @@
   crashed mid-session deletes them at its next start.
 
 ### Fixes
+- **Fixed a crash with *Players on the map*** in some builds (MSVC Release): the position handed to the game's
+  friend-marker code was not 16-byte aligned, which the game requires there.
 - **Time trials with names outside plain ASCII** (accents, other alphabets) are named in the finish notice and on
   Discord; such a name used to be left out.
 - **The overlay hands the game back its render targets** after drawing, skips the game's test presents (which

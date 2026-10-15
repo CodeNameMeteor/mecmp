@@ -31,6 +31,9 @@ struct Config {
     bool results = true;          // finished dashes and time trials (as players report them)
     bool live = true;             // one status message (who is online), edited in place as players come and go
     std::string statusIdFile;     // where that message's id is kept, so a restart edits the same one
+    // Where the ids of this session's posts (joins, leaves, finished runs) are kept until the server is empty
+    // again and they are deleted, so a restart (or a stop with Discord slow to answer) still cleans them up.
+    std::string trackFile;
 };
 
 // --- Formatting (pure; tested in tests/server_test.cpp) ---------------------------------------------
@@ -58,6 +61,7 @@ public:
     void add(const std::string& id);       // ignored unless it is a message id
     std::vector<std::string> take();       // every id so far, in order; forgets them
     size_t size() const { return ids_.size(); }
+    const std::vector<std::string>& ids() const { return ids_; }
 private:
     std::vector<std::string> ids_;
 };
@@ -74,7 +78,8 @@ public:
     bool enabled() const { return running_; }
     const Config& config() const { return cfg_; }
     void post(const std::string& line); // one line; gathered with others queued within ~2 s
-    // A player's join or leave: posted like post(), and its message id is kept for endSession().
+    // A post of this session (a join, a leave, a finished run): posted like post(), and its message id is kept
+    // for endSession().
     void postActivity(const std::string& line);
     // The server is empty again: the activity posted since the last endSession() is deleted. Lines queued
     // before this call are posted first, so none of them survives.
@@ -96,6 +101,9 @@ private:
     void sendPosts(std::deque<std::string> posts, bool track, clock::time_point& nextPost, clock::time_point giveUp);
     // Deletes the messages in toDelete_ (those left over are kept for the next pass, unless stopping).
     void deleteMessages(clock::time_point& nextPost, bool stopping);
+    // Config::trackFile: the ids still to delete (activity_ and toDelete_), one per line; read once at start.
+    void saveTracked();
+    void loadTracked();
     Config cfg_;
     Log log_;
     std::mutex m_;

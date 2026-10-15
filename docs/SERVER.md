@@ -66,6 +66,10 @@ webhook_status_id_file=webhook_status_id.txt
 webhook_joins=1
 webhook_status=0
 webhook_results=1
+; when the server empties, that session's posts are deleted; 1 keeps the finished runs
+webhook_keep_results=0
+; the ids of those posts until then, next to the log (a restart still cleans them up)
+webhook_activity_file=webhook_activity.txt
 ```
 
 The live message looks like this, and is updated within a few seconds of anyone joining or leaving:
@@ -82,8 +86,10 @@ players or writes it to the log. Posts are gathered for a couple of seconds and 
 (`sudo apt install libcurl4t64` on Ubuntu 24.04, `libcurl4` on older systems); without it the server runs and logs that
 the webhook is off.
 
-When the server empties again, the join and leave messages posted since it was last empty are deleted, so the
-channel shows the current session's players. The live status message and finished runs stay.
+When the server empties again, the posts since it was last empty (joins, leaves and finished runs) are deleted,
+so the channel shows only the current session. The live status message stays; `webhook_keep_results=1` keeps the
+finished runs too. The ids of those posts are kept in `webhook_activity_file`, so posts left by a restart, a
+crash or a stop while Discord was slow are deleted the next time the server starts.
 
 Console commands (type them in the server's window):
 

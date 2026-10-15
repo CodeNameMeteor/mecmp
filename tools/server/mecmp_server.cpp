@@ -95,6 +95,9 @@ struct Options {
     std::string logPath = "mecmp_server.log";
     std::string bansPath = "bans.txt";
     mecmp::server::Config relay;
+    bool keepResults = false; // webhook_keep_results: finished runs stay in Discord when the server empties
+    // On unless the ini says otherwise (an ini written before this key existed has no line for it).
+    Options() { discord.trackFile = "webhook_activity.txt"; }
 };
 Options g_opts;
 std::string g_configPath = "mecmp_server.ini";
@@ -130,6 +133,8 @@ bool readConfig(const std::string& path, Options& o, bool required) {
         else if (k == "webhook_results") o.discord.results = v != "0";
         else if (k == "webhook_live") o.discord.live = v != "0";
         else if (k == "webhook_status_id_file") o.discord.statusIdFile = v;
+        else if (k == "webhook_activity_file") o.discord.trackFile = v;
+        else if (k == "webhook_keep_results") o.keepResults = v == "1";
         else if (k == "public_address") o.publicAddress = v;
     }
     return true;
@@ -168,7 +173,12 @@ void writeDefaultConfig(const std::string& path) {
            "# (0 turns one off)\n"
            "webhook_joins=1\n"
            "webhook_status=0\n"
-           "webhook_results=1\n";
+           "webhook_results=1\n"
+           "# when the server is empty again, that session's posts (joins, leaves and finished runs) are deleted, so the\n"
+           "# channel shows only what is happening now; 1 keeps the finished runs\n"
+           "webhook_keep_results=0\n"
+           "# the ids of those posts until they are deleted (so a restart still cleans up)\n"
+           "webhook_activity_file=webhook_activity.txt\n";
     logLine("wrote " + path + " with the default settings (edit it to name the server or add a Discord webhook)");
 }
 
@@ -444,7 +454,7 @@ void reloadBansIfChanged(mecmp::server::Relay& relay) {
 // Two webhook settings are the same (the webhook is built once, at start).
 bool sameWebhook(const mecmp::server::discord::Config& a, const mecmp::server::discord::Config& b) {
     return a.url == b.url && a.username == b.username && a.joins == b.joins && a.status == b.status &&
-           a.results == b.results && a.live == b.live && a.statusIdFile == b.statusIdFile;
+           a.results == b.results && a.live == b.live && a.statusIdFile == b.statusIdFile && a.trackFile == b.trackFile;
 }
 
 // `reset`: every player is dropped, then mecmp_server.ini is read again (the command line still wins). The settings
@@ -580,11 +590,11 @@ int serverMain(int argc, char** argv) {
     namespace dc = mecmp::server::discord;
     dc::Config discordCfg = o.discord;
     if (discordCfg.username.empty()) discordCfg.username = o.relay.name;
-    if (!discordCfg.statusIdFile.empty() && discordCfg.statusIdFile.find_first_of("/\\") == std::string::npos &&
-        !o.logPath.empty()) {
+    for (std::string* file : {&discordCfg.statusIdFile, &discordCfg.trackFile}) {
+        if (file->empty() || file->find_first_of("/\\") != std::string::npos || o.logPath.empty()) continue;
         // next to the log (the server's folder), like bans.txt
         const auto dir = std::filesystem::path(o.logPath).parent_path();
-        if (!dir.empty()) discordCfg.statusIdFile = (dir / discordCfg.statusIdFile).string();
+        if (!dir.empty()) *file = (dir / *file).string();
     }
     dc::Webhook webhook(discordCfg, logLine);
     if (webhook.enabled()) webhook.setStatus(liveStatus(o, &relay)); // online; the address follows once known
@@ -608,7 +618,9 @@ int serverMain(int argc, char** argv) {
                     line += u8" \u2014 new record";
                     if ((r.flags & proto::kResultHadRecord) && r.delta > 0) line += " (" + proto::formatRunTime(r.delta) + " faster)";
                 }
-                webhook.post(line);
+                // Part of the session, deleted with its joins and leaves when the server is empty (unless kept).
+                if (g_opts.keepResults) webhook.post(line);
+                else webhook.postActivity(line);
                 return;
             }
             if (!webhook.config().joins) return;

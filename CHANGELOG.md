@@ -1,7 +1,52 @@
 # Changelog
 
-## Unreleased
+## 0.9.0: first public beta
 
+Run through the city of Glass with other players. Each player shows up as a ghost that copies their
+movement live: running, climbing, wall-running.
+
+### Playing together
+- **Host or join** from the in-game menu (INSERT, or both sticks on a gamepad). A host gets a short
+  **join code** to send to friends; the mod opens the port on the router (UPnP) when it can.
+- **Dedicated servers.** `mecmp_server` (Windows or Linux, no game needed) runs an always-on room
+  with bans, a welcome message and per-address limits. The menu's **server list** shows each
+  saved server's name, players and ping. See `docs/SERVER.md`.
+- The mod starts **offline**. Nothing is sent and no port is opened until you host, join or pick a
+  server; *Leave* goes offline again.
+- **Go to** a player: a short fade and you are where they are.
+- Player list with connection quality, and join/leave notices.
+
+### Seeing each other
+- Ghosts look like **Faith** or a **runner echo**; each player picks their own look. Echo ghosts show
+  in your own "Your Echo" style and colour: the game only has your own echo style loaded in free roam.
+- **Names** above players, and **arrows** at the screen's edge towards players you cannot see.
+- Smooth motion: poses are written on the game's own thread and blended between updates.
+- While you are in a session, the game's pause menu and map no longer stop the world.
+
+### Talking
+- **Text chat** (Enter by default).
+- **Positional voice** through Mumble's Link plugin. The menu shows whether positions are reaching
+  Mumble.
+- **Markers:** wheels of 33 icons with titles, several markers at once, lifetimes, bookmarks, and an
+  edge-of-screen arrow for markers out of view.
+
+### Menu
+- Tabs: Session (session and servers), Players (list, your look, other players), Markers, and
+  Controls (every key and gamepad button for the menu, chat and markers).
+- Mouse, keyboard or gamepad.
+
+### Under the hood
+- The mod never patches game code. It only swaps pointers in vtables and creator tables, and leaves
+  Denuvo, the EA app and the game's online services alone (Beat Revival keeps working).
+- Own UDP protocol (version 7), about 4–5 KB/s per player. Every player in a session needs the same
+  version.
+- No memory scans in normal play: what the mod needs is noted as the game builds each level.
+
+### Also in this release
+Summon, players on the game's map, finished runs and live run clocks, Discord posts from servers, quick
+answers, and more:
+
+#### Seeing what players do
 ### Dedicated server
 - **`reset` console command.** Drops every player (they rejoin on their own when their game next asks), clears the
   counters and reads `mecmp_server.ini` again, so a changed name, player limit or motd takes effect without a
@@ -12,20 +57,19 @@
 - **A run's clock above the runner.** While a player is in a dash (or a delivery, GridNode, MetaGrid run) or a
   time trial, their name tag shows it with a running clock: "Dash: The View  12.4". It clears when the run is
   finished or cancelled. The clock is counted from when the player's game started the run (the countdown
-  may be in it); it is for watching, not a result. Needs the new packet type 10 (a dedicated server must be
-  updated as well).
+  may be in it); it is for watching, not a result.
 - **"typing..." above a player** whose chat box is open.
 
-### Injector
+#### Injector
 - **The injector's window closes by itself** 10 seconds after a successful injection (a key closes it at
   once). After a failure it still waits for a key, so the error can be read.
 
-### Finished runs
+#### Finished runs
 - **When someone finishes a dash, everyone sees it**: "Meteor finished the dash The View in 1:23.45
   (new record, 2.10 faster)". Deliveries, GridNodes and the MetaGrid too; billboard hacks are not timed
   and are not announced. The time is what the player's own game reports.
 
-### Discord
+#### Discord
 - **Closing the server's window sets the live message to offline.** Closing the console window (its X), logging
   off or shutting Windows down used to end the server at once, so Discord kept saying it was online; only
   Ctrl+C or `quit` did it. The server now shuts down properly in the few seconds Windows allows, and the
@@ -37,7 +81,7 @@
   count, and finished runs with their times (`webhook_results`). Posts are batched and rate-limit aware;
   names cannot ping anyone. See docs/SERVER.md.
 
-### Players on the map
+#### Players on the map
 - **The session's players show on the game's map**, the way the game showed online friends: a marker
   with their Runner Tag that follows them, with their profile name on hover. It uses the game's own
   friend markers (10 per level). Needs online services (Beat Revival): the Runner Tag is loaded from
@@ -45,7 +89,7 @@
   `[player] share_profile`): sharing is off by default; when on, it sends your EA online id and profile
   name to your session, so you show on their maps.
 
-### Performance
+#### Performance
 - **Ghosts cost ~50x less per frame.** Writing a ghost's pose each frame took ~0.3 ms, almost all of it
   in Windows' WriteProcessMemory, which flushes the CPU's instruction cache on every call. The mod now
   uses the kernel call underneath it (just as safe if the memory is gone): ~13 us per pose write
@@ -56,12 +100,20 @@
 - **F9 logs a "perf:" line** (developer builds): time per call, calls per second and memory calls per
   call for each part of the mod (tick, capture, ghosts, render pose, UI check, overlay).
 
-### Changes
+#### Changes
 - **The solo test is a developer tool now.** Release builds have no *Solo test* button and ignore
   their own packets (joining yourself shows nobody). Developer builds keep it. A server started with
   `--mirror` still mirrors you, with any build.
 
-### Fixes
+#### Fixed since the test builds
+- **A player who went to the main menu or a loading screen stayed as a frozen ghost** for everyone else,
+  listed as live (and *Go to* took you to where they had been). Their game kept sending its last position;
+  now it sends nothing until it is in a level again, and their ghost is hidden as for anyone who stops.
+- **Joining a server by its name no longer freezes the game** while the name is looked up (seconds with a
+  slow or unreachable DNS server). The menu shows "Starting the session..." meanwhile.
+- **Names and titles in any language are kept in mecmp.ini.** The file was read and written in the system's
+  code page, so a name outside it (Japanese on a Western PC) came back as "??", and a file saved as UTF-8
+  (Notepad) was misread. mecmp.ini is now converted to Unicode (UTF-16) when it is read; your settings stay.
 - **The server starts with `--config` pointing at a file that does not exist yet** (the systemd setup in
   docs/SERVER.md does that): it writes the commented default there, as it does without `--config`. Before, it
   stopped at once with "cannot read".
@@ -108,7 +160,7 @@
   player who claims another player's session id, and limits each player to 80 packets a second.
   Before, one machine could take every slot of a session, and another player could send as someone else.
 
-### Marker wheel
+#### Marker wheel
 - **Instant wheel** (Controls tab): the wheel can open the moment the key goes down instead of after a
   short hold. A very short tap that never moves the pointer still places your marker.
 - **Easier to aim at a low mouse sensitivity.** The pointer is kept close to the middle, so turning to
@@ -119,14 +171,14 @@
   raising N again brings them back. Digits, wedges and the tap slot follow.
 - **Wheel names.** Each wheel can have its own title.
 
-### Markers
+#### Markers
 - Markers are drawn 15% smaller until your crosshair is on one, then they grow to 10% over their old size.
 - **Double tap the clear key** (X now, was H) to remove just the marker of yours you look at (the one
   at your feet within 1.5 m when markers go where you stand). Holding it still removes all of them.
 - Titles of markers that would cover each other, or another marker's icon, stack upwards (only up,
   so they do not jump about), with a thin line back to their marker.
 
-### Keys
+#### Keys
 - **Mouse 4 / Mouse 5** can be bound to the marker, quick answer and the new keys below (nothing is
   bound to them by default).
 - **Place the other way** (B): a marker where you stand if markers go where you look, and the other
@@ -136,12 +188,11 @@
 - **Previous / next wheel** (Q / E) while the wheel is open. The arrows and the mouse wheel still work.
   While the marker key is down the game does not see the wheel's keys (digits, arrows, Q, E).
 
-### Quick answers
+#### Quick answers
 - New **react key** (C by default): look at another player's marker, tap to send your last quick
   answer, hold for the answers wheel. The owner sees `Name reacted "On my way" to your "Here" marker`.
-  Needs the new packet type, so a dedicated server must be updated as well.
 
-### Summon
+#### Summon
 - **Call players to where you stand.** Tap **G** to call everyone, or tick players in the Players tab
   and press *Summon selected*. Each player sees a *Summon point* marker at your spot and a panel at the
   top: hold **1** for a second to go there, hold **2** to say no (nothing is done by itself; the call
@@ -159,54 +210,10 @@
   behind a dedicated server nobody is trusted at all (there a hard summon only asks).
 - New keys on the Controls tab: `summon_key`, `summon_accept_key`, `summon_decline_key` (digits are
   allowed now) and `summon_accept_pad` / `summon_decline_pad`; `hard_summon_grace_ms` sets the countdown.
-- Needs the new packet types 7 and 8 (protocol number unchanged), so a dedicated server must be
-  updated as well; older versions ignore them.
 
-### Gamepad
+#### Gamepad
 - **PlayStation names** for the buttons in hints (Controls tab, `pad_labels`). Settings keep Xbox names.
 - Tool bag now has a tooltip like MagRope and GridLink.
-
-## 0.9.0: first public beta
-
-Run through the city of Glass with other players. Each player shows up as a ghost that copies their
-movement live: running, climbing, wall-running.
-
-### Playing together
-- **Host or join** from the in-game menu (INSERT, or both sticks on a gamepad). A host gets a short
-  **join code** to send to friends; the mod opens the port on the router (UPnP) when it can.
-- **Dedicated servers.** `mecmp_server` (Windows or Linux, no game needed) runs an always-on room
-  with bans, a welcome message and per-address limits. The menu's **server list** shows each
-  saved server's name, players and ping. See `docs/SERVER.md`.
-- The mod starts **offline**. Nothing is sent and no port is opened until you host, join or pick a
-  server; *Leave* goes offline again.
-- **Go to** a player: a short fade and you are where they are.
-- Player list with connection quality, and join/leave notices.
-
-### Seeing each other
-- Ghosts look like **Faith** or a **runner echo**; each player picks their own look. Echo ghosts show
-  in your own "Your Echo" style and colour: the game only has your own echo style loaded in free roam.
-- **Names** above players, and **arrows** at the screen's edge towards players you cannot see.
-- Smooth motion: poses are written on the game's own thread and blended between updates.
-- While you are in a session, the game's pause menu and map no longer stop the world.
-
-### Talking
-- **Text chat** (Enter by default).
-- **Positional voice** through Mumble's Link plugin. The menu shows whether positions are reaching
-  Mumble.
-- **Markers:** wheels of 33 icons with titles, several markers at once, lifetimes, bookmarks, and an
-  edge-of-screen arrow for markers out of view.
-
-### Menu
-- Tabs: Session (session and servers), Players (list, your look, other players), Markers, and
-  Controls (every key and gamepad button for the menu, chat and markers).
-- Mouse, keyboard or gamepad.
-
-### Under the hood
-- The mod never patches game code. It only swaps pointers in vtables and creator tables, and leaves
-  Denuvo, the EA app and the game's online services alone (Beat Revival keeps working).
-- Own UDP protocol (version 6), about 4–5 KB/s per player. Every player in a session needs the same
-  version.
-- No memory scans in normal play: what the mod needs is noted as the game builds each level.
 
 ### Known issues
 - Echo ghosts use your own echo style (see above).

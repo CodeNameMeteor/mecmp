@@ -66,7 +66,8 @@
 - **The summon key (G, `summon_key`) is gone**: the panel does what it did. The accept and decline keys stay.
 - **Summon again after 5 s** instead of 10 s.
 - **The Controls tab folds**: Markers, Players panel and Summon answers start open; Quick answers, Chat, Overlay,
-  Menu and Gamepad are closed, and *Advanced* holds how the wheel opens and the pointer speeds.
+  Menu and Gamepad are closed, and *Advanced* holds how the wheel opens and the pointer speeds. The Markers and
+  Display tabs fold the same way; their *Advanced* holds *Flash markers when placed* and the interface size.
 - **The mod's mouse cursor follows the Windows pointer speed** (the menu, the panel and the marker wheels' pointer;
   it used the mouse's raw counts, much too fast with a high-DPI mouse), plus a *Menu mouse speed* setting
   (`menu_mouse_speed`).

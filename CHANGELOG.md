@@ -10,6 +10,10 @@
   crashed mid-session deletes them at its next start.
 
 ### Fixes
+- **Ghost spawner choice is steady during time trials.** A trial brings a ghost spawner that scores the same
+  as the city's, and the mod switched between the two every few seconds ("ghost spawner ... chosen" over and
+  over in the log); a ghost made from the trial's one would go when the trial ends. The current spawner now
+  stays unless another is clearly better.
 - **Fixed a crash with *Players on the map*** in some builds (MSVC Release): the position handed to the game's
   friend-marker code was not 16-byte aligned, which the game requires there.
 - **Time trials with names outside plain ASCII** (accents, other alphabets) are named in the finish notice and on

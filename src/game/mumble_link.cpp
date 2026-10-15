@@ -3,11 +3,13 @@
 #include <windows.h>
 #include <tlhelp32.h>
 
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <thread>
 
 #include "core/config.h"
 #include "core/log.h"
@@ -155,14 +157,19 @@ void update() {
 Status status() {
     Status s;
     s.enabled = config::get()->mumbleLink;
-    static DWORD checkedAt = 0;
-    static bool running = false;
+    // Listing every process takes a few milliseconds, too long for the render thread (the menu asks every
+    // frame): it runs on a helper thread at most every 3 s, and the menu shows the last answer.
+    static std::atomic<bool> running{false}, checking{false};
+    static std::atomic<DWORD> checkedAt{0};
     const DWORD now = GetTickCount();
-    if (!checkedAt || now - checkedAt > 3000) {
-        checkedAt = now;
-        running = mumbleProcessRunning();
+    if ((!checkedAt.load() || now - checkedAt.load() > 3000) && !checking.exchange(true)) {
+        checkedAt = now | 1;
+        std::thread([] {
+            running = mumbleProcessRunning();
+            checking = false;
+        }).detach();
     }
-    s.mumbleFound = running || (g_lm && g_openedExisting);
+    s.mumbleFound = running.load() || (g_lm && g_openedExisting);
     s.sending = g_lm && g_lastSent && now - g_lastSent < 1000;
     s.inSession = g_context[0] != 0;
     memcpy(s.context, g_context, sizeof(s.context));

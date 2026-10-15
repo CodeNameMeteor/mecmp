@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Fixes
+- **Time trials with names outside plain ASCII** (accents, other alphabets) are named in the finish notice and on
+  Discord; such a name used to be left out.
+- **The overlay hands the game back its render targets** after drawing, skips the game's test presents (which
+  show nothing), finds the fonts wherever Windows is installed (not only on C:), and stores the game's window
+  procedure before taking over its input (a message arriving in between was lost).
+- **No hitch while the menu shows the voice status**: checking whether Mumble runs (a list of every process)
+  moved off the render thread.
+
 ### Markers
 - **Colors of their own per marker.** Each slot of a marker wheel has two swatches next to its title: the
   marker's own color and secondary color. A faded swatch follows the main color; right-click a set one to

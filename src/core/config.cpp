@@ -245,6 +245,54 @@ bool parseBookmark(const std::string& text, Bookmark& out) {
     return true;
 }
 
+// The profile API reads and writes a file without a UTF-16 byte order mark in the system's ANSI code page, so
+// a name or title outside it (Japanese on a Western PC) was saved as "??", and a file saved as UTF-8 (Notepad's
+// default) was read wrongly ("Zoë" became "ZoÃ«"). A file in UTF-16 with its mark is read and written as
+// Unicode, so mecmp.ini is turned into one: decoded as UTF-8 when it is valid UTF-8 (plain ASCII is), else in
+// the ANSI code page (files written by earlier versions), then written back beside it and moved over it.
+void makeUnicode(const std::wstring& ini) {
+    std::string bytes;
+    if (FILE* f = _wfopen(ini.c_str(), L"rb")) {
+        char buf[4096];
+        size_t n;
+        while ((n = fread(buf, 1, sizeof(buf), f)) > 0) bytes.append(buf, n);
+        fclose(f);
+        if (bytes.size() > (4u << 20)) return; // not a settings file we wrote: leave it alone
+    } else {
+        return;
+    }
+    if (bytes.size() >= 2 && static_cast<unsigned char>(bytes[0]) == 0xFF && static_cast<unsigned char>(bytes[1]) == 0xFE)
+        return; // UTF-16 already
+    size_t skip = 0;
+    if (bytes.size() >= 3 && bytes.compare(0, 3, "\xEF\xBB\xBF") == 0) skip = 3; // a UTF-8 mark
+    const char* src = bytes.data() + skip;
+    const int len = static_cast<int>(bytes.size() - skip);
+    std::wstring text;
+    if (len > 0) {
+        UINT cp = CP_UTF8;
+        int chars = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, src, len, nullptr, 0);
+        if (chars <= 0) {
+            cp = CP_ACP;
+            chars = MultiByteToWideChar(CP_ACP, 0, src, len, nullptr, 0);
+        }
+        if (chars <= 0) return;
+        text.resize(static_cast<size_t>(chars));
+        MultiByteToWideChar(cp, cp == CP_UTF8 ? MB_ERR_INVALID_CHARS : 0, src, len, &text[0], chars);
+    }
+    const std::wstring tmp = ini + L".tmp";
+    FILE* out = _wfopen(tmp.c_str(), L"wb");
+    if (!out) return;
+    const unsigned char bom[2] = {0xFF, 0xFE};
+    bool ok = fwrite(bom, 1, 2, out) == 2 && fwrite(text.data(), sizeof(wchar_t), text.size(), out) == text.size();
+    ok = fclose(out) == 0 && ok;
+    if (!ok || !MoveFileExW(tmp.c_str(), ini.c_str(), MOVEFILE_REPLACE_EXISTING)) {
+        DeleteFileW(tmp.c_str());
+        MLOG("config: could not convert mecmp.ini to Unicode; names outside your system's code page may not be saved");
+        return;
+    }
+    VLOG("config: mecmp.ini converted to Unicode (UTF-16)");
+}
+
 // "wheel1_label_3"
 std::wstring wheelKey(int wheel, const wchar_t* what, int slot) {
     return L"wheel" + std::to_wstring(wheel + 1) + L"_" + what + L"_" + std::to_wstring(slot + 1);
@@ -311,6 +359,7 @@ void load(const std::wstring& dir) {
             MLOG("config: wrote default %ls", ini.c_str());
         }
     }
+    makeUnicode(ini);
     auto built = std::make_shared<Settings>();
     Settings& s = *built;
     s.netEnabled = readInt(ini, L"net", L"enabled", 1) != 0;

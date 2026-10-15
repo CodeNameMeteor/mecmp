@@ -105,6 +105,11 @@ public:
     bool unban(const std::string& ip);
     const std::set<uint32_t>& bans() const { return bans_; }
     void setBans(std::set<uint32_t> ips); // e.g. bans.txt (re)loaded; drops players now banned
+    // `reset`: every player is dropped (each leave is reported), and the session-id reservations, pending notices,
+    // server chat and counters start again. Bans stay, and so do kick blocks (they run out by themselves).
+    void reset();
+    // The settings read again (`reset`): players stay connected; a lower limit only refuses new ones.
+    void reconfigure(Config cfg);
 
     void setOnEvent(OnEvent f) { onEvent_ = std::move(f); }
     const std::vector<Member>& members() const { return members_; }

@@ -408,4 +408,16 @@ void Relay::setBans(std::set<uint32_t> ips) {
     }
 }
 
+void Relay::reset() {
+    while (!members_.empty()) drop(0, "server reset");
+    reserved_.clear();
+    notices_.clear();
+    chat_.clear();
+    fullWarned_ = false;
+    fullWarnAt_ = 0;
+    stats_ = Stats{};
+}
+
+void Relay::reconfigure(Config cfg) { cfg_ = std::move(cfg); }
+
 } // namespace mecmp::server

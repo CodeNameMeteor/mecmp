@@ -110,7 +110,7 @@ void tick() {
     const bool otherWay = what == kTapOtherWay;
     float pos[3];
     if (!pickPoint(pos, otherWay)) {
-        VLOG("ping: no position right now (not in a level?)");
+        MLOG("ping: no position right now (not in a level?)");
         return;
     }
     placeAt(cfg, otherWay ? kTap : what, pos);

@@ -188,8 +188,7 @@ constexpr const char* kDefaultIniTail =
     "count=0\r\n"
     "\r\n"
     "[debug]\r\n"
-    "; 1 = detailed diagnostic log (for bug reports)\r\n"
-    "verbose=0\r\n";
+    "; 1 = detailed diagnostic log, for bug reports (developer builds start with 1)\r\n";
 
 // The profile API cuts a value that does not fit its buffer, without saying so. Values are read into a
 // buffer that grows until the whole value fits, up to kMaxProfileChars; a longer value is still cut.
@@ -307,6 +306,7 @@ void load(const std::wstring& dir) {
                             i + 1, glyphName(wheel[i].glyph));
             }
             fputs(kDefaultIniTail, f);
+            fprintf(f, "verbose=%d\r\n", MECMP_VERBOSE_DEFAULT);
             fclose(f);
             MLOG("config: wrote default %ls", ini.c_str());
         }
@@ -430,7 +430,7 @@ void load(const std::wstring& dir) {
             if (parseBookmark(readString(ini, L"bookmarks", (L"b" + std::to_wstring(i + 1)).c_str(), ""), b)) s.bookmarks.push_back(b);
         }
     }
-    s.verbose = readInt(ini, L"debug", L"verbose", 0) != 0;
+    s.verbose = readInt(ini, L"debug", L"verbose", MECMP_VERBOSE_DEFAULT) != 0;
     log::verbose = s.verbose;
     s.ignoreBuildCheck = readInt(ini, L"debug", L"ignore_build_check", 0) != 0;
     {
@@ -480,6 +480,7 @@ void applyPending() {
                 persist = persist || c.persist;
             }
             g_settings = next;
+            VLOG("config: %llu change(s) applied", static_cast<unsigned long long>(todo.size()));
             if (persist) {
                 if (!g_saveWanted) g_firstUnsavedAt = now;
                 g_saveWanted = true;
@@ -491,13 +492,18 @@ void applyPending() {
         snapshot = g_settings;
     }
     const std::wstring ini = g_dir + L"mecmp.ini";
+    bool saveFailed = false; // a write that Windows refused: logged once, after the last write
+    DWORD saveError = 0;
     auto put = [&](const wchar_t* sec, const wchar_t* key, const std::string& v) {
         // Sized to the value: a fixed buffer that is too small makes the conversion fail, and the value is
         // then written empty.
         const int chars = MultiByteToWideChar(CP_UTF8, 0, v.c_str(), -1, nullptr, 0);
         std::vector<wchar_t> w(chars > 0 ? static_cast<size_t>(chars) : 1, L'\0');
         if (chars > 0) MultiByteToWideChar(CP_UTF8, 0, v.c_str(), -1, w.data(), chars);
-        WritePrivateProfileStringW(sec, key, w.data(), ini.c_str());
+        if (!WritePrivateProfileStringW(sec, key, w.data(), ini.c_str()) && !saveFailed) {
+            saveFailed = true;
+            saveError = GetLastError();
+        }
     };
     put(L"player", L"name", snapshot->name);
     put(L"net", L"join", snapshot->join);
@@ -584,6 +590,7 @@ void applyPending() {
     put(L"bookmarks", L"count", std::to_string(snapshot->bookmarks.size()));
     for (size_t i = 0; i < snapshot->bookmarks.size(); ++i)
         put(L"bookmarks", (L"b" + std::to_wstring(i + 1)).c_str(), formatBookmark(snapshot->bookmarks[i]));
+    if (saveFailed) MLOG("config: could not save mecmp.ini (error %lu): the changes are only in memory until the next save", saveError);
     MLOG("config: saved");
 }
 

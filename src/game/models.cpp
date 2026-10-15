@@ -334,7 +334,7 @@ bool apply(void* ghost, const std::string& wanted, std::string* usedName) {
     if (w == "faith" || w.rfind("faith:", 0) == 0) {
         std::vector<uintptr_t> base;
         if (!playerBasePieces(base)) {
-            VLOG("model: could not read Faith's outfit from the player character");
+            MLOG("model: could not read Faith's outfit from the player character");
             return false;
         }
         const uint8_t outfit = w.size() > 6 ? static_cast<uint8_t>(strtoul(w.c_str() + 6, nullptr, 10)) : 0;
@@ -442,7 +442,7 @@ void addFirstPersonTwins(std::vector<uintptr_t>& pieces) {
     for (uintptr_t v : asked) {
         if (mem::readOr<uint8_t>(v + VisualUnlock_RenderIn1p, 1) != 0) continue;
         if (used >= spare.size()) {
-            VLOG("look: no placeholder piece left for a first-person twin of %s", assetName(v).c_str());
+            MLOG("look: no placeholder piece left for a first-person twin of %s", assetName(v).c_str());
             break;
         }
         const uintptr_t donor = spare[used++];
@@ -642,7 +642,7 @@ bool findPieces() {
         if (isFirstPersonPiece(v)) ++firstPerson;
         if (!sane(v)) {
             ++wrong;
-            VLOG("look: piece '%s' has RenderIn1p %u, not as its name says", assetName(v).c_str(),
+            MLOG("look: piece '%s' has RenderIn1p %u, not as its name says", assetName(v).c_str(),
                  mem::readOr<uint8_t>(v + VisualUnlock_RenderIn1p, 0xff));
         }
     }

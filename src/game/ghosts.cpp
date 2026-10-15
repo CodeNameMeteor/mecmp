@@ -387,7 +387,10 @@ void keepGameCharacterLast(void* spawner) {
 
 void* spawnGhost(uint32_t peer, const std::string& name, uint32_t look, uint8_t outfit, const net::PlayerState& st) {
     void* spawner = level::ghostSpawner();
-    if (!level::spawnerAlive(spawner)) return nullptr;
+    if (!level::spawnerAlive(spawner)) {
+        MLOG("ghost: no ghost spawner to spawn %08x from (not in a level, or not found yet)", peer);
+        return nullptr;
+    }
     const uintptr_t sd = mem::readOr<uintptr_t>(reinterpret_cast<uintptr_t>(spawner) + Spawner_Data);
     const uintptr_t sbp = sd ? mem::readOr<uintptr_t>(sd + ReferenceObjectData_Blueprint) : 0;
     if (const uintptr_t d = sbp ? blueprintCharacterData(sbp) : 0) {
@@ -426,9 +429,10 @@ void* spawnGhost(uint32_t peer, const std::string& name, uint32_t look, uint8_t 
             }
     }
     if (!ch) {
-        MLOG("ghost: the spawner returned no character");
+        MLOG("ghost: the spawner returned no character for %08x", peer);
         return nullptr;
     }
+    VLOG("ghost: spawned %p for %08x (look %08x, outfit %u)", ch, peer, look, outfit);
     if (const uintptr_t d = mem::readOr<uintptr_t>(reinterpret_cast<uintptr_t>(ch) + Character_Data)) {
         if (g_ghostCharData && g_ghostCharData != d)
             MLOG("ghost: ghost character data is %p, not %p as expected from the blueprint", reinterpret_cast<void*>(d),
@@ -530,7 +534,7 @@ bool onClientReplayComp(void* comp) {
         if (g.peer == peer && !g.clientComp) {
             if (owner && g.clientChar && reinterpret_cast<uintptr_t>(g.clientChar) != owner) continue;
             g.clientComp = comp;
-            if (!owner) VLOG("ghost: claimed replay component %p without a known owner", comp);
+            if (!owner) MLOG("ghost: claimed replay component %p without a known owner", comp);
             return true;
         }
     return false;
@@ -597,7 +601,12 @@ void renderFrame() {
             thread_local uint32_t skipPeer = 0, skipCount = ~0u;
             const bool skip = !pose || bones != st.boneCount || !bones || bones > kMaxBones;
             if (skip && (skipPeer != targets[i].peer || skipCount != st.boneCount)) {
-                VLOG("ghost: player %08x not posed (ghost has %u bones, packet %u)", targets[i].peer, bones, st.boneCount);
+                static DWORD lastNote = 0; // a mismatch repeats every frame: one note per 10 s
+                if (GetTickCount() - lastNote > 10000) {
+                    lastNote = GetTickCount();
+                    MLOG("ghost: player %08x is not posed (its ghost has %u bones, its packets %u)", targets[i].peer, bones,
+                         st.boneCount);
+                }
                 skipPeer = targets[i].peer;
                 skipCount = st.boneCount;
             } else if (!skip && skipPeer == targets[i].peer) {

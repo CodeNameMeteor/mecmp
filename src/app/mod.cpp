@@ -219,7 +219,8 @@ void run(HMODULE self) {
     log::open(self);
     wchar_t path[MAX_PATH] = {};
     GetModuleFileNameW(self, path, MAX_PATH);
-    MLOG("MECMP %s loaded from %ls", kVersion, path);
+    MLOG("MECMP %s loaded from %ls (verbose log %s, %s build)", kVersion, path, log::verbose ? "on" : "off",
+         MECMP_VERBOSE_DEFAULT ? "developer" : "release");
     diagnostics::install(self);
     std::wstring dir = path;
     dir = dir.substr(0, dir.find_last_of(L"\\/") + 1);
@@ -249,7 +250,7 @@ void run(HMODULE self) {
         net::shutdown(2000);
         net::servers::shutdown();
     });
-    ui::install();
+    if (!ui::install()) MLOG("startup: the menu could not be set up; the overlay and the menu are off");
     const auto cfg = config::get();
     net::setLook(config::lookHash(cfg->look), static_cast<uint8_t>(cfg->outfit));
     game::models::setOwnLook(config::lookHash(cfg->look), static_cast<uint8_t>(cfg->outfit), cfg->lookSelf);

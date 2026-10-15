@@ -641,6 +641,28 @@ static void testSummonReply() {
     CHECK(!protocol::readSummonReply(buf + sizeof(h), n - sizeof(h), out));
 }
 
+// "May I come to you?" and its answers.
+static void testVisit() {
+    char buf[protocol::kMaxPacket];
+    const protocol::Header h{protocol::kMagic, protocol::kProtocol, protocol::kTypeVisit, 7, 1};
+    CHECK(protocol::knownType(protocol::kTypeVisit));
+    for (uint8_t kind : {protocol::kVisitAsk, protocol::kVisitYes, protocol::kVisitNo, protocol::kVisitWithdraw}) {
+        protocol::Visit in, out;
+        in.id = 33;
+        in.target = 0x12345678u;
+        in.kind = kind;
+        const size_t n = protocol::writeVisit(buf, h, in);
+        CHECK(n == sizeof(h) + 9);
+        CHECK(protocol::readVisit(buf + sizeof(h), n - sizeof(h), out));
+        CHECK(out.id == 33 && out.target == 0x12345678u && out.kind == kind);
+        for (size_t cut = 0; cut < n - sizeof(h); ++cut) CHECK(!protocol::readVisit(buf + sizeof(h), cut, out));
+        buf[n - 1] = 4; // a kind nobody knows
+        CHECK(!protocol::readVisit(buf + sizeof(h), n - sizeof(h), out));
+    }
+    // The flag that asks for it is not one the relays clear.
+    CHECK((protocol::kHelloAskVisit & (protocol::kHelloHost | protocol::kHelloServer | protocol::kHelloMembersHard)) == 0);
+}
+
 static void testPingTail() {
     char buf[protocol::kMaxPacket];
     protocol::Header h{protocol::kMagic, protocol::kProtocol, protocol::kTypePing, 7, 1};
@@ -818,6 +840,7 @@ int main() {
     testSummon();
     testSummonHostPolicy();
     testSummonReply();
+    testVisit();
     testSummonDecide();
     testSummonReport();
     testPingTail();

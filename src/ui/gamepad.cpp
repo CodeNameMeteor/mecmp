@@ -31,6 +31,7 @@ struct Pad {
     std::atomic<uint16_t> held{0};
     std::atomic<bool> swallow[kActions];
     std::atomic<uint16_t> wheelButtons{0}; // LB/RB pressed for the marker wheel: hidden until released
+    std::atomic<uint8_t> triggers{0};      // bit 0 = LT, bit 1 = RT pulled past half (last read)
 };
 Pad g_pads[XUSER_MAX_COUNT];
 std::atomic<bool> g_hideAccept{false}, g_hideDecline{false}; // the summon panel's buttons are hidden from the game
@@ -100,7 +101,7 @@ DWORD WINAPI getState(DWORD user, XINPUT_STATE* st) {
     const uint16_t now = st->Gamepad.wButtons;
     const uint16_t before = pad.held.exchange(now);
     uint16_t hidden = 0; // buttons the game must not see this time
-    bool pingPressed = false, reactPressed = false, clearPressed = false;
+    bool pingPressed = false, reactPressed = false, clearPressed = false, playersPressed = false;
     if (g_capture.load() != 0) track(static_cast<int>(user), now);
     for (int a = 0; a < kActions; ++a) {
         const uint16_t bind = g_binding[a].load();
@@ -119,6 +120,11 @@ DWORD WINAPI getState(DWORD user, XINPUT_STATE* st) {
                     reactPressed = true; // a short press sends the last answer, a long one opens its wheel
                     pad.swallow[a] = true;
                 }
+            } else if (a == static_cast<int>(Action::Players)) {
+                if (!ui::menuOpen() && !game::hooks::gameMenuOpen()) {
+                    playersPressed = true; // held: the players panel
+                    pad.swallow[a] = true;
+                }
             } else if (a == static_cast<int>(Action::PingClear) && g_wheelPad.load() == static_cast<int>(user) &&
                        radial::engaged()) {
                 clearPressed = true; // only while the marker buttons are held; otherwise the game has these buttons
@@ -135,9 +141,12 @@ DWORD WINAPI getState(DWORD user, XINPUT_STATE* st) {
     if (g_hideDecline.load() && summonHides) hidden = static_cast<uint16_t>(hidden | g_binding[static_cast<int>(Action::SummonDecline)].load());
     // The marker wheel: this pad's right stick points at a slot and LB/RB switch wheel while it is open.
     bool wheelOpen = false;
-    if ((pingPressed || reactPressed) && g_wheelPad.load() < 0) {
+    const uint8_t trigNow = static_cast<uint8_t>((st->Gamepad.bLeftTrigger > 128 ? 1 : 0) | (st->Gamepad.bRightTrigger > 128 ? 2 : 0));
+    const uint8_t trigWent = static_cast<uint8_t>(trigNow & ~pad.triggers.exchange(trigNow));
+    bool panelOpen = false;
+    if ((pingPressed || reactPressed || playersPressed) && g_wheelPad.load() < 0) {
         g_wheelPad = static_cast<int>(user);
-        g_wheelAction = static_cast<int>(pingPressed ? Action::Ping : Action::React);
+        g_wheelAction = static_cast<int>(pingPressed ? Action::Ping : reactPressed ? Action::React : Action::Players);
     }
     if (g_wheelPad.load() == static_cast<int>(user)) {
         const int action = g_wheelAction.load();
@@ -145,11 +154,15 @@ DWORD WINAPI getState(DWORD user, XINPUT_STATE* st) {
         const bool held = bind && g_capture.load() == 0 && (now & bind) == bind;
         const uint16_t shoulders = static_cast<uint16_t>((XINPUT_GAMEPAD_LEFT_SHOULDER | XINPUT_GAMEPAD_RIGHT_SHOULDER) & ~bind);
         const uint16_t went = static_cast<uint16_t>(now & ~before & shoulders);
-        const radial::Mode mode = action == static_cast<int>(Action::React) ? radial::Mode::React : radial::Mode::Markers;
-        wheelOpen = radial::padUpdate(mode, pingPressed || reactPressed, held, st->Gamepad.sThumbRX / 32767.f,
+        const bool players = action == static_cast<int>(Action::Players);
+        const radial::Mode mode = action == static_cast<int>(Action::React) ? radial::Mode::React
+                                  : players                                  ? radial::Mode::Players
+                                                                             : radial::Mode::Markers;
+        wheelOpen = radial::padUpdate(mode, pingPressed || reactPressed || playersPressed, held, st->Gamepad.sThumbRX / 32767.f,
                                       -st->Gamepad.sThumbRY / 32767.f,
                                       (went & XINPUT_GAMEPAD_LEFT_SHOULDER) != 0, (went & XINPUT_GAMEPAD_RIGHT_SHOULDER) != 0,
-                                      clearPressed);
+                                      clearPressed, (trigWent & 2) != 0, (trigWent & 1) != 0);
+        panelOpen = wheelOpen && players;
         if (wheelOpen) pad.wheelButtons = static_cast<uint16_t>(pad.wheelButtons | (now & shoulders));
         if (!held) g_wheelPad = -1;
     }
@@ -164,6 +177,7 @@ DWORD WINAPI getState(DWORD user, XINPUT_STATE* st) {
     } else if (hidden || wheelOpen) {
         st->Gamepad.wButtons = static_cast<uint16_t>(st->Gamepad.wButtons & ~hidden);
         if (wheelOpen) st->Gamepad.sThumbRX = st->Gamepad.sThumbRY = 0; // the camera stays still
+        if (panelOpen) st->Gamepad.bLeftTrigger = st->Gamepad.bRightTrigger = 0; // the triggers are the panel's
         st->dwPacketNumber = 0x80000000u | g_fakePacket.fetch_add(1);
     }
     return r;

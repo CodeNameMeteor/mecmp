@@ -12,11 +12,13 @@
 #include <cstdio>
 #include <mutex>
 #include <string>
+#include <vector>
 
 #include "core/config.h"
 #include "game/camera_math.h"
 #include "game/hooks.h"
 #include "game/ping_point.h"
+#include "game/teleport.h"
 #include "imgui.h"
 #include "net/net.h"
 #include "net/protocol.h"
@@ -26,6 +28,7 @@
 #include "ui/markers.h"
 #include "ui/notices.h"
 #include "ui/overlay.h"
+#include "ui/summon.h"
 
 namespace mecmp::ui::radial {
 namespace {
@@ -39,6 +42,9 @@ constexpr float kPointerMax = 3.75f;
 // A pad's stick: a quarter of its travel is the dead zone; the rest reaches kPointerMax.
 constexpr float kPadReach = kDeadZone / 0.25f;
 constexpr DWORD kPadSilentMs = 500; // a pad that stopped reporting has let go
+// The players panel on a pad: the stick's dead zone, and how far a full push moves the pointer per second
+// (in font sizes; the panel is about 30 wide).
+constexpr float kPadPanelDead = 0.2f, kPadPanelSpeed = 32.f;
 constexpr float kFadeInMs = 80.f;   // instant wheel: fades in, so a very short tap does not flash it
 
 // Idle -> Held (the key is down) -> Open (held long enough: the wheel shows) -> Idle on release.
@@ -59,8 +65,113 @@ bool g_instant = false;     // the setting when this press began
 float g_unit = 18.f; // the font size of the last drawn frame
 markers::Focus g_target;    // React: the marker the answer goes to, fixed when the key went down
 std::string g_note;         // a notice to show on the next frame (the render thread owns the notices)
-// Copies of the state for the threads that only ask.
-std::atomic<bool> g_open{false}, g_engaged{false}, g_reacting{false};
+// Copies of the state for the threads that only ask. g_marking = the markers wheel is up (not answers, not players).
+std::atomic<bool> g_open{false}, g_engaged{false}, g_marking{false}, g_listing{false}; // listing = the players panel
+
+// The players panel (Mode::Players). Its list is refreshed by the render thread every frame; the layout is
+// the one drawn last, so the pointer is tested against what is on screen.
+constexpr int kPerPage = 9;
+struct Player {
+    uint32_t id = 0;
+    std::string name;
+    bool live = false;  // heard from in the last second: Go to needs that
+    bool inRun = false; // in a time trial or a dash
+    bool asks = false;  // wants to be asked before Go to (VISIT)
+};
+struct Box {
+    float x0 = 0.f, y0 = 0.f, x1 = 0.f, y1 = 0.f; // from the middle of the screen, in pixels
+    bool has(float x, float y) const { return x >= x0 && x <= x1 && y >= y0 && y <= y1; }
+};
+struct Layout {
+    float halfW = 0.f, halfH = 0.f;
+    int count = 0;           // players on this page
+    Box buttons[kPerPage];
+    bool host = false;       // may pull players in: the "Hard summon" tick box is shown
+    Box hardBox, allBox;     // "Hard summon" (a tick box) and the summon button (everyone / picked / withdraw)
+    float titleY = 0.f, gridY = 0.f, hintY = 0.f;
+};
+std::vector<Player> g_players; // in a stable order (session id)
+int g_page = 0;
+bool g_hard = false;           // "Hard summon" is ticked (for this opening only)
+bool g_withdraw = false;       // our summon still waits for answers: the summon button withdraws it
+std::vector<uint32_t> g_picked; // ticked players (session ids), for this opening only
+bool g_picksGone = false;       // every picked player left: the next press of the button only says so
+Layout g_layout;
+// What a click asked for; done by the render thread (summon and its notices live there).
+enum class Act { None, GoTo, SummonGroup, Withdraw };
+struct Action {
+    Act act = Act::None;
+    uint32_t id = 0;
+    std::string name;
+    bool live = false, inRun = false, asks = false;
+    std::vector<uint32_t> targets; // SummonGroup: empty = everyone
+    bool hard = false;
+};
+Action g_action;
+
+bool picked(uint32_t id) { return std::find(g_picked.begin(), g_picked.end(), id) != g_picked.end(); }
+
+int pageCount() { return std::max(1, (static_cast<int>(g_players.size()) + kPerPage - 1) / kPerPage); }
+
+// The panel's boxes for `count` players on the page; `unit` = the font size.
+Layout layoutPanel(int count, bool host, float unit) {
+    Layout l;
+    l.count = count;
+    l.host = host;
+    const int cols = count <= 2 ? std::max(count, 1) : count == 4 ? 2 : 3;
+    const int rows = std::max(1, (count + cols - 1) / cols);
+    const float bw = unit * 8.5f, bh = unit * 2.7f, gap = unit * 0.6f, pad = unit * 1.1f;
+    const float titleH = unit * 2.0f, hintH = unit * 2.0f, hostH = unit * 2.0f;
+    const float gridW = cols * bw + (cols - 1) * gap, gridH = rows * bh + (rows - 1) * gap;
+    const float w = std::max(gridW, unit * 19.f) + 2.f * pad;
+    const float h = pad + titleH + gridH + gap + hostH + gap + hintH + pad;
+    l.halfW = w * 0.5f;
+    l.halfH = h * 0.5f;
+    const float top = -l.halfH;
+    l.titleY = top + pad + titleH * 0.4f;
+    l.gridY = top + pad + titleH;
+    for (int i = 0; i < count && i < kPerPage; ++i) {
+        const int r = i / cols, c = i % cols;
+        const int inRow = std::min(cols, count - r * cols); // a short last row is centred
+        const float rowW = inRow * bw + (inRow - 1) * gap;
+        const float x0 = -rowW * 0.5f + c * (bw + gap), y0 = l.gridY + r * (bh + gap);
+        l.buttons[i] = {x0, y0, x0 + bw, y0 + bh};
+    }
+    float y = l.gridY + gridH + gap;
+    // The summon row, for everyone: the tick box only for who may pull players in.
+    if (host) {
+        const float half = (w - 2.f * pad - gap) * 0.5f;
+        l.hardBox = {-l.halfW + pad, y, -l.halfW + pad + half, y + hostH};
+        l.allBox = {l.halfW - pad - half, y, l.halfW - pad, y + hostH};
+    } else {
+        l.allBox = {-l.halfW + pad, y, l.halfW - pad, y + hostH};
+    }
+    y += hostH + gap;
+    l.hintY = y + hintH * 0.5f;
+    return l;
+}
+
+// The player button under the pointer on this page (-1 = none).
+int pointedPlayer() {
+    for (int i = 0; i < g_layout.count; ++i)
+        if (g_layout.buttons[i].has(g_x, g_y)) return i;
+    return -1;
+}
+
+// Asks the render thread to act on page slot `i` (0..8 on this page).
+void actOn(int i, Act act) {
+    const size_t at = static_cast<size_t>(g_page) * kPerPage + static_cast<size_t>(i);
+    if (i < 0 || at >= g_players.size()) return;
+    const Player& p = g_players[at];
+    Action a;
+    a.act = act;
+    a.id = p.id;
+    a.name = p.name.empty() ? std::string("Runner") : p.name;
+    a.live = p.live;
+    a.inRun = p.inRun;
+    a.asks = p.asks;
+    g_action = std::move(a);
+}
 
 bool down(int vk) { return (GetAsyncKeyState(vk) & 0x8000) != 0; }
 
@@ -75,7 +186,8 @@ void setState(State s) {
     g_state = s;
     g_open = s == State::Open;
     g_engaged = s == State::Held || s == State::Open;
-    g_reacting = g_mode == Mode::React && g_engaged.load();
+    g_marking = g_mode == Mode::Markers && g_engaged.load();
+    g_listing = g_mode == Mode::Players && g_engaged.load();
 }
 
 int slotCount() {
@@ -100,6 +212,11 @@ void begin(Source source, int key, Mode mode) {
     g_instant = cfg->wheelInstant;
     g_downAt = g_padAt = GetTickCount();
     g_x = g_y = 0.f;
+    g_page = 0;
+    g_hard = false;
+    g_picked.clear();
+    g_picksGone = false;
+    g_layout = Layout{};
     g_wheel = mode == Mode::Markers && cfg->pingWheel >= 0 && cfg->pingWheel < cfg->wheelCount ? cfg->pingWheel : 0;
     setState(g_instant ? State::Open : State::Held);
 }
@@ -154,6 +271,10 @@ int pointedSlot() { return game::radialSlot(g_x, g_y, g_unit * kDeadZone, slotCo
 void release() {
     const DWORD now = GetTickCount();
     promote(now);
+    if (g_mode == Mode::Players) { // letting go only closes the panel: never a teleport by accident
+        setState(State::Idle);
+        return;
+    }
     if (g_state == State::Held) {
         tap();
     } else if (g_state == State::Open) {
@@ -165,7 +286,13 @@ void release() {
 }
 
 void stepWheel(int step) {
-    if (g_state != State::Open || step == 0 || g_mode != Mode::Markers) return;
+    if (g_state != State::Open || step == 0) return;
+    if (g_mode == Mode::Players) {
+        const int pages = pageCount();
+        g_page = ((g_page + step) % pages + pages) % pages;
+        return;
+    }
+    if (g_mode != Mode::Markers) return;
     const int count = std::clamp(config::get()->wheelCount, 1, config::kWheels);
     const int wheel = ((g_wheel + step) % count + count) % count;
     g_wheel = wheel;
@@ -217,12 +344,13 @@ void pollClear() {
     static bool held = false, done = false, byKey = false; // render thread only
     static DWORD since = 0, lastTapAt = 0;
     const int key = ui::pingClearVk();
-    const bool canAct = ui::gameFocused() && !ui::menuOpen() && !chat::isOpen() && !game::hooks::gameMenuOpen();
+    // Not while the players panel is up: its keys are the panel's.
+    const bool canAct = ui::gameFocused() && !ui::menuOpen() && !chat::isOpen() && !game::hooks::gameMenuOpen() && !g_listing.load();
     const bool keyHeld = canAct && key && down(key);
     // Not on the answers wheel, and not when the middle button is the key that opened the wheel (or does
     // something else): holding it there must not clear.
     const bool wheelClear =
-        canAct && g_open.load() && !g_reacting.load() && !ui::middleButtonIsABind() && down(VK_MBUTTON);
+        canAct && g_open.load() && g_marking.load() && !ui::middleButtonIsABind() && down(VK_MBUTTON);
     const bool now = keyHeld || wheelClear;
     if (!now) {
         // A press that let go before the hold time is one tap of a possible double tap.
@@ -259,6 +387,199 @@ void centred(ImDrawList* dl, ImFont* font, float size, ImVec2 mid, ImU32 col, co
     const ImVec2 ts = font->CalcTextSizeA(size, FLT_MAX, 0.f, s);
     text(dl, font, size, ImVec2(mid.x - ts.x * 0.5f, mid.y - ts.y * 0.5f), col, s);
 }
+
+// The players for the panel (render thread, without g_m: net has its own lock). The mirror of yourself
+// (loopback) is listed only when it is all there is, for a test alone.
+std::vector<Player> readPlayers() {
+    const auto remotes = net::remotes(5000);
+    const bool onlyMirror = std::all_of(remotes.begin(), remotes.end(), [](const net::RemoteInfo& r) { return r.loopback; });
+    std::vector<Player> out;
+    for (const net::RemoteInfo& r : remotes) {
+        if (r.loopback && !onlyMirror) continue;
+        Player p;
+        p.id = r.id;
+        p.name = r.name.empty() ? std::string("(joining...)") : r.name;
+        if (r.loopback) p.name += " (mirror)";
+        p.live = r.ageMs < 1000;
+        p.inRun = r.runKind != net::protocol::kActivityNone;
+        p.asks = r.asksVisit;
+        out.push_back(std::move(p));
+    }
+    std::sort(out.begin(), out.end(), [](const Player& a, const Player& b) { return a.id < b.id; });
+    return out;
+}
+
+// A Go to that waits for its player's run to end (render thread only). id 0 = none.
+struct WaitGoTo {
+    uint32_t id = 0;
+    std::string name;
+    DWORD since = 0;
+};
+WaitGoTo g_wait;
+constexpr DWORD kWaitGoToMs = 15 * 60 * 1000; // a run longer than this: the wait is given up
+
+// `asks`: they want to be asked first, so they are (summon::askVisit goes once they say yes).
+void goNow(uint32_t id, const std::string& name, bool live, bool asks) {
+    if (!game::teleport::available()) notices::push("Go to is not available in this game build");
+    else if (game::teleport::busy()) notices::push("Already on the way");
+    else if (!live) notices::push(name + " is not responding right now");
+    else if (asks) summon::askVisit(id, name);
+    else {
+        game::teleport::requestGoTo(id);
+        notices::push("Going to " + name);
+    }
+}
+
+// What a click on the panel asked for (render thread).
+void perform(const Action& a) {
+    if (a.act == Act::None) return;
+    if (net::inRun() && a.act != Act::Withdraw) { // our own run: no teleports in or out of it
+        notices::push("You are in a run: finish or quit it first");
+        return;
+    }
+    switch (a.act) {
+    case Act::GoTo:
+        if (g_wait.id == a.id) { // the same player again: the wait is called off
+            g_wait = WaitGoTo{};
+            notices::push("Go to " + a.name + " cancelled");
+        } else if (a.inRun) {
+            g_wait = {a.id, a.name, GetTickCount()};
+            notices::push(a.name + " is in a run: you go to them when it is over (right-click them again to cancel)");
+        } else {
+            goNow(a.id, a.name, a.live, a.asks);
+        }
+        break;
+    case Act::SummonGroup:
+        if (summon::send(a.targets, a.hard, a.name) && a.inRun)
+            notices::push(a.targets.empty() ? std::string("Players in a run can answer when it is over")
+                                            : std::string("Picked players in a run can answer when it is over"));
+        break;
+    case Act::Withdraw:
+        net::cancelSummon();
+        notices::push("Summon withdrawn");
+        break;
+    case Act::None: break;
+    }
+}
+
+// The waiting Go to: goes once the player's run is over; dropped if they leave, or after kWaitGoToMs.
+void tickWait() {
+    if (!g_wait.id) return;
+    if (GetTickCount() - g_wait.since > kWaitGoToMs) {
+        notices::push("Stopped waiting for " + g_wait.name);
+        g_wait = WaitGoTo{};
+        return;
+    }
+    for (const net::RemoteInfo& r : net::remotes(5000)) {
+        if (r.id != g_wait.id) continue;
+        if (r.runKind != net::protocol::kActivityNone) return; // still running
+        if (net::inRun()) return;                               // we started one meanwhile: wait for ours too
+        const WaitGoTo w = g_wait;
+        g_wait = WaitGoTo{};
+        goNow(w.id, w.name, r.ageMs < 1000, r.asksVisit);
+        return;
+    }
+    notices::push(g_wait.name + " left: Go to cancelled");
+    g_wait = WaitGoTo{};
+}
+
+// While a Go to waits: a line at the top says for whom.
+void drawWait(ImDrawList* dl, ImFont* font, float unit) {
+    if (!g_wait.id || ui::overlayHidden()) return;
+    const std::string line = "Going to " + g_wait.name + " when their run is over";
+    const ImVec2 screen = ImGui::GetIO().DisplaySize;
+    centred(dl, font, unit * 0.75f, ImVec2(screen.x * 0.5f, screen.y * 0.1f), IM_COL32(255, 255, 255, 210), line.c_str());
+}
+
+void drawPanel(ImDrawList* dl, ImFont* font, float unit, ImVec2 mid, const Layout& l, const std::vector<Player>& page,
+               int pageNo, int pages, int hot, bool hard, ImVec2 pointer, float fade, bool pad,
+               const std::vector<uint32_t>& pickedIds, bool withdraw) {
+    auto tickBox = [&](ImVec2 at, float s, bool on, bool hot) { // a tick box with its top-left corner at `at`
+        dl->AddRectFilled(at, ImVec2(at.x + s, at.y + s), scaled(IM_COL32(10, 10, 14, hot ? 230 : 170), fade), unit * 0.15f);
+        dl->AddRect(at, ImVec2(at.x + s, at.y + s), scaled(IM_COL32(255, 255, 255, hot ? 255 : 200), fade), unit * 0.15f, 0, 1.5f);
+        if (on) dl->AddRectFilled(ImVec2(at.x + s * 0.22f, at.y + s * 0.22f), ImVec2(at.x + s * 0.78f, at.y + s * 0.78f),
+                                  scaled(IM_COL32(255, 110, 70, 255), fade), unit * 0.08f);
+    };
+    auto box = [&](const Box& b) { return std::make_pair(ImVec2(mid.x + b.x0, mid.y + b.y0), ImVec2(mid.x + b.x1, mid.y + b.y1)); };
+    dl->AddRectFilled(ImVec2(mid.x - l.halfW, mid.y - l.halfH), ImVec2(mid.x + l.halfW, mid.y + l.halfH),
+                      scaled(IM_COL32(8, 8, 12, 175), fade), unit * 0.6f);
+    char title[48];
+    if (pages > 1) snprintf(title, sizeof(title), "Players  %d / %d", pageNo + 1, pages);
+    else snprintf(title, sizeof(title), "Players");
+    centred(dl, font, unit * 1.15f, ImVec2(mid.x, mid.y + l.titleY), scaled(IM_COL32(255, 255, 255, 240), fade), title);
+    if (page.empty())
+        centred(dl, font, unit * 0.95f, ImVec2(mid.x, mid.y + l.gridY + unit * 1.35f), scaled(IM_COL32(200, 200, 205, 220), fade),
+                "Nobody else here yet");
+    char num[4];
+    for (int i = 0; i < l.count && i < static_cast<int>(page.size()); ++i) {
+        const Player& p = page[static_cast<size_t>(i)];
+        const auto [a, b] = box(l.buttons[i]);
+        const bool on = i == hot;
+        const bool sel = std::find(pickedIds.begin(), pickedIds.end(), p.id) != pickedIds.end(); // picked for a summon
+        const int alpha = p.live ? 255 : 130; // not heard from: dimmed, Go to will refuse
+        // A plate under each name, so it never melts into the world behind it: red when picked, a little
+        // lighter under the pointer.
+        const ImU32 plate = sel  ? IM_COL32(232, 50, 46, p.live ? (on ? 235 : 210) : 120)
+                            : on ? IM_COL32(58, 58, 70, p.live ? 240 : 160)
+                                 : IM_COL32(28, 28, 36, p.live ? 230 : 150);
+        dl->AddRectFilled(a, b, scaled(plate, fade), unit * 0.35f);
+        dl->AddRect(a, b, scaled(on ? IM_COL32(255, 255, 255, 235) : IM_COL32(255, 255, 255, 50), fade), unit * 0.35f, 0, on ? 2.f : 1.f);
+        const float cx = (a.x + b.x) * 0.5f;
+        std::string name = p.name;
+        const float maxW = (b.x - a.x) - unit * 0.8f;
+        while (name.size() > 4 && font->CalcTextSizeA(unit * 1.05f, FLT_MAX, 0.f, name.c_str()).x > maxW)
+            name.erase(name.size() - 4) += "...";
+        centred(dl, font, unit * 1.05f, ImVec2(cx, a.y + (b.y - a.y) * 0.36f), scaled(IM_COL32(255, 255, 255, alpha), fade), name.c_str());
+        snprintf(num, sizeof(num), "%d", i + 1);
+        centred(dl, font, unit * 0.8f, ImVec2(cx, a.y + (b.y - a.y) * 0.76f), scaled(IM_COL32(210, 210, 215, alpha * 9 / 10), fade), num);
+        if (p.inRun) { // a small tag at the plate's corner
+            const char* tag = "in a run";
+            const ImVec2 ts = font->CalcTextSizeA(unit * 0.7f, FLT_MAX, 0.f, tag);
+            text(dl, font, unit * 0.7f, ImVec2(b.x - ts.x - unit * 0.3f, b.y - ts.y - unit * 0.15f),
+                 scaled(IM_COL32(255, 200, 90, alpha), fade), tag);
+        }
+    }
+    // The summon row, for everyone. The tick box (who may pull players in) makes the button a hard summon.
+    if (l.host) {
+        const auto [ha, hb] = box(l.hardBox);
+        const bool hardHot = l.hardBox.has(pointer.x, pointer.y);
+        dl->AddRectFilled(ha, hb, scaled(IM_COL32(28, 28, 36, hardHot ? 245 : 210), fade), unit * 0.3f);
+        const float s = unit * 0.9f, bx = ha.x + unit * 0.5f, by = (ha.y + hb.y) * 0.5f - s * 0.5f;
+        tickBox(ImVec2(bx, by), s, hard, hardHot);
+        const ImVec2 ts = font->CalcTextSizeA(unit * 0.9f, FLT_MAX, 0.f, "Hard summon");
+        text(dl, font, unit * 0.9f, ImVec2(bx + s + unit * 0.45f, (ha.y + hb.y) * 0.5f - ts.y * 0.5f),
+             scaled(IM_COL32(255, 255, 255, 235), fade), "Hard summon");
+    }
+    {
+        const auto [aa, ab] = box(l.allBox);
+        const bool allHot = l.allBox.has(pointer.x, pointer.y);
+        const bool hardNow = hard && l.host && !withdraw;
+        const ImU32 base = withdraw ? IM_COL32(60, 60, 72, 220) : hardNow ? IM_COL32(120, 45, 30, 220) : IM_COL32(30, 90, 60, 220);
+        const ImU32 lit = withdraw ? IM_COL32(110, 110, 125, 220) : hardNow ? IM_COL32(255, 110, 70, 210) : IM_COL32(60, 180, 110, 210);
+        dl->AddRectFilled(aa, ab, scaled(allHot ? lit : base, fade), unit * 0.3f);
+        dl->AddRect(aa, ab, scaled(IM_COL32(255, 255, 255, allHot ? 235 : 60), fade), unit * 0.3f, 0, allHot ? 2.f : 1.f);
+        char what[48];
+        if (withdraw) snprintf(what, sizeof(what), "Withdraw summon");
+        else if (pickedIds.empty()) snprintf(what, sizeof(what), hardNow ? "Pull in everyone" : "Summon everyone");
+        else snprintf(what, sizeof(what), hardNow ? "Pull in picked (%d)" : "Summon picked (%d)", static_cast<int>(pickedIds.size()));
+        centred(dl, font, unit * 0.9f, ImVec2((aa.x + ab.x) * 0.5f, (aa.y + ab.y) * 0.5f), scaled(IM_COL32(255, 255, 255, 255), fade),
+                what);
+    }
+    std::string sw;
+    const auto cfg = config::get();
+    for (const std::string* k : {&cfg->wheelPrevKey, &cfg->wheelNextKey})
+        if (!k->empty()) sw += (sw.empty() ? "" : " / ") + ui::keyLabel(*k);
+    char hint[160];
+    if (pad)
+        snprintf(hint, sizeof(hint), "RT: pick    LT: go to%s", pages > 1 ? ("    " + gamepad::label("LB") + ": page").c_str() : "");
+    else
+        snprintf(hint, sizeof(hint), "Click: pick for summon    Right click: go to    1-9: go to%s%s", pages > 1 && !sw.empty() ? "    " : "",
+                 pages > 1 && !sw.empty() ? (sw + ": page").c_str() : "");
+    centred(dl, font, unit * 0.78f, ImVec2(mid.x, mid.y + l.hintY), scaled(IM_COL32(210, 210, 215, 220), fade), hint);
+    // The pointer, as on the wheel.
+    dl->AddCircleFilled(ImVec2(mid.x + pointer.x, mid.y + pointer.y), unit * 0.3f, scaled(IM_COL32(255, 255, 255, 240), fade), 16);
+    dl->AddCircle(ImVec2(mid.x + pointer.x, mid.y + pointer.y), unit * 0.3f, scaled(IM_COL32(0, 0, 0, 220), fade), 16, 1.5f);
+}
 } // namespace
 
 bool open() { return g_open.load(); }
@@ -278,15 +599,28 @@ void keyUp(int key) {
 
 void digit(int n) {
     std::lock_guard<std::mutex> lock(g_m);
+    if (g_mode == Mode::Players) { // 1-9: go to that player of the page
+        if (g_state != State::Open || n < 1 || n > kPerPage) return;
+        const size_t at = static_cast<size_t>(g_page) * kPerPage + static_cast<size_t>(n - 1);
+        if (at >= g_players.size()) return;
+        actOn(n - 1, Act::GoTo);
+        setState(State::Used);
+        return;
+    }
     if ((g_state != State::Held && g_state != State::Open) || n < 1 || n > slotCount()) return;
     place(n - 1);
     setState(State::Used);
 }
 
-void moved(float dx, float dy) {
+void moved(float dx, float dy, float cursorScale) {
     std::lock_guard<std::mutex> lock(g_m);
     if (g_state != State::Open) return;
-    const float sens = std::clamp(config::get()->wheelSensitivity, 0.1f, 3.f);
+    if (g_mode == Mode::Players) { // a cursor like the menu's, kept inside the panel
+        g_x = std::clamp(g_x + dx * cursorScale, -g_layout.halfW, g_layout.halfW);
+        g_y = std::clamp(g_y + dy * cursorScale, -g_layout.halfH, g_layout.halfH);
+        return;
+    }
+    const float sens = std::clamp(config::get()->wheelSensitivity, 0.1f, 3.f) * cursorScale;
     float x = g_x + dx * sens, y = g_y + dy * sens;
     const float maxLen = g_unit * kPointerMax;
     const float len = std::sqrt(x * x + y * y);
@@ -298,9 +632,61 @@ void moved(float dx, float dy) {
     g_y = y;
 }
 
+namespace {
+// The panel's click and right click (g_m held, the panel open).
+// Ticks or unticks page slot `i` for "Summon picked" (the panel stays open).
+void togglePick(int i) {
+    const size_t at = static_cast<size_t>(g_page) * kPerPage + static_cast<size_t>(i);
+    if (i < 0 || at >= g_players.size()) return;
+    const uint32_t id = g_players[at].id;
+    const auto it = std::find(g_picked.begin(), g_picked.end(), id);
+    if (it != g_picked.end()) g_picked.erase(it);
+    else g_picked.push_back(id);
+    g_picksGone = false;
+}
+
+void panelClick() {
+    const int i = pointedPlayer();
+    if (i >= 0) {
+        togglePick(i); // the panel stays open
+    } else if (g_layout.host && g_layout.hardBox.has(g_x, g_y)) {
+        g_hard = !g_hard; // the panel stays open
+    } else if (g_layout.allBox.has(g_x, g_y)) {
+        if (g_picksGone && !g_withdraw) { // the players picked left: say so; the next press summons everyone
+            g_picksGone = false;
+            g_note = "The picked players left";
+            return;
+        }
+        Action a;
+        if (g_withdraw) {
+            a.act = Act::Withdraw;
+        } else {
+            a.act = Act::SummonGroup;
+            a.targets = g_picked; // empty = everyone
+            for (const Player& p : g_players) // one picked player: the notice names them
+                if (g_picked.size() == 1 && p.id == g_picked.front()) a.name = p.name;
+            a.hard = g_hard && g_layout.host;
+            for (const Player& p : g_players) // a picked player in a run hears of it when the run is over
+                if (p.inRun && (g_picked.empty() || picked(p.id))) a.inRun = true;
+        }
+        g_action = a;
+        setState(State::Used);
+    }
+}
+void panelCall() { // right click: go to the player pointed at (elsewhere: just close)
+    const int i = pointedPlayer();
+    if (i >= 0) actOn(i, Act::GoTo);
+    setState(State::Used);
+}
+} // namespace
+
 void click() {
     std::lock_guard<std::mutex> lock(g_m);
     if (g_state != State::Open) return;
+    if (g_mode == Mode::Players) {
+        panelClick();
+        return;
+    }
     const int slot = pointedSlot();
     if (slot >= 0) place(slot);
     setState(State::Used);
@@ -308,7 +694,9 @@ void click() {
 
 void dismiss() {
     std::lock_guard<std::mutex> lock(g_m);
-    if (g_state == State::Open) setState(State::Used); // closed; the release then places nothing
+    if (g_state != State::Open) return;
+    if (g_mode == Mode::Players) panelCall();
+    else setState(State::Used); // closed; the release then places nothing
 }
 
 void switchWheel(int step) {
@@ -321,7 +709,7 @@ void cancel() {
     setState(State::Idle);
 }
 
-bool padUpdate(Mode mode, bool pressed, bool held, float x, float y, bool prev, bool next, bool clear) {
+bool padUpdate(Mode mode, bool pressed, bool held, float x, float y, bool prev, bool next, bool clear, bool go, bool call) {
     std::lock_guard<std::mutex> lock(g_m);
     if (g_state == State::Idle) {
         if (!pressed || !held) return false;
@@ -330,6 +718,7 @@ bool padUpdate(Mode mode, bool pressed, bool held, float x, float y, bool prev, 
     }
     if (g_source != Source::Pad) return false; // the keyboard has it
     const DWORD now = GetTickCount();
+    const float dt = std::min(static_cast<float>(now - g_padAt), 50.f) / 1000.f; // since the last read, in seconds
     g_padAt = now;
     if (!held) {
         if (g_state == State::Used) setState(State::Idle);
@@ -339,6 +728,21 @@ bool padUpdate(Mode mode, bool pressed, bool held, float x, float y, bool prev, 
     promote(now);
     if (clear) clearNow();
     if (g_state != State::Open) return false;
+    if (g_mode == Mode::Players) {
+        // The stick moves the pointer like a mouse would (it stays where it is let go); a light push moves it slowly.
+        auto axis = [](float v) {
+            v = std::clamp(v, -1.f, 1.f);
+            const float a = std::max(0.f, (std::fabs(v) - kPadPanelDead) / (1.f - kPadPanelDead));
+            return std::copysign(a * a, v);
+        };
+        const float speed = g_unit * kPadPanelSpeed * dt;
+        g_x = std::clamp(g_x + axis(x) * speed, -g_layout.halfW, g_layout.halfW);
+        g_y = std::clamp(g_y + axis(y) * speed, -g_layout.halfH, g_layout.halfH);
+        if (prev || next) stepWheel(1); // LB (RB is usually part of the panel's buttons): the next page, round
+        if (go) panelClick();
+        else if (call) panelCall();
+        return true;
+    }
     float px = std::clamp(x, -1.f, 1.f) * g_unit * kPadReach, py = std::clamp(y, -1.f, 1.f) * g_unit * kPadReach;
     const float len = std::sqrt(px * px + py * py), maxLen = g_unit * kPointerMax;
     if (len > maxLen && len > 0.f) {
@@ -361,12 +765,41 @@ void draw() {
     float fade = 1.f;
     std::string target;
     const float unit = ImGui::GetFontSize() * kWheelScale;
+    std::vector<Player> players;
+    if (g_listing.load()) players = readPlayers();
+    Action act;
+    Layout layout;
+    std::vector<Player> page;
+    int pageNo = 0, pages = 1;
+    bool hard = false, withdraw = false;
+    std::vector<uint32_t> pickedIds;
     {
         std::lock_guard<std::mutex> lock(g_m);
         if (!g_note.empty()) {
             notices::push(g_note);
             g_note.clear();
         }
+        act = g_action;
+        g_action = Action{};
+        if (g_listing.load()) {
+            g_players = std::move(players);
+            g_page = std::min(g_page, pageCount() - 1);
+            const size_t hadPicks = g_picked.size();
+            g_picked.erase(std::remove_if(g_picked.begin(), g_picked.end(),
+                                          [](uint32_t id) {
+                                              return std::none_of(g_players.begin(), g_players.end(),
+                                                                  [id](const Player& p) { return p.id == id; });
+                                          }),
+                           g_picked.end()); // a player who left is no longer picked
+            // Every picked player left: the button must not quietly become "Summon everyone" under the pointer.
+            if (hadPicks && g_picked.empty()) g_picksGone = true;
+        }
+    }
+    perform(act);
+    tickWait();
+    drawWait(ImGui::GetForegroundDrawList(), ImGui::GetFont(), unit);
+    {
+        std::lock_guard<std::mutex> lock(g_m);
         if (g_state == State::Idle) return;
         const DWORD now = GetTickCount();
         // The key release message can be missed (focus changes); the key state is the truth.
@@ -382,6 +815,36 @@ void draw() {
         g_unit = unit;
         promote(now);
         if (g_state != State::Open) return;
+        if (g_mode == Mode::Players) {
+            const size_t first = static_cast<size_t>(g_page) * kPerPage;
+            for (size_t i = first; i < g_players.size() && i < first + kPerPage; ++i) page.push_back(g_players[i]);
+            g_layout = layoutPanel(static_cast<int>(page.size()), net::canHardSummon(), unit);
+            g_x = std::clamp(g_x, -g_layout.halfW, g_layout.halfW);
+            g_y = std::clamp(g_y, -g_layout.halfH, g_layout.halfH);
+            layout = g_layout;
+            pageNo = g_page;
+            pages = pageCount();
+            hard = g_hard;
+            g_withdraw = net::summonOpen();
+            withdraw = g_withdraw;
+            pickedIds = g_picked;
+            source = g_source;
+            hot = pointedPlayer();
+            ox = g_x;
+            oy = g_y;
+            if (g_instant) fade = std::clamp(static_cast<float>(now - g_downAt) / kFadeInMs, 0.f, 1.f);
+        }
+        mode = g_mode;
+    }
+    if (mode == Mode::Players) {
+        const ImVec2 screen = ImGui::GetIO().DisplaySize;
+        drawPanel(ImGui::GetForegroundDrawList(), ImGui::GetFont(), unit, ImVec2(screen.x * 0.5f, screen.y * 0.5f), layout, page,
+                  pageNo, pages, hot, hard, ImVec2(ox, oy), fade, source == Source::Pad, pickedIds, withdraw);
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_m);
+        if (g_state != State::Open) return;
         const ImVec2 shown = shownPointer(unit);
         ox = shown.x;
         oy = shown.y;
@@ -390,7 +853,7 @@ void draw() {
         mode = g_mode;
         n = slotCount();
         hot = pointedSlot();
-        if (g_instant) fade = std::clamp(static_cast<float>(now - g_downAt) / kFadeInMs, 0.f, 1.f);
+        if (g_instant) fade = std::clamp(static_cast<float>(GetTickCount() - g_downAt) / kFadeInMs, 0.f, 1.f);
         if (mode == Mode::React) {
             target = g_target.name.empty() ? std::string("a marker") : g_target.name;
             if (!g_target.label.empty()) target += ": " + g_target.label;

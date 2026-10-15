@@ -24,9 +24,11 @@ PLAY
 - Double tap X removes the marker you look at, hold X removes all of yours. C answers another
   player's marker (hold for the answers wheel). B places a marker the other way, hold Y to hide or
   show the overlay. Q and E switch wheel while the marker wheel is open.
-- G summons everyone to where you stand (a marker and a panel appear for them: hold 1 to go, hold 2
-  to say no). Hold G to pull in players who allowed it (You tab: Allow being pulled in). After a
-  summon took you somewhere, hold 2 for 3 seconds within a minute to go back, or hold 1 to hide that.
+- Hold T for the players panel: right click a name to go to that player; click names to pick them
+  and press Summon picked, or Summon everyone. Those summoned get a marker and a panel: hold 1
+  to go, hold 2 to say no. The host can also pull in players who allowed it (You tab: Allow being
+  pulled in). After a summon took you somewhere, hold 2 for 3 seconds within a minute to go back, or
+  hold 1 to hide that.
 - Other tabs: Players (list, Go to, summon, Mumble voice), You (your look, privacy), Markers, Display
   (sizes, what is shown).
 - Keys and gamepad buttons can be changed on the Controls tab (the middle button and Mouse 4 and 5 can be bound too).

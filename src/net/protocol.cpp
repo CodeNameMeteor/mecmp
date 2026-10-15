@@ -367,6 +367,24 @@ bool readSummonReply(const char* payload, size_t n, SummonReply& out) {
     return true;
 }
 
+size_t writeVisit(char* buf, const Header& h, const Visit& v) {
+    char* p = buf;
+    put(p, h);
+    put(p, v.id);
+    put(p, v.target);
+    put(p, v.kind);
+    return static_cast<size_t>(p - buf);
+}
+
+bool readVisit(const char* payload, size_t n, Visit& out) {
+    const char* p = payload;
+    const char* end = payload + n;
+    Visit v;
+    if (!get(p, end, v.id) || !get(p, end, v.target) || !get(p, end, v.kind) || v.kind > kVisitWithdraw) return false;
+    out = v;
+    return true;
+}
+
 size_t writeInfoRequest(char* buf, const Header& h) {
     memset(buf, 0, kInfoRequestSize);
     memcpy(buf, &h, sizeof(h));

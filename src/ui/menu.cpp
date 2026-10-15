@@ -27,6 +27,7 @@
 #include "net/serverlist.h"
 #include "ui/gamepad.h"
 #include "ui/glyph.h"
+#include "ui/notices.h"
 #include "ui/overlay.h"
 #include "ui/summon.h"
 
@@ -278,6 +279,13 @@ void summonControls(const std::vector<net::RemoteInfo>& remotes) {
     snprintf(label, sizeof(label), "Summon selected (%d)", static_cast<int>(picked.size()));
     if (ImGui::Button(label)) summon::send(picked, hard);
     ImGui::EndDisabled();
+    if (net::summonOpen()) {
+        ImGui::SameLine();
+        if (ImGui::Button("Withdraw summon")) {
+            net::cancelSummon();
+            notices::push("Summon withdrawn");
+        }
+    }
     ImGui::TextDisabled("They get a marker where you stand. Tick players in the list to summon only them.");
 }
 
@@ -332,7 +340,10 @@ void playersSection() {
             ImGui::PushID(static_cast<int>(r.id));
             const bool can = game::teleport::available() && !game::teleport::busy() && r.ageMs < 1000;
             ImGui::BeginDisabled(!can);
-            if (ImGui::SmallButton("Go to")) game::teleport::requestGoTo(r.id);
+            if (ImGui::SmallButton(r.asksVisit ? "Ask to go" : "Go to")) {
+                if (r.asksVisit) summon::askVisit(r.id, r.name.empty() ? std::string("Runner") : r.name);
+                else game::teleport::requestGoTo(r.id);
+            }
             ImGui::EndDisabled();
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
                 ImGui::SetTooltip(game::teleport::available() ? "Travel to this player" : "Not available in this game build");
@@ -532,6 +543,13 @@ void privacySection() {
         ImGui::SetTooltip("Off: every summon only asks you.\n"
                           "On: when the host (or a member the host allows) pulls you in, you are taken to them after a\n"
                           "countdown. You can cancel it in that time. Never from anyone else.");
+    bool ask = cfg->askBeforeVisit;
+    if (ImGui::Checkbox("Ask me before others go to me", &ask))
+        config::change([ask](config::Settings& c) { c.askBeforeVisit = ask; });
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Off: anyone can use Go to on you.\n"
+                          "On: a player who picks Go to on you waits until you say yes (hold the summon accept key,\n"
+                          "or the decline key for no). Older versions of the mod still go to you without asking.");
 }
 
 // Display tab: sizes, what is drawn in the game, voice.
@@ -691,7 +709,7 @@ void padRow(const char* label, gamepad::Action action, const std::string& curren
 struct SliderEdit { int value = 0; bool editing = false; };
 SliderEdit g_lifeEdit, g_maxEdit;
 struct FloatEdit { float value = 1.f; bool editing = false; };
-FloatEdit g_sensEdit;
+FloatEdit g_sensEdit, g_cursorEdit;
 
 // True once, when the slider was let go after a change: the caller saves `edit.value`.
 bool settingSlider(const char* label, SliderEdit& edit, int current, int lo, int hi, const char* format, ImGuiSliderFlags flags) {
@@ -774,15 +792,15 @@ const KeyBind kKeyBinds[11] = {
      &config::Settings::wheelPrevKey, &ui::setWheelPrevKey, 1},
     {"While the marker wheel is open: the next wheel. The Right arrow and the mouse wheel do the same.",
      &config::Settings::wheelNextKey, &ui::setWheelNextKey, 1},
-    {"Tap to summon everyone to where you stand. Hold for a second to pull them in (hard summon, if you may). "
-     "Hold it while your summon is open to withdraw it.",
-     &config::Settings::summonKey, &ui::setSummonKey, 1},
     {"While a summon is shown to you: hold for a second to go to the player who summoned you. While \"Go back?\" "
      "is shown after a summon: hold for a second to hide it.",
      &config::Settings::summonAcceptKey, &ui::setSummonAcceptKey, 1},
     {"While a summon is shown to you: hold for a second to say no. After a summon took you somewhere, hold it "
      "for 3 seconds within a minute to go back.",
      &config::Settings::summonDeclineKey, &ui::setSummonDeclineKey, 1},
+    {"Hold to open the players panel: right click a player to go to them, click players to pick them and summon "
+     "them with the button below (or everyone), 1-9 go to that player. Letting go of the key only closes it.",
+     &config::Settings::playersKey, &ui::setPlayersKey, 1},
 };
 
 void keyRow(const config::Settings& cfg, int which) {
@@ -1403,15 +1421,72 @@ void markersSection() {
         ImGui::TreePop();
     }
 
-    ImGui::SeparatorText("On the map now");
+    ImGui::SeparatorText("Manage markers");
     if (ImGui::SmallButton("Clear my markers")) net::clearPing();
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("Removes all your markers for everyone");
     markerLists(cfg);
 }
 
+void controlsMenu(const config::Settings& c);
+void controlsMarkers(const config::Settings& c);
+void controlsAdvanced(const config::Settings& c);
+
+// The Controls tab's groups fold away: the ones used most start open, the rest (and Advanced) closed.
+constexpr ImGuiTreeNodeFlags kOpenGroup = ImGuiTreeNodeFlags_DefaultOpen;
+
 void controlsSection() {
     const auto cfg = config::get();
-    ImGui::SeparatorText("Menu");
+    if (ImGui::CollapsingHeader("Markers", kOpenGroup)) controlsMarkers(*cfg);
+    if (ImGui::CollapsingHeader("Players panel", kOpenGroup)) {
+        ImGui::TextUnformatted("Go to, pick players and summon them, or everyone (hold)");
+        ImGui::Indent();
+        keyRow(*cfg, 10);
+        padRow("Gamepad:", gamepad::Action::Players, cfg->playersPad, &config::Settings::playersPad,
+               "Hold these buttons for the players panel: the right stick points, RT clicks (picks a player, the buttons),\n"
+               "LT goes to the player, LB turns the page. Letting go only closes it.");
+        ImGui::Unindent();
+    }
+    if (ImGui::CollapsingHeader("Summon answers", kOpenGroup)) {
+        ImGui::TextUnformatted("Answer a summon: go (hold), and hide \"Go back?\"");
+        ImGui::Indent();
+        keyRow(*cfg, 8);
+        padRow("Gamepad:", gamepad::Action::SummonAccept, cfg->summonAcceptPad, &config::Settings::summonAcceptPad,
+               "Hold these buttons for a second to go to the player who summoned you; after a summon took you somewhere,\n"
+               "hold them to hide the \"Go back?\" bar. The game does not see them while a summon or that bar is shown.");
+        ImGui::Unindent();
+        ImGui::TextUnformatted("Answer a summon: no (hold), and go back");
+        ImGui::Indent();
+        keyRow(*cfg, 9);
+        padRow("Gamepad:", gamepad::Action::SummonDecline, cfg->summonDeclinePad, &config::Settings::summonDeclinePad,
+               "Hold for a second to say no; after a summon took you somewhere, hold for 3 seconds to go back.");
+        ImGui::Unindent();
+        ImGui::TextDisabled("Whether you can be pulled in, or are asked before a Go to, is on the You tab.");
+    }
+    if (ImGui::CollapsingHeader("Quick answers")) {
+        keyRow(*cfg, 3);
+        padRow("Gamepad:", gamepad::Action::React, cfg->reactPad, &config::Settings::reactPad,
+               "The same on a gamepad: tap sends your last answer, hold opens the answers wheel.");
+    }
+    if (ImGui::CollapsingHeader("Chat")) keyRow(*cfg, 2);
+    if (ImGui::CollapsingHeader("Overlay")) {
+        ImGui::TextUnformatted("Hide / show names, markers, arrows, notices and chat (hold)");
+        ImGui::Indent();
+        keyRow(*cfg, 5);
+        ImGui::Unindent();
+    }
+    if (ImGui::CollapsingHeader("Menu")) controlsMenu(*cfg);
+    if (ImGui::CollapsingHeader("Gamepad")) {
+        bool ps = cfg->padPlayStation;
+        if (ImGui::Checkbox("Name the buttons as on a PlayStation pad", &ps))
+            config::change([ps](config::Settings& c) { c.padPlayStation = ps; });
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Only the names in hints change (A = Cross, LB = L1, ...). Your pad works the same.");
+    }
+    if (ImGui::CollapsingHeader("Advanced")) controlsAdvanced(*cfg);
+}
+
+// The menu's own key and gamepad buttons.
+void controlsMenu(const config::Settings& c) {
+    const config::Settings* cfg = &c;
     // Keyboard key that opens the menu.
     ImGui::AlignTextToFramePadding();
     ImGui::Text("Menu key:");
@@ -1455,11 +1530,11 @@ void controlsSection() {
     // Gamepad buttons that open it.
     padRow("Gamepad:", gamepad::Action::Menu, cfg->menuPad, &config::Settings::menuPad,
            "Buttons held together to open and close this menu");
+}
 
-    ImGui::SeparatorText("Chat");
-    keyRow(*cfg, 2);
-
-    ImGui::SeparatorText("Markers");
+// Markers: placing, clearing, the wheel's keys.
+void controlsMarkers(const config::Settings& c) {
+    const config::Settings* cfg = &c;
     ImGui::TextUnformatted("Place a marker / open the wheel");
     ImGui::Indent();
     keyRow(*cfg, 0);
@@ -1477,7 +1552,19 @@ void controlsSection() {
     keyRow(*cfg, 4);
     ImGui::Unindent();
     tapModeRows(*cfg);
+    ImGui::TextUnformatted("Previous wheel (while it is open)");
+    ImGui::Indent();
+    keyRow(*cfg, 6);
+    ImGui::Unindent();
+    ImGui::TextUnformatted("Next wheel (while it is open)");
+    ImGui::Indent();
+    keyRow(*cfg, 7);
+    ImGui::Unindent();
+}
 
+// Rarely changed: how the wheel opens, the pointer speeds.
+void controlsAdvanced(const config::Settings& c) {
+    const config::Settings* cfg = &c;
     ImGui::TextUnformatted("The marker wheel");
     ImGui::Indent();
     if (ImGui::RadioButton("opens after a short hold", !cfg->wheelInstant))
@@ -1500,48 +1587,22 @@ void controlsSection() {
         g_sensEdit.editing = false;
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("How far the pointer in the open wheel moves per mouse movement. Raise it for a low mouse sensitivity.");
-    ImGui::TextUnformatted("Previous wheel (while it is open)");
-    keyRow(*cfg, 6);
-    ImGui::TextUnformatted("Next wheel (while it is open)");
-    keyRow(*cfg, 7);
+    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 10);
+    float cursor = g_cursorEdit.editing ? g_cursorEdit.value : cfg->menuMouseSpeed;
+    if (ImGui::SliderFloat("Menu mouse speed", &cursor, 0.25f, 3.f, "%.2f x", ImGuiSliderFlags_AlwaysClamp)) {
+        g_cursorEdit.value = cursor;
+        g_cursorEdit.editing = true;
+    }
+    if (ImGui::IsItemDeactivatedAfterEdit()) {
+        const float v = g_cursorEdit.value;
+        config::change([v](config::Settings& c) { c.menuMouseSpeed = v; });
+    }
+    if (g_cursorEdit.editing && !ImGui::IsItemActive() && std::fabs(cfg->menuMouseSpeed - g_cursorEdit.value) < 0.001f)
+        g_cursorEdit.editing = false;
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("The mouse cursor of this menu, the players panel and the wheels. It already follows the pointer\n"
+                          "speed set in Windows; 1.00 x = the same speed as the Windows cursor.");
     ImGui::Unindent();
-
-    ImGui::SeparatorText("Quick answers");
-    keyRow(*cfg, 3);
-    padRow("Gamepad:", gamepad::Action::React, cfg->reactPad, &config::Settings::reactPad,
-           "The same on a gamepad: tap sends your last answer, hold opens the answers wheel.");
-
-    ImGui::SeparatorText("Summon");
-    ImGui::TextUnformatted("Summon players to you");
-    ImGui::Indent();
-    keyRow(*cfg, 8);
-    ImGui::Unindent();
-    ImGui::TextUnformatted("Answer a summon: go (hold), and hide \"Go back?\"");
-    ImGui::Indent();
-    keyRow(*cfg, 9);
-    padRow("Gamepad:", gamepad::Action::SummonAccept, cfg->summonAcceptPad, &config::Settings::summonAcceptPad,
-           "Hold these buttons for a second to go to the player who summoned you; after a summon took you somewhere,\n"
-           "hold them to hide the \"Go back?\" bar. The game does not see them while a summon or that bar is shown.");
-    ImGui::Unindent();
-    ImGui::TextUnformatted("Answer a summon: no (hold), and go back");
-    ImGui::Indent();
-    keyRow(*cfg, 10);
-    padRow("Gamepad:", gamepad::Action::SummonDecline, cfg->summonDeclinePad, &config::Settings::summonDeclinePad,
-           "Hold for a second to say no; after a summon took you somewhere, hold for 3 seconds to go back.");
-    ImGui::Unindent();
-    ImGui::TextDisabled("Whether you can be pulled in is on the You tab.");
-
-    ImGui::SeparatorText("Overlay");
-    ImGui::TextUnformatted("Hide / show names, markers, arrows, notices and chat (hold)");
-    ImGui::Indent();
-    keyRow(*cfg, 5);
-    ImGui::Unindent();
-
-    ImGui::SeparatorText("Gamepad");
-    bool ps = cfg->padPlayStation;
-    if (ImGui::Checkbox("Name the buttons as on a PlayStation pad", &ps))
-        config::change([ps](config::Settings& c) { c.padPlayStation = ps; });
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Only the names in hints change (A = Cross, LB = L1, ...). Your pad works the same.");
 }
 
 // "INSERT or LS+RS"

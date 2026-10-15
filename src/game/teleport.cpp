@@ -144,6 +144,10 @@ bool requestReturn() {
     return true;
 }
 
+void forgetReturn() {
+    if (g_phase == Idle) g_backAt = 0; // (a return already under way finishes as asked)
+}
+
 bool busy() { return g_phase != Idle; }
 
 bool available() { return checkFunction(); } // checked once (on the first call), then remembered

@@ -1091,17 +1091,52 @@ void receiveAll() {
     }
 }
 
+// The system timer ticks every 15.6 ms unless a program asks for finer, and select() waits in ticks, so
+// the send loop below would wake only 21 times a second. A finer tick is asked for while the thread
+// runs (winmm is loaded by hand: no import library to link).
+struct TimerResolution {
+    using Fn = UINT(WINAPI*)(UINT);
+    HMODULE lib = nullptr;
+    Fn end = nullptr;
+    TimerResolution() {
+        lib = LoadLibraryW(L"winmm.dll");
+        if (!lib) return;
+        const auto begin = reinterpret_cast<Fn>(reinterpret_cast<void*>(GetProcAddress(lib, "timeBeginPeriod")));
+        end = reinterpret_cast<Fn>(reinterpret_cast<void*>(GetProcAddress(lib, "timeEndPeriod")));
+        if (begin && end) begin(1);
+        else end = nullptr;
+    }
+    ~TimerResolution() {
+        if (end) end(1);
+        if (lib) FreeLibrary(lib);
+    }
+};
+
 void threadMain() {
+    TimerResolution timerResolution;
     const DWORD started = GetTickCount();
-    DWORD lastSend = 0, lastHello = 0, lastStats = started, lastHousekeeping = started, lastJoinWarn = 0, lastLease = started;
+    DWORD lastHello = 0, lastStats = started, lastHousekeeping = started, lastJoinWarn = 0, lastLease = started;
+    // Our own state goes out at 30 Hz: from a deadline on the high-resolution clock (not the 15.6 ms
+    // GetTickCount), and the wait below ends at the deadline.
+    constexpr double kSendMs = 1000.0 / 30.0;
+    double nextSend = nowMs();
     while (g_run) {
         fd_set rd;
         FD_ZERO(&rd);
         FD_SET(g_sock, &rd);
-        timeval tv{0, 10000};
+        const double untilSend = nextSend - nowMs();
+        timeval tv{0, untilSend < 10.0 ? static_cast<long>(std::max(0.0, untilSend) * 1000.0) : 10000};
         if (select(0, &rd, nullptr, nullptr, &tv) > 0) receiveAll();
         const DWORD now = GetTickCount();
-        if (now - lastSend >= 33) { lastSend = now; sendState(); sendPendingChat(); sendPendingBursts(); sendActivity(); }
+        const double t = nowMs();
+        if (t >= nextSend) {
+            nextSend += kSendMs;
+            if (t - nextSend > kSendMs) nextSend = t + kSendMs; // far behind (the PC stalled): no burst to catch up
+            sendState();
+            sendPendingChat();
+            sendPendingBursts();
+            sendActivity();
+        }
         if (now - lastHello >= 1000) { lastHello = now; sendHello(); }
         if (now - lastStats >= 30000) { lastStats = now; MLOG("net: %s", describe().c_str()); }
         if (now - lastHousekeeping >= 1000) {

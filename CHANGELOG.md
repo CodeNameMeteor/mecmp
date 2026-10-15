@@ -46,6 +46,25 @@ movement live: running, climbing, wall-running.
 Summon, players on the game's map, finished runs and live run clocks, Discord posts from servers, quick
 answers, and more:
 
+### Controls
+- **The middle button can be bound** to the marker, quick answer, other-way, hide and wheel keys and to the
+  summon keys (it was only offered for "clear markers"). While it is bound to one of them, holding it in the
+  open wheel no longer clears your markers.
+- **Hiding and showing the overlay take a one second hold** of the hide key (a bar fills at the top), so a
+  stray press does nothing.
+- **Poses go out at 30 Hz** (they went out about 21 times a second, because the send loop woke on the
+  system's 15.6 ms timer ticks). The loop now asks for a 1 ms tick while the session runs and sends from a
+  deadline on the high-resolution clock.
+- **Summon texts say "summon"** everywhere ("Nobody to summon", "Summoning everyone to you", ...).
+- **The "Go back?" bar can be hidden**: hold the summon accept key (1) for a second. Going back is then
+  no longer offered for that summon.
+
+### Menu
+- **Six tabs**: Session (with the host's settings while hosting), Players (list, Go to, summon, show /
+  hide ghosts, Mumble voice), You (your look; privacy: *Share my EA profile*, *Allow being pulled in*),
+  Markers, Display (interface size, what is shown, hide all) and Controls (keys and buttons only).
+  No setting changed; some moved.
+
 #### Seeing what players do
 ### Dedicated server
 - **`reset` console command.** Drops every player (they rejoin on their own when their game next asks), clears the

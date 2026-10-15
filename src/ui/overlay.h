@@ -32,10 +32,10 @@ bool setChatKey(const std::string& name);
 // The quick answers key (as ping_key; empty = none), at once. False if it is the menu, chat, marker
 // or clear-markers key.
 bool setReactKey(const std::string& name);
-// More keys, set the same way (letters, ENTER, menu keys, MOUSE4 / MOUSE5; empty = none). A key does
-// one job: False, and nothing changed, if another action of the mod (or the menu) has it.
+// More keys, set the same way (letters, ENTER, menu keys, MOUSE3 / MOUSE4 / MOUSE5; empty = none). A key
+// does one job: False, and nothing changed, if another action of the mod (or the menu) has it.
 bool setAltKey(const std::string& name);        // place a marker the other way
-bool setHideKey(const std::string& name);       // show / hide the overlay
+bool setHideKey(const std::string& name);       // hide / show the overlay (hold for a second)
 bool setWheelPrevKey(const std::string& name);  // previous wheel, while the wheel is open
 bool setWheelNextKey(const std::string& name);  // next wheel
 // Summon (ui/summon.h). The call key; the keys that say yes / no to a summon (hold for a second; the
@@ -48,6 +48,9 @@ bool setSummonDeclineKey(const std::string& name);
 bool overlayHidden();
 void setOverlayHidden(bool hidden);
 int pingClearVk();  // its virtual-key code (0 = none)
+// The middle button is bound to an action other than "clear markers" (so holding it in the open wheel
+// must not also clear them).
+bool middleButtonIsABind();
 bool gameFocused(); // the game's window has the keyboard
 // A key name as shown to the player: "Middle click" for MOUSE3, "Mouse 4", "Mouse 5", else the name itself.
 std::string keyLabel(const std::string& name);

@@ -22,6 +22,7 @@ bool requestToPos(const float pos[3], float yaw);
 // (0 = no longer possible: it ran out, the level changed, or the character died / respawned).
 uint32_t returnLeftMs();
 bool requestReturn();            // same rules as requestToPos; ignored when returnLeftMs() is 0
+void forgetReturn();             // the player dismissed "Go back?": returnLeftMs() is 0 from now on
 bool busy();
 // 0..1, how black the screen should be now (the overlay draws it over everything).
 float fadeAlpha();

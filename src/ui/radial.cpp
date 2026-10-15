@@ -216,7 +216,10 @@ void pollClear() {
     const int key = ui::pingClearVk();
     const bool canAct = ui::gameFocused() && !ui::menuOpen() && !chat::isOpen() && !game::hooks::gameMenuOpen();
     const bool keyHeld = canAct && key && down(key);
-    const bool wheelClear = canAct && g_open.load() && !g_reacting.load() && down(VK_MBUTTON); // not on the answers wheel
+    // Not on the answers wheel, and not when the middle button is the key that opened the wheel (or does
+    // something else): holding it there must not clear.
+    const bool wheelClear =
+        canAct && g_open.load() && !g_reacting.load() && !ui::middleButtonIsABind() && down(VK_MBUTTON);
     const bool now = keyHeld || wheelClear;
     if (!now) {
         // A press that let go before the hold time is one tap of a possible double tap.
@@ -485,9 +488,13 @@ void draw() {
         lines[nl++] = std::string("Tap 1-") + std::to_string(n) + " to " + verb + " without aiming";
         lines[nl++] = "Right click: cancel";
         if (mode == Mode::Markers) {
-            // The middle button always clears here; the key too, unless it is that button or there is none.
+            // The middle button clears here (unless it is bound to something else); the key too, unless it
+            // is that button or there is none.
             const bool key = !cfg->pingClearKey.empty() && _stricmp(cfg->pingClearKey.c_str(), "MOUSE3") != 0;
-            lines[nl++] = "Hold middle click" + (key ? " / " + ui::keyLabel(cfg->pingClearKey) : std::string()) + ": clear markers";
+            const bool middle = !ui::middleButtonIsABind();
+            if (middle || key)
+                lines[nl++] = std::string("Hold ") + (middle ? "middle click" : "") + (middle && key ? " / " : "") +
+                              (key ? ui::keyLabel(cfg->pingClearKey) : std::string()) + ": clear markers";
         }
     }
     for (int i = 0; i < nl; ++i)

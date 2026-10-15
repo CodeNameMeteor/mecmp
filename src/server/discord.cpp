@@ -48,10 +48,30 @@ std::string escapeMarkdown(const std::string& text) {
     return out;
 }
 
+// Length of the valid UTF-8 sequence starting at text[i] (1 for ASCII), or 0 if there is none there.
+size_t utf8SequenceLength(const std::string& text, size_t i) {
+    const unsigned char c = static_cast<unsigned char>(text[i]);
+    if (c < 0x80) return 1;
+    const size_t n = (c >> 5) == 6 ? 2 : (c >> 4) == 14 ? 3 : (c >> 3) == 30 ? 4 : 0;
+    if (!n || i + n > text.size()) return 0;
+    for (size_t k = 1; k < n; ++k)
+        if ((static_cast<unsigned char>(text[i + k]) >> 6) != 2) return 0;
+    const unsigned char c1 = static_cast<unsigned char>(text[i + 1]);
+    if (n == 2 && c < 0xC2) return 0;                                  // overlong
+    if (n == 3 && ((c == 0xE0 && c1 < 0xA0) || (c == 0xED && c1 >= 0xA0))) return 0; // overlong, surrogate
+    if (n == 4 && ((c == 0xF0 && c1 < 0x90) || (c == 0xF4 && c1 >= 0x90) || c > 0xF4)) return 0;
+    return n;
+}
+
 std::string jsonEscape(const std::string& text) {
     std::string out;
     out.reserve(text.size() + 8);
-    for (unsigned char c : text) {
+    // A byte that is not UTF-8 becomes U+FFFD: Discord rejects a whole post for one bad byte.
+    for (size_t i = 0; i < text.size();) {
+        const size_t len = utf8SequenceLength(text, i);
+        if (len > 1) { out.append(text, i, len); i += len; continue; }
+        if (!len) { out += "\\ufffd"; ++i; continue; }
+        const unsigned char c = static_cast<unsigned char>(text[i++]);
         switch (c) {
         case '"': out += "\\\""; break;
         case '\\': out += "\\\\"; break;
@@ -340,7 +360,7 @@ void Webhook::post(const std::string& line) {
     if (!running_ || line.empty()) return;
     {
         std::lock_guard<std::mutex> lock(m_);
-        if (queue_.size() >= 200) return; // Discord far behind: keep the newest only up to a bound
+        if (queue_.size() >= 200) return; // Discord is far behind: beyond 200 queued lines the new one is dropped
         queue_.push_back({Item::Line, line});
     }
     cv_.notify_all();
@@ -398,14 +418,18 @@ void writeFile(const std::string& path, const std::string& text) {
 
 // The live status message: edited in place (PATCH .../messages/<id>); posted the first time, or again if it
 // was deleted. Returns false to retry later (network, rate limit).
-bool Webhook::sendStatus(const std::string& text, std::chrono::steady_clock::time_point& nextPost) {
+bool Webhook::sendStatus(const std::string& text, std::chrono::steady_clock::time_point& nextPost,
+                         std::chrono::steady_clock::time_point deadline) {
     using clock = std::chrono::steady_clock;
     if (statusId_.empty() && !cfg_.statusIdFile.empty()) {
         const std::string saved = readFileTrimmed(cfg_.statusIdFile);
         if (isMessageId(saved)) statusId_ = saved;
     }
     const auto now = clock::now();
-    if (now < nextPost) std::this_thread::sleep_for(nextPost - now);
+    if (now < nextPost) {
+        if (nextPost > deadline) return false; // a rate limit that runs past the deadline (shutting down): later
+        std::this_thread::sleep_for(nextPost - now);
+    }
     Answer a;
     if (!statusId_.empty()) {
         a = sendJson("PATCH", withPath(cfg_.url, "/messages/" + statusId_), payload(text, ""));
@@ -427,7 +451,8 @@ bool Webhook::sendStatus(const std::string& text, std::chrono::steady_clock::tim
         return false;
     }
     if (a.status >= 200 && a.status < 300) return true;
-    log_("discord: status update failed (" + (a.status ? "HTTP " + std::to_string(a.status) : a.error) + ")");
+    if (statusFailuresLogged_++ < 3 || statusFailuresLogged_ % 100 == 0)
+        log_("discord: status update failed (" + (a.status ? "HTTP " + std::to_string(a.status) : a.error) + ")");
     return a.status >= 400 && a.status < 500; // a 4xx will not get better by retrying
 }
 
@@ -436,7 +461,10 @@ void Webhook::sendPosts(std::deque<std::string> posts, bool track, clock::time_p
     while (!posts.empty()) {
         const auto now = clock::now();
         if (now >= giveUp) break;
-        if (now < nextPost) std::this_thread::sleep_for(nextPost - now);
+        if (now < nextPost) { // never sleep past the give-up time
+            std::this_thread::sleep_for(std::min(nextPost, giveUp) - now);
+            continue;
+        }
         const Answer a = sendJson("POST", url, payload(posts.front(), cfg_.username));
         nextPost = clock::now() + std::chrono::milliseconds(2100); // ~28 posts a minute at most
         if (a.status >= 200 && a.status < 300) {
@@ -468,7 +496,10 @@ void Webhook::deleteMessages(clock::time_point& nextPost, bool stopping) {
     while (!toDelete_.empty()) {
         const auto now = clock::now();
         if (now >= giveUp) break;
-        if (now < nextPost) std::this_thread::sleep_for(nextPost - now);
+        if (now < nextPost) {
+            std::this_thread::sleep_for(std::min(nextPost, giveUp) - now);
+            continue;
+        }
         const Answer a = sendJson("DELETE", withPath(cfg_.url, "/messages/" + toDelete_.front()), std::string());
         nextPost = clock::now() + std::chrono::milliseconds(2100);
         if (a.status == 429) {
@@ -518,7 +549,7 @@ void Webhook::run() {
         // own spacing between requests is cut short (Discord allows 5 per 2 s; a 429 still makes us wait).
         if (stop_) nextPost = std::min(nextPost, clock::now() + std::chrono::milliseconds(300));
         if (haveStatus && stop_) {
-            sendStatus(status, nextPost);
+            sendStatus(status, nextPost, clock::now() + std::chrono::seconds(3));
             haveStatus = false;
             nextPost = std::min(nextPost, clock::now() + std::chrono::milliseconds(300));
         }
@@ -539,7 +570,7 @@ void Webhook::run() {
         }
         deleteMessages(nextPost, stopping);
         if (haveStatus) {
-            if (!sendStatus(status, nextPost)) {
+            if (!sendStatus(status, nextPost, clock::now() + std::chrono::seconds(120))) {
                 std::lock_guard<std::mutex> lock(m_);
                 if (!statusDirty_) { statusText_ = status; statusDirty_ = !stop_; } // retry unless stopping
             }

@@ -653,6 +653,11 @@ static void testDiscordFormatting() {
     CHECK(!dc::isWebhookUrl("https://discord.com/api/webhooks/123456789/a b"));       // spaces
     CHECK(dc::escapeMarkdown("*bold* _x_ `c` @everyone") == "\\*bold\\* \\_x\\_ \\`c\\` @everyone");
     CHECK(dc::jsonEscape("a\"b\\c\n\x01") == "a\\\"b\\\\c\\n\\u0001");
+    // Bytes that are not UTF-8 become U+FFFD (one bad byte would make Discord refuse the whole post); valid UTF-8 stays.
+    CHECK(dc::jsonEscape(std::string("a\xff" "b", 3)) == "a\\ufffdb");
+    CHECK(dc::jsonEscape("caf\xc3\xa9") == "caf\xc3\xa9");
+    CHECK(dc::jsonEscape(std::string("\xc0\xaf", 2)) == "\\ufffd\\ufffd"); // overlong '/'
+    CHECK(dc::jsonEscape(std::string("\xed\xa0\x80", 3)) == "\\ufffd\\ufffd\\ufffd"); // a surrogate
     const std::string body = dc::payload("hi \"there\"", "Beat Link");
     CHECK(body == "{\"content\":\"hi \\\"there\\\"\",\"username\":\"Beat Link\",\"allowed_mentions\":{\"parse\":[]}}");
     CHECK(dc::payload(std::string(3000, 'x'), "").size() < 2100); // cut to Discord's limit

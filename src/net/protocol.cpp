@@ -520,6 +520,7 @@ bool readResult(const char* payload, size_t n, Result& out) {
         static_cast<size_t>(end - p) < len)
         return false;
     if (r.value < 0 || r.value > 24LL * 3600 * 1000) return false; // a day: not a run time
+    if (r.delta < 0 || r.delta > 24LL * 3600 * 1000) return false; // the same bound for the time saved
     r.title = cleanResultTitle(std::string(p, len));
     out = r;
     return true;
@@ -566,6 +567,7 @@ const char* runKindName(uint8_t kind) {
 
 std::string formatRunTime(int64_t ms) {
     if (ms < 0) ms = 0;
+    if (ms > 100LL * 24 * 3600 * 1000) ms = 100LL * 24 * 3600 * 1000; // no overflow in the rounding below
     const int64_t cs = (ms + 5) / 10; // hundredths
     const int64_t h = cs / 360000, m = (cs / 6000) % 60, s = (cs / 100) % 60, c = cs % 100;
     char buf[32];

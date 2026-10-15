@@ -73,11 +73,12 @@ The live message looks like this, and is updated within a few seconds of anyone 
 > 🟢 **Beat Link** — 3/16 online: Meteor, Foie, Nollz
 > Join: `play.example.com:47800` (MECMP menu → Join)
 
-When the server stops it changes to "offline". Delete it in Discord and the server posts a new one.
+When the server stops cleanly it changes to "offline". A killed process or a power cut leaves the last message
+as it was until the next start. Delete the message in Discord and the server posts a new one.
 
 Keep the webhook URL private: anyone who has it can post to your channel. The server never sends it to
-players or writes it to the log. Posts are gathered for a couple of seconds and sent together, well under
-Discord's limits; player names cannot ping anyone. On Linux the webhook needs libcurl
+players or writes it to the log. Posts are gathered for a couple of seconds and sent together, at most about
+28 a minute (Discord allows 30 per webhook); player names cannot ping anyone. On Linux the webhook needs libcurl
 (`sudo apt install libcurl4t64` on Ubuntu 24.04, `libcurl4` on older systems); without it the server runs and logs that
 the webhook is off.
 
@@ -161,6 +162,7 @@ WantedBy=multi-user.target
 sudo useradd --system --home /opt/mecmp mecmp
 sudo mkdir -p /opt/mecmp && sudo cp build/mecmp_server /opt/mecmp/
 sudo chown -R mecmp /opt/mecmp
+sudo chmod 600 /opt/mecmp/mecmp_server.ini   # it holds the Discord webhook URL, if you set one
 sudo systemctl enable --now mecmp
 journalctl -u mecmp -f      # the log
 ```

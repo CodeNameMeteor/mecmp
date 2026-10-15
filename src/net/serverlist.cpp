@@ -116,7 +116,8 @@ void threadMain() {
             sockaddr_in from{};
             int fromLen = sizeof(from);
             int n = 0;
-            while ((n = recvfrom(sock, buf, sizeof(buf), 0, reinterpret_cast<sockaddr*>(&from), &fromLen)) > 0) {
+            // At most 256 answers per pass: a server that floods answers must not hold up the menu's asking.
+            for (int reads = 0; reads < 256 && (n = recvfrom(sock, buf, sizeof(buf), 0, reinterpret_cast<sockaddr*>(&from), &fromLen)) > 0; ++reads) {
                 proto::Header h;
                 proto::ServerInfo info;
                 if (n < static_cast<int>(sizeof(h))) continue;

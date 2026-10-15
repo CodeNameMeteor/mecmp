@@ -737,6 +737,16 @@ static void testResult() {
           got.delta == 2104 && got.title == "The View"); // cleaned like chat
     CHECK(!protocol::readResult(buf + sizeof(h), n - sizeof(h) - 3, got)); // cut short
     CHECK(protocol::formatRunTime(83456) == "1:23.46");
+    // A remote-supplied time saved beyond a day is refused (it used to overflow the rounding in formatRunTime).
+    {
+        protocol::Header rh{protocol::kMagic, protocol::kProtocol, protocol::kTypeResult, 1, 1};
+        protocol::Result bad;
+        bad.delta = INT64_MAX;
+        char rb[256];
+        const size_t rn = protocol::writeResult(rb, rh, bad);
+        CHECK(!protocol::readResult(rb + sizeof(rh), rn - sizeof(rh), got));
+    }
+    CHECK(protocol::formatRunTime(INT64_MAX) == protocol::formatRunTime(100LL * 24 * 3600 * 1000));
     CHECK(protocol::formatRunTime(12070) == "12.07");
     CHECK(protocol::formatRunTime(3723400) == "1:02:03.40");
     CHECK(protocol::formatRunTime(-5) == "0.00");

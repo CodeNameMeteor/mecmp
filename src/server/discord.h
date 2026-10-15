@@ -35,7 +35,9 @@ struct Config {
 
 // --- Formatting (pure; tested in tests/server_test.cpp) ---------------------------------------------
 bool isWebhookUrl(const std::string& url);     // https://(ptb.|canary.)discord(app).com/api/webhooks/...
-std::string escapeMarkdown(const std::string& text); // * _ ` ~ | > \ # [ ] ( ) - : @ escaped, so a name is shown as written
+// Markdown characters are escaped (* _ ` ~ | > \ # [ ] ( )), so a name is shown as written. Not escaped: - : and @,
+// which do no harm mid-line; @ mentions are blocked by allowed_mentions, and a bare URL in a name may be linked.
+std::string escapeMarkdown(const std::string& text);
 std::string jsonEscape(const std::string& text);
 // The JSON body for one post: content (cut to Discord's 2000 characters), username, no mentions.
 std::string payload(const std::string& content, const std::string& username);
@@ -87,7 +89,9 @@ private:
         std::string text;
     };
     void run();
-    bool sendStatus(const std::string& text, clock::time_point& nextPost);
+    // Edits the live message; false if it was not sent (retry later), including when a rate limit would wait
+    // past `deadline`.
+    bool sendStatus(const std::string& text, clock::time_point& nextPost, clock::time_point deadline);
     // Posts `posts` in order; with `track`, the id of each posted message goes to activity_.
     void sendPosts(std::deque<std::string> posts, bool track, clock::time_point& nextPost, clock::time_point giveUp);
     // Deletes the messages in toDelete_ (those left over are kept for the next pass, unless stopping).
@@ -100,6 +104,7 @@ private:
     ActivityLog activity_;                  // worker thread only
     std::deque<std::string> toDelete_;      // worker thread only
     int failuresLogged_ = 0;                // worker thread only
+    int statusFailuresLogged_ = 0;          // worker thread only
     bool playerLogged_ = false;             // worker thread only: the "no id" note was written
     std::string statusText_;
     bool statusDirty_ = false;

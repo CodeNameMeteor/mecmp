@@ -10,6 +10,8 @@
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <mutex>
+#include <vector>
 
 #include "backends/imgui_impl_dx11.h"
 #include "backends/imgui_impl_win32.h"
@@ -106,6 +108,28 @@ void clampCursor() {
 // Raw mouse events are collected here (window thread) and handed to ImGui at the start of the next
 // frame (render thread): ImGui itself is not thread-safe.
 std::atomic<uint32_t> g_btnDown{0}, g_btnUp{0};
+
+// Window messages for ImGui's own input (keyboard, text, chat, the menu's keys): the Win32 backend
+// adds them to ImGui's input queue, which the render thread drains in NewFrame. So the window thread
+// only queues them, and the render thread passes them on before the backend's NewFrame.
+struct ImGuiMsg { HWND hwnd; UINT msg; WPARAM w; LPARAM l; };
+std::mutex g_imguiMsgM;
+std::vector<ImGuiMsg> g_imguiMsgs; // guarded by g_imguiMsgM
+constexpr size_t kMaxImGuiMsgs = 256; // a backlog this long means the frame loop is stuck; newer messages are dropped
+
+void queueImGui(HWND hwnd, UINT msg, WPARAM w, LPARAM l) { // window thread
+    std::lock_guard<std::mutex> lock(g_imguiMsgM);
+    if (g_imguiMsgs.size() < kMaxImGuiMsgs) g_imguiMsgs.push_back({hwnd, msg, w, l});
+}
+
+void deliverImGuiMsgs() { // render thread, before the backend's NewFrame
+    std::vector<ImGuiMsg> msgs;
+    {
+        std::lock_guard<std::mutex> lock(g_imguiMsgM);
+        msgs.swap(g_imguiMsgs);
+    }
+    for (const ImGuiMsg& m : msgs) ImGui_ImplWin32_WndProcHandler(m.hwnd, m.msg, m.w, m.l);
+}
 std::atomic<int> g_wheel{0};
 
 void handleRawMouse(LPARAM l) {
@@ -255,7 +279,7 @@ bool wheelKey(int vk) {
 
 LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
     const bool keyUp = msg == WM_KEYUP || msg == WM_SYSKEYUP;
-    if (keyUp && g_ready) ImGui_ImplWin32_WndProcHandler(hwnd, msg, w, l);
+    if (keyUp && g_ready) queueImGui(hwnd, msg, w, l);
     if (msg == WM_KILLFOCUS) { g_openingChatKey = 0; g_eatChar = false; }
     const int openingChar = g_openingChatKey >= 'A' && g_openingChatKey <= 'Z' ? g_openingChatKey + ('a' - 'A') : g_openingChatKey;
     if (g_openingChatKey && ((msg == WM_KEYDOWN && static_cast<int>(w) == g_openingChatKey) ||
@@ -353,12 +377,12 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
         // key held when the chat opened is released there (Faith does not keep running).
         if (msg == WM_INPUT && isRawKeyPress(l)) return DefWindowProcW(hwnd, msg, w, l);
         if (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN || msg == WM_CHAR || msg == WM_SYSCHAR) {
-            ImGui_ImplWin32_WndProcHandler(hwnd, msg, w, l);
+            queueImGui(hwnd, msg, w, l);
             return 0;
         }
     }
     // A pad plugged in later: let the backend look for it again (it only sets a flag).
-    if (msg == WM_DEVICECHANGE && g_ready) ImGui_ImplWin32_WndProcHandler(hwnd, msg, w, l);
+    if (msg == WM_DEVICECHANGE && g_ready) queueImGui(hwnd, msg, w, l);
     if (g_open && g_ready) {
         // Key releases still reach the game (ImGui got them above), so a key held when the menu
         // opened is released there and Faith does not keep running.
@@ -371,7 +395,7 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
             return DefWindowProcW(hwnd, msg, w, l); // swallowed: the game does not see it
         }
         // Keyboard and text always go to ImGui; legacy mouse messages only while no raw input came.
-        if (!isMouseMessage(msg) || !g_rawMouse) ImGui_ImplWin32_WndProcHandler(hwnd, msg, w, l);
+        if (!isMouseMessage(msg) || !g_rawMouse) queueImGui(hwnd, msg, w, l);
         if (isInputMessage(msg)) return 0;
     }
     return CallWindowProcW(g_origWndProc, hwnd, msg, w, l);
@@ -487,6 +511,7 @@ HRESULT STDMETHODCALLTYPE presentHook(IDXGISwapChain* sc, UINT sync, UINT flags)
         prof::Scope scope(prof::Overlay);
         updateFontScale();
         ImGui_ImplDX11_NewFrame();
+        deliverImGuiMsgs();
         ImGui_ImplWin32_NewFrame();
         if (g_open && g_rawMouse) applyRawMouse(); // after the backend's own cursor read, so ours wins
         // While a gamepad binding is being recorded, the pad must not also click through the menu.

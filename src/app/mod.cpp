@@ -26,6 +26,7 @@
 #include "net/serverlist.h"
 #include "ui/gamepad.h"
 #include "ui/overlay.h"
+#include "ui/summon.h"
 
 namespace mecmp::app {
 namespace {
@@ -40,7 +41,7 @@ void onTick(void* world, float dt) {
     prof::Scope scope(prof::GameTick);
     static void* lastWorld = nullptr;
     if (world != lastWorld) { // new level: everything of the old one is gone
-        if (lastWorld) { game::ghosts::levelChanged(); game::teleport::levelChanged(); game::runs::levelChanged(); }
+        if (lastWorld) { game::ghosts::levelChanged(); game::teleport::levelChanged(); game::runs::levelChanged(); ui::summon::levelChanged(); }
         lastWorld = world;
         g_levelStartTick = g_ticks.load();
     }
@@ -149,6 +150,7 @@ void monitorLoop() {
             if (!world) {
                 game::ghosts::levelChanged();
                 game::teleport::levelChanged();
+                ui::summon::levelChanged();
             }
             if (lastWorld) game::level::reset(); // spawners of the old level are stale
             lastWorld = world;

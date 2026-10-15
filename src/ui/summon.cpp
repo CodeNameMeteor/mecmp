@@ -290,8 +290,17 @@ bool send(const std::vector<uint32_t>& targets, bool hard) {
     return true;
 }
 
+static std::atomic<bool> g_levelChanged{false}; // set by levelChanged() on any thread
+
+void levelChanged() { g_levelChanged = true; }
+
 void update(const Input& in) {
     const DWORD now = GetTickCount();
+    if (g_levelChanged.exchange(false)) {
+        g_pending.clear();
+        g_takeAccept = false;
+        g_takeDecline = false;
+    }
 
     // What other players sent: new summons, withdrawals.
     for (const net::SummonInfo& s : net::takeSummons()) {

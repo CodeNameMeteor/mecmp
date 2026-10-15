@@ -47,6 +47,13 @@ Summon, players on the game's map, finished runs and live run clocks, Discord po
 answers, and more:
 
 #### Seeing what players do
+### Dedicated server
+- **`reset` console command.** Drops every player (they rejoin on their own when their game next asks), clears the
+  counters and reads `mecmp_server.ini` again, so a changed name, player limit or motd takes effect without a
+  restart. Bans are kept. The port, log and bans files and the Discord webhook still need a restart, and the
+  command says so.
+
+### Seeing what players do
 - **A run's clock above the runner.** While a player is in a dash (or a delivery, GridNode, MetaGrid run) or a
   time trial, their name tag shows it with a running clock: "Dash: The View  12.4". It clears when the run is
   finished or cancelled. The clock is counted from when the player's game started the run (the countdown

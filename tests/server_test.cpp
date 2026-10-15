@@ -715,7 +715,53 @@ static void testResultEvents() {
     CHECK(ev.size() == 2);
 }
 
+static void testReset() {
+    // `reset`: everyone is dropped; reserved session ids, pending chat and the counters start again. Bans stay.
+    server::Config cfg;
+    cfg.maxPlayers = 3;
+    Harness t(cfg);
+    auto hA = hello(1, "alice"), hB = hello(2, "bob");
+    t.deliver(A, hA, 0);
+    t.deliver(B, hB, 0);
+    t.deliver(B, hB, 20000); // bob keeps talking; alice goes silent and times out, her id reserved
+    t.relay.tick(20000);
+    CHECK(t.relay.members().size() == 1);
+    CHECK(t.relay.ban("10.0.0.9") == 0x0a000009); // an address nobody uses yet
+    t.relay.say("welcome back"); // server chat still due on the next ticks
+    t.relay.reset();
+    CHECK(t.relay.members().empty());
+    CHECK(t.relay.stats().received == 0);
+    CHECK(t.relay.bans().count(0x0a000009) == 1);
+    CHECK(t.relay.config().maxPlayers == 3); // the settings are not touched
+    // Alice's id is free again (its reservation went with the reset), and the chat is no longer due.
+    const Addr C{0x0a000003, 5000};
+    t.deliver(C, hA, 20100);
+    CHECK(t.relay.members().size() == 1 && t.relay.members()[0].addr == C);
+    t.sent.clear();
+    t.relay.tick(20150);
+    CHECK(chatsTo(t, C) == 0);
+    // The banned address is still refused.
+    t.deliver(Addr{0x0a000009, 5000}, hello(9, "banned"), 20200);
+    CHECK(t.relay.members().size() == 1);
+}
+
+static void testReconfigure() {
+    // `reconfigure`: the new settings apply to what follows. Players stay; a lower limit refuses new ones.
+    Harness t;
+    t.deliver(A, hello(1, "alice"), 0);
+    server::Config cfg = t.relay.config();
+    cfg.name = "Renamed";
+    cfg.maxPlayers = 1;
+    t.relay.reconfigure(cfg);
+    CHECK(t.relay.config().name == "Renamed");
+    CHECK(t.relay.members().size() == 1);
+    t.deliver(B, hello(2, "bob"), 100);
+    CHECK(t.relay.members().size() == 1); // full at one player now
+}
+
 int main() {
+    testReset();
+    testReconfigure();
     testResultEvents();
     testEvents();
     testDiscordFormatting();

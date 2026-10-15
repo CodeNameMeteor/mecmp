@@ -112,7 +112,7 @@ constexpr const char* kDefaultIniTail =
     "bone_reach=1\r\n"
     "\r\n"
     "[audio]\r\n"
-    "; hear other players' native footsteps, hand contacts and movement sounds\r\n"
+    "; hear other players' native movement, breathing, effort vocals and combat sounds\r\n"
     "player_sounds=1\r\n"
     "; sounds beyond this distance are stopped (5..200 metres)\r\n"
     "distance=80\r\n"

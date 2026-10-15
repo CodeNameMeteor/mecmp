@@ -880,6 +880,13 @@ void lookListArrived() { retryLooksNow(); }
 void requestHideAll() { g_reqHide = true; }
 
 
+uintptr_t clientCharacter(uint32_t peer) {
+    std::lock_guard<std::mutex> lock(g_m);
+    for (const auto& g : g_ghosts)
+        if (g.peer == peer && !g.hidden && g.posing && !g_paused && clientCharIsGhost(g.clientChar))
+            return reinterpret_cast<uintptr_t>(g.clientChar);
+    return 0;
+}
 std::vector<uint32_t> shownPeers() {
     std::vector<uint32_t> v;
     std::lock_guard<std::mutex> lock(g_m);

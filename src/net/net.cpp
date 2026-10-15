@@ -1011,7 +1011,7 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
         if (!proto::readAudio(payload, len, sample)) { ++g_dropped; return; }
         if (r.audioSeen.seen(sample.id)) return;
         if (now - r.audioWindow >= 1000) { r.audioWindow = now; r.audioBurst = 0; }
-        if (++r.audioBurst > 24 || !r.fill || now - r.lastTick > 1000) return;
+        if (++r.audioBurst > kMaxPlayerAudioPerSecond || !r.fill || now - r.lastTick > 1000) return;
         r.audioSeen.add(sample.id);
         if (g_audio.size() >= 256) g_audio.pop_front();
         // Match the pose interpolation delay on the sender's clock. Do not

@@ -618,8 +618,10 @@ void shownInGame() {
 void voiceSection() {
     ImGui::SeparatorText("Player sounds");
     bool audio = config::get()->playerAudio;
-    if (ImGui::Checkbox("Other players' movement sounds", &audio))
+    if (ImGui::Checkbox("Other players' game sounds", &audio))
         config::change([audio](config::Settings& c) { c.playerAudio = audio; });
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Footsteps, parkour, breathing, grunts, attacks and combat impacts.");
     float distance = config::get()->playerAudioDistance;
     if (ImGui::SliderFloat("Sound distance", &distance, 5.f, 200.f, "%.0f m"))
         config::change([distance](config::Settings& c) { c.playerAudioDistance = distance; });

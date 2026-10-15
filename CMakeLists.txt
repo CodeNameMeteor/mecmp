@@ -58,6 +58,7 @@ add_library(mecmp SHARED
   src/game/models.cpp
   src/game/mumble_link.cpp
   src/game/player_audio.cpp
+  src/game/native_vocals.cpp
   src/game/teleport.cpp
   src/game/local_player.cpp
   src/game/ping_point.cpp

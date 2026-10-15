@@ -326,12 +326,41 @@ Webhook::~Webhook() {
     thread_.join();
 }
 
+void ActivityLog::add(const std::string& id) {
+    if (isMessageId(id) && ids_.size() < kMax) ids_.push_back(id);
+}
+
+std::vector<std::string> ActivityLog::take() {
+    std::vector<std::string> out;
+    out.swap(ids_);
+    return out;
+}
+
 void Webhook::post(const std::string& line) {
     if (!running_ || line.empty()) return;
     {
         std::lock_guard<std::mutex> lock(m_);
         if (queue_.size() >= 200) return; // Discord far behind: keep the newest only up to a bound
-        queue_.push_back(line);
+        queue_.push_back({Item::Line, line});
+    }
+    cv_.notify_all();
+}
+
+void Webhook::postActivity(const std::string& line) {
+    if (!running_ || line.empty()) return;
+    {
+        std::lock_guard<std::mutex> lock(m_);
+        if (queue_.size() >= 200) return;
+        queue_.push_back({Item::Activity, line});
+    }
+    cv_.notify_all();
+}
+
+void Webhook::endSession() {
+    if (!running_) return;
+    {
+        std::lock_guard<std::mutex> lock(m_);
+        queue_.push_back({Item::EndSession, std::string()}); // never dropped: the activity before it must go
     }
     cv_.notify_all();
 }
@@ -402,28 +431,85 @@ bool Webhook::sendStatus(const std::string& text, std::chrono::steady_clock::tim
     return a.status >= 400 && a.status < 500; // a 4xx will not get better by retrying
 }
 
+void Webhook::sendPosts(std::deque<std::string> posts, bool track, clock::time_point& nextPost, clock::time_point giveUp) {
+    const std::string url = track ? withQuery(cfg_.url, "wait=true") : cfg_.url; // wait=true: the answer carries the id
+    while (!posts.empty()) {
+        const auto now = clock::now();
+        if (now >= giveUp) break;
+        if (now < nextPost) std::this_thread::sleep_for(nextPost - now);
+        const Answer a = sendJson("POST", url, payload(posts.front(), cfg_.username));
+        nextPost = clock::now() + std::chrono::milliseconds(2100); // ~28 posts a minute at most
+        if (a.status >= 200 && a.status < 300) {
+            if (track) {
+                const std::string id = messageId(a.body);
+                if (id.empty() && !playerLogged_) {
+                    playerLogged_ = true;
+                    log_("discord: could not read the id of a player message; it will not be deleted when the server is empty");
+                }
+                activity_.add(id);
+            }
+            posts.pop_front();
+            failuresLogged_ = 0;
+        } else if (a.status == 429) {
+            const double wait = retryAfter(a.body, 5.0);
+            nextPost = clock::now() + std::chrono::milliseconds(static_cast<long long>(wait * 1000) + 100);
+        } else {
+            if (failuresLogged_++ < 3)
+                log_("discord: post failed (" + (a.status ? "HTTP " + std::to_string(a.status) : a.error) + ")" +
+                     (a.status == 401 || a.status == 404 ? "; is webhook_url right? the webhook may have been deleted" : ""));
+            if (a.status >= 400 && a.status < 500) posts.pop_front(); // will not work if retried
+            else nextPost = clock::now() + std::chrono::seconds(10);
+        }
+    }
+}
+
+void Webhook::deleteMessages(clock::time_point& nextPost, bool stopping) {
+    const auto giveUp = clock::now() + (stopping ? std::chrono::seconds(3) : std::chrono::seconds(120));
+    while (!toDelete_.empty()) {
+        const auto now = clock::now();
+        if (now >= giveUp) break;
+        if (now < nextPost) std::this_thread::sleep_for(nextPost - now);
+        const Answer a = sendJson("DELETE", withPath(cfg_.url, "/messages/" + toDelete_.front()), std::string());
+        nextPost = clock::now() + std::chrono::milliseconds(2100);
+        if (a.status == 429) {
+            nextPost = clock::now() + std::chrono::milliseconds(static_cast<long long>(retryAfter(a.body, 5.0) * 1000) + 100);
+        } else if ((a.status >= 200 && a.status < 300) || a.status == 404) {
+            toDelete_.pop_front(); // deleted, or already gone
+        } else if (a.status == 0) {
+            nextPost = clock::now() + std::chrono::seconds(10); // network: try this one again
+        } else {
+            log_("discord: could not delete a player message (HTTP " + std::to_string(a.status) + ")");
+            toDelete_.pop_front();
+        }
+    }
+    if (stopping && !toDelete_.empty()) {
+        log_("discord: " + std::to_string(toDelete_.size()) + " player message(s) were left in Discord (stopping)");
+        toDelete_.clear();
+    }
+}
+
 void Webhook::run() {
-    using clock = std::chrono::steady_clock;
     clock::time_point nextPost = clock::now();
     clock::time_point nextStatus = clock::now(); // at most one edit every kStatusGap (the latest text wins)
     constexpr auto kStatusGap = std::chrono::seconds(5);
-    int failuresLogged = 0;
     for (;;) {
-        std::deque<std::string> lines;
+        std::deque<Item> items;
         std::string status;
         bool haveStatus = false;
+        bool stopping = false;
         {
             std::unique_lock<std::mutex> lock(m_);
-            cv_.wait(lock, [this] { return stop_ || !queue_.empty() || statusDirty_; });
-            if (stop_ && queue_.empty() && !statusDirty_) return;
+            cv_.wait(lock, [this] { return stop_ || !queue_.empty() || statusDirty_ || !toDelete_.empty(); });
+            stopping = stop_;
+            if (stopping && queue_.empty() && !statusDirty_ && toDelete_.empty()) return;
             // Gather what arrives in the next 2 s into the same post (unless stopping).
             if (!stop_ && !queue_.empty()) cv_.wait_for(lock, std::chrono::seconds(2), [this] { return stop_; });
-            lines.swap(queue_);
+            items.swap(queue_);
             if (statusDirty_ && (stop_ || clock::now() >= nextStatus)) {
                 status = statusText_;
                 statusDirty_ = false;
                 haveStatus = true;
-            } else if (statusDirty_ && lines.empty()) {
+            } else if (statusDirty_ && items.empty() && toDelete_.empty()) {
                 cv_.wait_until(lock, nextStatus, [this] { return stop_; }); // the next edit is not due yet
                 continue;
             }
@@ -436,28 +522,22 @@ void Webhook::run() {
             haveStatus = false;
             nextPost = std::min(nextPost, clock::now() + std::chrono::milliseconds(300));
         }
-        std::deque<std::string> posts = pack(std::move(lines));
         const clock::time_point giveUp = clock::now() + std::chrono::seconds(stop_ ? 3 : 120);
-        while (!posts.empty()) {
-            const auto now = clock::now();
-            if (now >= giveUp) break;
-            if (now < nextPost) std::this_thread::sleep_for(nextPost - now);
-            const Answer a = sendJson("POST", cfg_.url, payload(posts.front(), cfg_.username));
-            nextPost = clock::now() + std::chrono::milliseconds(2100); // ~28 posts a minute at most
-            if (a.status >= 200 && a.status < 300) {
-                posts.pop_front();
-                failuresLogged = 0;
-            } else if (a.status == 429) {
-                const double wait = retryAfter(a.body, 5.0);
-                nextPost = clock::now() + std::chrono::milliseconds(static_cast<long long>(wait * 1000) + 100);
-            } else {
-                if (failuresLogged++ < 3)
-                    log_("discord: post failed (" + (a.status ? "HTTP " + std::to_string(a.status) : a.error) + ")" +
-                         (a.status == 401 || a.status == 404 ? "; is webhook_url right? the webhook may have been deleted" : ""));
-                if (a.status >= 400 && a.status < 500) posts.pop_front(); // will not work if retried
-                else nextPost = clock::now() + std::chrono::seconds(10);
+        // In order: consecutive lines are packed together, consecutive activity is packed and remembered, and an
+        // end of session moves what was remembered onto the delete list.
+        for (size_t i = 0; i < items.size();) {
+            if (items[i].kind == Item::EndSession) {
+                for (const std::string& id : activity_.take()) toDelete_.push_back(id);
+                ++i;
+                continue;
             }
+            const bool track = items[i].kind == Item::Activity;
+            std::deque<std::string> group;
+            while (i < items.size() && items[i].kind != Item::EndSession && (items[i].kind == Item::Activity) == track)
+                group.push_back(items[i++].text);
+            sendPosts(pack(std::move(group)), track, nextPost, giveUp);
         }
+        deleteMessages(nextPost, stopping);
         if (haveStatus) {
             if (!sendStatus(status, nextPost)) {
                 std::lock_guard<std::mutex> lock(m_);

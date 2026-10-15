@@ -81,6 +81,9 @@ Discord's limits; player names cannot ping anyone. On Linux the webhook needs li
 (`sudo apt install libcurl4t64` on Ubuntu 24.04, `libcurl4` on older systems); without it the server runs and logs that
 the webhook is off.
 
+When the server empties again, the join and leave messages posted since it was last empty are deleted, so the
+channel shows the current session's players. The live status message and finished runs stay.
+
 Console commands (type them in the server's window):
 
 | Command | |

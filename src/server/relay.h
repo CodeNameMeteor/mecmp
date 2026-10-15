@@ -115,6 +115,11 @@ public:
 private:
     Member* find(const Addr& a);
     bool sessionTaken(uint32_t session, const Addr& except) const;
+    // Admission (protocol 7): a stranger's HELLO is answered with a CHALLENGE; an ANSWER with its cookie admits.
+    void challenge(const Addr& to, uint32_t nowMs);
+    bool cookieValid(const Addr& from, uint64_t cookie, uint32_t nowMs) const;
+    void onAnswer(const Addr& from, uint32_t session, const char* payload, size_t len, uint32_t nowMs);
+    void admit(const Addr& from, uint32_t session, uint32_t nowMs);
     bool blocked(const Addr& a, uint32_t nowMs);
     // A player's lines in the log: a few per window, so one player cannot fill the log.
     bool logAllowed(Member& m, uint32_t nowMs);
@@ -128,6 +133,7 @@ private:
     Config cfg_;
     uint32_t session_;
     uint32_t seq_ = 0;
+    uint8_t cookieKey_[16] = {}; // random per process: the cookies it hands out are only valid for it
     Send send_;
     Log log_;
     OnEvent onEvent_;

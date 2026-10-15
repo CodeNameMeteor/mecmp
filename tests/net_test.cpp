@@ -261,6 +261,33 @@ static void testInfoAnswerName() {
     CHECK(info.players == 3 && info.maxPlayers == 16);
 }
 
+static void testSipHashAndCookies() {
+    // SipHash-2-4 reference vectors: key 00..0f, messages of 0, 1 and 8 bytes (00..07).
+    uint8_t key[16];
+    for (int i = 0; i < 16; ++i) key[i] = static_cast<uint8_t>(i);
+    uint8_t msg[8];
+    for (int i = 0; i < 8; ++i) msg[i] = static_cast<uint8_t>(i);
+    CHECK(protocol::siphash24(key, nullptr, 0) == 0x726fdb47dd0e0e31ULL);
+    CHECK(protocol::siphash24(key, msg, 1) == 0x74f839c593dc67fdULL);
+    CHECK(protocol::siphash24(key, msg, 8) == 0x93f5f5799a932462ULL);
+    // A cookie depends on the key, the address and the minute, and is the same for the same three.
+    const uint64_t c = protocol::admissionCookie(key, 0x0a000001, 5000, 7);
+    CHECK(c == protocol::admissionCookie(key, 0x0a000001, 5000, 7));
+    CHECK(c != protocol::admissionCookie(key, 0x0a000002, 5000, 7));
+    CHECK(c != protocol::admissionCookie(key, 0x0a000001, 5001, 7));
+    CHECK(c != protocol::admissionCookie(key, 0x0a000001, 5000, 8));
+    uint8_t other[16] = {};
+    CHECK(c != protocol::admissionCookie(other, 0x0a000001, 5000, 7));
+    // The cookie packet round-trips.
+    char buf[64];
+    const protocol::Header h{protocol::kMagic, protocol::kProtocol, protocol::kTypeChallenge, 9, 1};
+    const size_t n = protocol::writeCookie(buf, h, c);
+    uint64_t back = 0;
+    CHECK(n == sizeof(h) + protocol::kCookieLen);
+    CHECK(protocol::readCookie(buf + sizeof(h), n - sizeof(h), back) && back == c);
+    CHECK(!protocol::readCookie(buf + sizeof(h), protocol::kCookieLen - 1, back));
+}
+
 static void testKnownTypes() {
     CHECK(protocol::knownType(protocol::kTypeState) && protocol::knownType(protocol::kTypeHello));
     CHECK(protocol::knownType(protocol::kTypeChat) && protocol::knownType(protocol::kTypePing));
@@ -753,6 +780,7 @@ int main() {
     testResult();
     testActivity();
     testKnownTypes();
+    testSipHashAndCookies();
     testInfoAnswerName();
     testRecentIds();
     testPing();

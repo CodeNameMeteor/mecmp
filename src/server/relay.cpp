@@ -2,6 +2,7 @@
 
 #include <cstdio>
 #include <cstring>
+#include <random>
 #include <utility>
 
 #include "net/protocol.h"
@@ -47,7 +48,10 @@ std::string hex(uint32_t v) {
 
 Relay::Relay(Config cfg, uint32_t serverSession, Send send, Log log)
     : cfg_(std::move(cfg)), session_(serverSession), send_(std::move(send)), log_(std::move(log)),
-      chatId_(serverSession * 2654435761u) {}
+      chatId_(serverSession * 2654435761u) {
+    std::random_device rd;
+    for (uint8_t& b : cookieKey_) b = static_cast<uint8_t>(rd());
+}
 
 Member* Relay::find(const Addr& a) {
     for (auto& m : members_)
@@ -117,7 +121,7 @@ void Relay::onPacket(const Addr& from, const char* buf, size_t n, uint32_t nowMs
         }
         return;
     }
-    if (h.magic != proto::kMagic || h.protocol != proto::kProtocol || !proto::knownType(h.type)) {
+    if (h.magic != proto::kMagic || h.protocol != proto::kProtocol || !(proto::knownType(h.type) || h.type == proto::kTypeAnswer)) {
         ++stats_.dropped;
         return;
     }
@@ -127,36 +131,14 @@ void Relay::onPacket(const Addr& from, const char* buf, size_t n, uint32_t nowMs
         return;
     }
     if (blocked(from, nowMs)) { ++stats_.dropped; return; }
+    if (h.type == proto::kTypeAnswer) { onAnswer(from, h.session, buf + sizeof(h), n - sizeof(h), nowMs); return; }
     Member* m = find(from);
-    if (!m) {
-        if (sessionTaken(h.session, from)) { ++stats_.dropped; return; }
-        if (members_.size() >= cfg_.maxPlayers) {
-            ++stats_.dropped;
-            if (!fullWarned_ || nowMs - fullWarnAt_ > 10000) {
-                fullWarned_ = true;
-                fullWarnAt_ = nowMs;
-                log_("server full (" + std::to_string(members_.size()) + " players); not admitting " + toString(from));
-            }
-            notify(from, "This server is full (" + std::to_string(members_.size()) + "/" + std::to_string(cfg_.maxPlayers) +
-                             "). Try again later.", nowMs);
-            return;
-        }
-        size_t sameIp = 0;
-        for (const auto& o : members_) sameIp += o.addr.ip == from.ip;
-        if (sameIp >= cfg_.maxPerIp) {
-            ++stats_.dropped;
-            notify(from, "Too many players from your address on this server.", nowMs);
-            return;
-        }
-        Member nm;
-        nm.addr = from;
-        nm.session = h.session;
-        nm.joinedAt = nm.lastSeen = nm.refillAt = nowMs;
-        nm.tokens = cfg_.burst;
-        members_.push_back(nm);
-        m = &members_.back();
-        haveHello_ = false; // greet the newcomer right away (it learns the session and our name)
-    } else if (h.session != m->session) {
+    if (!m) { // a stranger: only a HELLO is answered, with a challenge; nothing else is heard before it answers
+        if (h.type != proto::kTypeHello) { ++stats_.dropped; return; }
+        challenge(from, nowMs);
+        return;
+    }
+    if (h.session != m->session) {
         // Same address, new id: the game was restarted. Only a HELLO may change it, and only to an id
         // nobody else uses.
         if (h.type != proto::kTypeHello || sessionTaken(h.session, from)) { ++stats_.dropped; ++m->dropped; return; }
@@ -249,6 +231,58 @@ void Relay::onPacket(const Addr& from, const char* buf, size_t n, uint32_t nowMs
         }
         send_(from, mirror, n);
     }
+}
+
+void Relay::challenge(const Addr& to, uint32_t nowMs) {
+    char buf[proto::kMaxPacket];
+    const proto::Header h{proto::kMagic, proto::kProtocol, proto::kTypeChallenge, session_, ++seq_};
+    send_(to, buf, proto::writeCookie(buf, h, proto::admissionCookie(cookieKey_, to.ip, to.port, nowMs / 60000)));
+}
+
+bool Relay::cookieValid(const Addr& from, uint64_t cookie, uint32_t nowMs) const {
+    // This minute's cookie, or the last minute's (a challenge may have been answered just after the minute changed).
+    const uint32_t minute = nowMs / 60000;
+    if (cookie == proto::admissionCookie(cookieKey_, from.ip, from.port, minute)) return true;
+    return minute > 0 && cookie == proto::admissionCookie(cookieKey_, from.ip, from.port, minute - 1);
+}
+
+void Relay::onAnswer(const Addr& from, uint32_t session, const char* payload, size_t len, uint32_t nowMs) {
+    uint64_t cookie = 0;
+    if (!proto::readCookie(payload, len, cookie) || find(from) || !cookieValid(from, cookie, nowMs)) {
+        ++stats_.dropped;
+        return;
+    }
+    admit(from, session, nowMs);
+}
+
+// Lets a player in once it has answered the challenge (its address is proven). The same checks as before.
+void Relay::admit(const Addr& from, uint32_t session, uint32_t nowMs) {
+    if (sessionTaken(session, from)) { ++stats_.dropped; return; }
+    if (members_.size() >= cfg_.maxPlayers) {
+        ++stats_.dropped;
+        if (!fullWarned_ || nowMs - fullWarnAt_ > 10000) {
+            fullWarned_ = true;
+            fullWarnAt_ = nowMs;
+            log_("server full (" + std::to_string(members_.size()) + " players); not admitting " + toString(from));
+        }
+        notify(from, "This server is full (" + std::to_string(members_.size()) + "/" + std::to_string(cfg_.maxPlayers) +
+                         "). Try again later.", nowMs);
+        return;
+    }
+    size_t sameIp = 0;
+    for (const auto& o : members_) sameIp += o.addr.ip == from.ip;
+    if (sameIp >= cfg_.maxPerIp) {
+        ++stats_.dropped;
+        notify(from, "Too many players from your address on this server.", nowMs);
+        return;
+    }
+    Member nm;
+    nm.addr = from;
+    nm.session = session;
+    nm.joinedAt = nm.lastSeen = nm.refillAt = nowMs;
+    nm.tokens = cfg_.burst;
+    members_.push_back(nm);
+    haveHello_ = false; // greet the newcomer right away (it learns the session and our name)
 }
 
 void Relay::sendHello() {

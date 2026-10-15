@@ -26,7 +26,9 @@
 namespace mecmp::net::protocol {
 
 constexpr uint32_t kMagic = 0x4d43454d; // "MECM"
-constexpr uint16_t kProtocol = 6;
+// 7: admission cookies (CHALLENGE and ANSWER). A stranger's HELLO is answered with a challenge, and it is let in
+// only after it answers. Older versions cannot answer, so everyone must run the same version.
+constexpr uint16_t kProtocol = 7;
 constexpr uint16_t kTypeState = 1;
 constexpr uint16_t kTypeHello = 2;
 constexpr uint16_t kTypeChat = 3;
@@ -45,6 +47,13 @@ constexpr uint16_t kTypeActivity = 10; // the run the sender is in now, with its
 //     the server's protocol and session, and the request's seq (to match it and time the round trip).
 constexpr uint16_t kTypeInfo = 5;
 constexpr size_t kInfoRequestSize = 80;
+// Admission (protocol 7): a host or server does not let in a player it has not heard back from. A stranger's
+// HELLO gets a CHALLENGE (u64 cookie); the stranger answers with an ANSWER carrying the same cookie, and only
+// then is it a player. The cookie is a keyed hash of the stranger's address and the minute (the previous
+// minute is accepted too), so nothing is kept for strangers. Neither type is stored or forwarded.
+constexpr uint16_t kTypeChallenge = 11;
+constexpr uint16_t kTypeAnswer = 12;
+constexpr size_t kCookieLen = 8;
 // The packet types this version understands. Anything else is dropped before it can create state or
 // be forwarded, so a new type needs no protocol bump: older versions simply ignore it.
 constexpr bool knownType(uint16_t type) {
@@ -339,6 +348,14 @@ size_t writeInfoAnswer(char* buf, const Header& h, const ServerInfo& info);
 // Payload after the header. False if it is not a request / an answer.
 bool isInfoRequest(const char* payload, size_t n);
 bool readInfoAnswer(const char* payload, size_t n, ServerInfo& out);
+
+// SipHash-2-4 (reference test vectors apply) of `len` bytes with a 128-bit key.
+uint64_t siphash24(const uint8_t key[16], const uint8_t* in, size_t len);
+// The cookie for a stranger at ip:port (host byte order) in `minute` (GetTickCount() / 60000).
+uint64_t admissionCookie(const uint8_t key[16], uint32_t ip, uint16_t port, uint32_t minute);
+// CHALLENGE and ANSWER both carry just the cookie after the header.
+size_t writeCookie(char* buf, const Header& h, uint64_t cookie);
+bool readCookie(const char* payload, size_t n, uint64_t& cookie);
 // HELLO: char name[24] | u32 look | u8 flags (bit 0: the sender hosts this session; bit 1: the sender is
 // a dedicated server, not a player: it sends no STATE and has no ghost). Older senders stop after the
 // name or the look; missing fields read as 0.

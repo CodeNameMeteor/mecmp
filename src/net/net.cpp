@@ -121,6 +121,7 @@ std::mutex g_m;
 std::map<uint32_t, Remote> g_remotes;     // by session id
 std::vector<sockaddr_in> g_sendTo;        // JOIN: the host. HOST: kept in sync with g_members
 std::vector<Member> g_members;            // HOST: connected joiners
+uint8_t g_cookieKey[16] = {};            // random per start(): the admission cookies it hands out are only good for this session
 // HOST: session ids of joiners who went silent. Only their own address may use the id again for kSessionGraceMs.
 struct Reserved { uint32_t session; sockaddr_in addr; DWORD until; };
 std::vector<Reserved> g_reserved;        // guarded by g_m
@@ -651,6 +652,48 @@ void receiveSummonReply(Remote& r, bool own, const char* payload, size_t len) { 
     if (summon::complete(m.tally)) finishMySummon();
 }
 
+// --- Admission (protocol 7, see kTypeChallenge in protocol.h) -----------------------------------------
+uint32_t cookieMinute() { return GetTickCount() / 60000; }
+uint64_t cookieFor(const sockaddr_in& a, uint32_t minute) {
+    return proto::admissionCookie(g_cookieKey, ntohl(a.sin_addr.s_addr), ntohs(a.sin_port), minute);
+}
+// This minute's cookie for the address, or the last minute's (an answer may come just after the minute changed).
+bool validCookie(const sockaddr_in& a, uint64_t cookie) {
+    const uint32_t m = cookieMinute();
+    return cookie == cookieFor(a, m) || (m > 0 && cookie == cookieFor(a, m - 1));
+}
+
+// Host, caller holds g_m (sendto does not take the lock): a stranger's HELLO is answered with the cookie that
+// proves its address. Nothing is kept for it.
+void sendChallenge(const sockaddr_in& to) {
+    char out[proto::kMaxPacket];
+    const size_t n = proto::writeCookie(out, header(proto::kTypeChallenge), cookieFor(to, cookieMinute()));
+    sendto(g_sock, out, static_cast<int>(n), 0, reinterpret_cast<const sockaddr*>(&to), sizeof(to));
+}
+
+// A CHALLENGE (from the host, to a joiner) is answered at once, with our HELLO straight after it, so the host lets
+// us in. An ANSWER (from a stranger, to the host) with a valid cookie is let in, the same as a joiner always was.
+void handleAdmission(const proto::Header& h, const char* buf, int n, const sockaddr_in& from) {
+    uint64_t cookie = 0;
+    if (!proto::readCookie(buf + sizeof(h), static_cast<size_t>(n) - sizeof(h), cookie)) { ++g_dropped; return; }
+    if (h.type == proto::kTypeChallenge) {
+        {
+            std::lock_guard<std::mutex> lock(g_m);
+            if (g_role != Role::Join || !sameAddr(from, g_hostAddr)) { ++g_dropped; return; }
+        }
+        char out[proto::kMaxPacket];
+        sendAll(out, proto::writeCookie(out, header(proto::kTypeAnswer), cookie));
+        sendHello();
+        return;
+    }
+    std::lock_guard<std::mutex> lock(g_m);
+    if (g_role != Role::Host || h.session == g_session || memberFrom(from) || !validCookie(from, cookie)) {
+        ++g_dropped;
+        return;
+    }
+    admitMember(from, h.session);
+}
+
 void handlePacket(const char* buf, int n, const sockaddr_in& from) {
     proto::Header h;
     if (n < static_cast<int>(sizeof(h))) { ++g_dropped; return; }
@@ -666,6 +709,8 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
         ++g_dropped;
         return;
     }
+    // Admission: a challenge from the host, or a stranger's answer. Never stored or forwarded.
+    if (h.type == proto::kTypeChallenge || h.type == proto::kTypeAnswer) { handleAdmission(h, buf, n, from); return; }
     // Only the packet types we know may create state or be forwarded to other players.
     if (!proto::knownType(h.type)) { ++g_dropped; return; }
     const bool own = h.session == g_session;
@@ -678,8 +723,11 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
         // Nothing of ours comes back to the host, so a packet that claims our session id is forged.
         if (own) { ++g_dropped; return; }
         Member* m = memberFrom(from);
-        if (!m) m = admitMember(from, h.session);
-        if (!m) { ++g_dropped; return; }
+        if (!m) { // a stranger: only a HELLO is answered, with a challenge; it is let in by its ANSWER
+            if (h.type == proto::kTypeHello) sendChallenge(from);
+            ++g_dropped;
+            return;
+        }
         m->lastSeen = GetTickCount();
         // A player speaks only as itself: its session id is fixed when it joins. Only a HELLO may change it
         // (the game was restarted), and only to an id no other player uses.
@@ -1152,6 +1200,10 @@ bool start(uint16_t port, const std::string& join, float loopbackOffset, const s
     u_long nb = 1;
     ioctlsocket(g_sock, FIONBIO, &nb);
     g_session = GetTickCount() ^ (GetCurrentProcessId() << 16) ^ 0x5a17c0deu;
+    {
+        std::random_device rd;
+        for (uint8_t& b : g_cookieKey) b = static_cast<uint8_t>(rd());
+    }
     if (join.empty()) {
         g_role = Role::Host;
         MLOG("net: hosting on UDP %u; setting up the router and the join code...", g_port);

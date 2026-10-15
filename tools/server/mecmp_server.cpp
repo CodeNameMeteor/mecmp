@@ -465,7 +465,8 @@ int serverMain(int argc, char** argv) {
     bool configGiven = false;
     for (int i = 1; i < argc; ++i)
         if (std::string(argv[i]) == "--config" && i + 1 < argc) { configPath = argv[i + 1]; configGiven = true; }
-    if (!configGiven && !std::filesystem::exists(configPath)) writeDefaultConfig(configPath);
+    // First run, also with --config (as the systemd unit in docs/SERVER.md does): a commented file to fill in.
+    if (!std::filesystem::exists(configPath)) writeDefaultConfig(configPath);
     if (!readConfig(configPath, o, configGiven)) return 1;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];

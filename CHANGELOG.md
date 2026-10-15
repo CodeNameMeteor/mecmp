@@ -56,6 +56,9 @@
   `--mirror` still mirrors you, with any build.
 
 ### Fixes
+- **The server starts with `--config` pointing at a file that does not exist yet** (the systemd setup in
+  docs/SERVER.md does that): it writes the commented default there, as it does without `--config`. Before, it
+  stopped at once with "cannot read".
 - **A player who came back from a mission was never seen again**, not even his name tag (and "Go to" said
   the player character was not available). When the mod missed the new level's player spawner, the scan
   that finds it only ran if the player character already existed, which it did not without the spawner.

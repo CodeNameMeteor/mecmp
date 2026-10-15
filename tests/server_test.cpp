@@ -492,6 +492,18 @@ static void testCookieAddressAndAge() {
     CHECK(old.relay.members().empty());
 }
 
+static void testActivityLog() {
+    // The message ids of a session's join and leave posts: only real message ids are kept, in order.
+    mecmp::server::discord::ActivityLog log;
+    log.add("123456789012345678");
+    log.add("not an id");
+    log.add("987654321098765432");
+    CHECK(log.size() == 2);
+    const auto ids = log.take();
+    CHECK(ids.size() == 2 && ids[0] == "123456789012345678" && ids[1] == "987654321098765432");
+    CHECK(log.size() == 0 && log.take().empty());
+}
+
 static void testSharedNames() {
     // Two players with the same name: kick and ban refuse the name (it would hit one of them at random);
     // the id still works.
@@ -709,6 +721,7 @@ int main() {
     testCookieAddressAndAge();
     testKickBlocksWholeAddress();
     testSessionGrace();
+    testActivityLog();
     testLogBudget();
     testFullNoticeAndPerIp();
     testMotd();

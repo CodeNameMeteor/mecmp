@@ -498,7 +498,7 @@ static void testActivityLog() {
     log.add("123456789012345678");
     log.add("not an id");
     log.add("987654321098765432");
-    CHECK(log.size() == 2);
+    CHECK(log.size() == 2 && log.ids().size() == 2 && log.ids()[1] == "987654321098765432");
     const auto ids = log.take();
     CHECK(ids.size() == 2 && ids[0] == "123456789012345678" && ids[1] == "987654321098765432");
     CHECK(log.size() == 0 && log.take().empty());

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Discord
+- **Finished runs are cleaned up with the session.** When the server empties, its dash and time-trial posts are
+  deleted along with the joins and leaves (they used to stay). `webhook_keep_results=1` keeps them.
+- **Nothing is left behind by a restart.** The ids of the posts still to delete are kept in
+  `webhook_activity_file` (`webhook_activity.txt` next to the log), so a server that was stopped, restarted or
+  crashed mid-session deletes them at its next start.
+
 ### Fixes
 - **Time trials with names outside plain ASCII** (accents, other alphabets) are named in the finish notice and on
   Discord; such a name used to be left out.

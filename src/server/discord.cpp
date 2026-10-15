@@ -475,6 +475,7 @@ void Webhook::sendPosts(std::deque<std::string> posts, bool track, clock::time_p
                     log_("discord: could not read the id of a player message; it will not be deleted when the server is empty");
                 }
                 activity_.add(id);
+                saveTracked();
             }
             posts.pop_front();
             failuresLogged_ = 0;
@@ -489,6 +490,38 @@ void Webhook::sendPosts(std::deque<std::string> posts, bool track, clock::time_p
             else nextPost = clock::now() + std::chrono::seconds(10);
         }
     }
+}
+
+void Webhook::saveTracked() {
+    if (cfg_.trackFile.empty()) return;
+    std::string text;
+    for (const std::string& id : toDelete_) text += id + "\n";
+    for (const std::string& id : activity_.ids()) text += id + "\n";
+    writeFile(cfg_.trackFile, text);
+}
+
+// Posts a previous run left (it stopped or crashed before the server was empty, or Discord did not answer in
+// time): the server has just started, so nobody is online and they all go.
+void Webhook::loadTracked() {
+    if (cfg_.trackFile.empty()) return;
+    FILE* f = fopen(cfg_.trackFile.c_str(), "rb");
+    if (!f) return;
+    std::string text;
+    char buf[4096];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof(buf), f)) > 0 && text.size() < (1u << 20)) text.append(buf, n);
+    fclose(f);
+    size_t start = 0;
+    while (start < text.size() && toDelete_.size() < ActivityLog::kMax) {
+        size_t end = text.find('\n', start);
+        if (end == std::string::npos) end = text.size();
+        std::string id = text.substr(start, end - start);
+        while (!id.empty() && (id.back() == '\r' || id.back() == ' ')) id.pop_back();
+        if (isMessageId(id)) toDelete_.push_back(id);
+        start = end + 1;
+    }
+    if (!toDelete_.empty())
+        log_("discord: deleting " + std::to_string(toDelete_.size()) + " post(s) left from the last run");
 }
 
 void Webhook::deleteMessages(clock::time_point& nextPost, bool stopping) {
@@ -513,8 +546,10 @@ void Webhook::deleteMessages(clock::time_point& nextPost, bool stopping) {
             toDelete_.pop_front();
         }
     }
+    saveTracked(); // what is left is still in the file
     if (stopping && !toDelete_.empty()) {
-        log_("discord: " + std::to_string(toDelete_.size()) + " player message(s) were left in Discord (stopping)");
+        log_("discord: " + std::to_string(toDelete_.size()) + " post(s) are still in Discord" +
+             (cfg_.trackFile.empty() ? std::string() : "; they are deleted at the next start"));
         toDelete_.clear();
     }
 }
@@ -523,6 +558,7 @@ void Webhook::run() {
     clock::time_point nextPost = clock::now();
     clock::time_point nextStatus = clock::now(); // at most one edit every kStatusGap (the latest text wins)
     constexpr auto kStatusGap = std::chrono::seconds(5);
+    loadTracked();
     for (;;) {
         std::deque<Item> items;
         std::string status;
@@ -559,6 +595,7 @@ void Webhook::run() {
         for (size_t i = 0; i < items.size();) {
             if (items[i].kind == Item::EndSession) {
                 for (const std::string& id : activity_.take()) toDelete_.push_back(id);
+                saveTracked();
                 ++i;
                 continue;
             }

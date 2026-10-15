@@ -11,7 +11,7 @@
 //   - at most `maxPlayers`; a player silent for `timeoutMs` is dropped
 //   - per player at most `ratePerSec` packets (burst `burst`); more are dropped
 //   - a forwarded HELLO never carries the host or server flag
-//   - kick: dropped and refused for `kickBlockMs`
+//   - kick: dropped, and their address refused for `kickBlockMs` (whichever port they come back from)
 
 #include <cstddef>
 #include <cstdint>
@@ -63,6 +63,8 @@ struct Member {
     uint32_t refillAt = 0;
     uint64_t packets = 0, dropped = 0;
     bool announced = false; // its join was logged with a name
+    uint32_t logAt = 0;     // the start of its current log window (see Relay::logAllowed)
+    int logBurst = 0;       // log lines it has caused in that window
     uint32_t resultAt = 0;  // when its last finished run was reported (at most one per kResultGapMs)
 };
 
@@ -113,6 +115,8 @@ private:
     Member* find(const Addr& a);
     bool sessionTaken(uint32_t session, const Addr& except) const;
     bool blocked(const Addr& a, uint32_t nowMs);
+    // A player's lines in the log: a few per window, so one player cannot fill the log.
+    bool logAllowed(Member& m, uint32_t nowMs);
     void drop(size_t index, const char* why);
     void sendHello();
     void sendHelloTo(const Addr& to);
@@ -130,7 +134,7 @@ private:
     Stats stats_;
     uint32_t helloAt_ = 0;
     bool haveHello_ = false;
-    struct Block { uint32_t ip; uint16_t port; uint32_t until; };
+    struct Block { uint32_t ip; uint16_t port; uint32_t until; }; // port 0: every port of the address
     std::vector<Block> blocks_;
     struct OutChat { uint32_t id; std::string text; int left; bool targeted; Addr to; };
     std::deque<OutChat> chat_;

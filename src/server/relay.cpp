@@ -61,13 +61,26 @@ bool Relay::sessionTaken(uint32_t session, const Addr& except) const {
     return session == session_;
 }
 
+namespace {
+constexpr int kLogBurst = 5;             // log lines per player...
+constexpr uint32_t kLogWindowMs = 10000; // ...in this window
+} // namespace
+
+bool Relay::logAllowed(Member& m, uint32_t nowMs) {
+    if (nowMs - m.logAt > kLogWindowMs) { m.logAt = nowMs; m.logBurst = 0; }
+    if (++m.logBurst <= kLogBurst) return true;
+    if (m.logBurst == kLogBurst + 1)
+        log_("player " + hex(m.session) + " '" + m.name + "' is logging too fast; its lines are left out for a while");
+    return false;
+}
+
 bool Relay::blocked(const Addr& a, uint32_t nowMs) {
     for (size_t i = 0; i < blocks_.size();) {
         if (static_cast<int32_t>(nowMs - blocks_[i].until) >= 0) {
             blocks_.erase(blocks_.begin() + static_cast<long>(i));
             continue;
         }
-        if (blocks_[i].ip == a.ip && blocks_[i].port == a.port) return true;
+        if (blocks_[i].ip == a.ip && (blocks_[i].port == 0 || blocks_[i].port == a.port)) return true;
         ++i;
     }
     return false;
@@ -176,7 +189,7 @@ void Relay::onPacket(const Addr& from, const char* buf, size_t n, uint32_t nowMs
             if (onEvent_) onEvent_(Event{Event::Joined, name, members_.size(), {}});
             if (!cfg_.motd.empty()) queueChat(cfg_.motd, &from);
         } else if (name != m->name) {
-            log_("player " + hex(m->session) + " '" + m->name + "' is now called '" + name + "'");
+            if (logAllowed(*m, nowMs)) log_("player " + hex(m->session) + " '" + m->name + "' is now called '" + name + "'");
             m->name = name;
         }
         if (len > proto::kHelloFlagsOffset) { // only the server may say it hosts
@@ -211,7 +224,7 @@ void Relay::onPacket(const Addr& from, const char* buf, size_t n, uint32_t nowMs
             for (uint32_t x : chatSeen_) seen = seen || (x == (id ^ m->session));
             if (!seen) {
                 chatSeen_[chatSeenNext_++ % 32] = id ^ m->session;
-                log_("chat '" + m->name + "': " + text);
+                if (logAllowed(*m, nowMs)) log_("chat '" + m->name + "': " + text);
             }
         }
     }
@@ -312,7 +325,7 @@ bool Relay::kick(const std::string& who, uint32_t nowMs) {
     size_t i = 0;
     if (matchPlayers(who, &i) != 1) return false; // nobody, or a name several players share
     const Member& m = members_[i];
-    blocks_.push_back({m.addr.ip, m.addr.port, nowMs + cfg_.kickBlockMs});
+    blocks_.push_back({m.addr.ip, 0, nowMs + cfg_.kickBlockMs}); // the address, not just this port
     drop(i, "kicked");
     return true;
 }

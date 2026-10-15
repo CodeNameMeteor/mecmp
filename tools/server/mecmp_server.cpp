@@ -23,6 +23,7 @@
 #include <unistd.h>
 #endif
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <csignal>
@@ -118,7 +119,7 @@ bool readConfig(const std::string& path, Options& o, bool required) {
         else if (k == "log_chat") o.relay.logChat = v != "0";
         else if (k == "mirror") o.relay.mirror = v == "1";
         else if (k == "motd") o.relay.motd = v;
-        else if (k == "max_per_ip") o.relay.maxPerIp = static_cast<size_t>(std::atoi(v.c_str()));
+        else if (k == "max_per_ip") o.relay.maxPerIp = static_cast<size_t>(std::max(1, std::atoi(v.c_str())));
         else if (k == "bans") o.bansPath = v;
         else if (k == "webhook_url") o.discord.url = v;
         else if (k == "webhook_name") o.discord.username = v;

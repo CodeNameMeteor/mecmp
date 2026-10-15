@@ -345,6 +345,40 @@ static int chatsTo(const Harness& t, const Addr& a, std::string* last = nullptr)
     return n;
 }
 
+static void testKickBlocksWholeAddress() {
+    // A kicked player is refused from the same address on any port for the kick time, not just the old port.
+    Harness t;
+    auto hA = hello(1, "alice");
+    t.relay.onPacket(A, hA.data(), hA.size(), 0);
+    CHECK(t.relay.kick("alice", 100));
+    const Addr A2{A.ip, 7000};
+    t.relay.onPacket(A2, hA.data(), hA.size(), 200);
+    CHECK(t.relay.members().empty());
+    t.relay.onPacket(A2, hA.data(), hA.size(), 100 + 60000); // after the kick time: welcome again
+    CHECK(t.relay.members().size() == 1);
+}
+
+static void testLogBudget() {
+    // One player cannot fill the log: its chat lines are cut to a few per window, with one note.
+    Harness t;
+    auto hA = hello(1, "alice");
+    t.relay.onPacket(A, hA.data(), hA.size(), 0);
+    t.log.clear();
+    for (uint32_t i = 0; i < 20; ++i) {
+        const proto::Header h{proto::kMagic, proto::kProtocol, proto::kTypeChat, 1, i + 2};
+        char buf[proto::kMaxPacket];
+        const size_t n = proto::writeChat(buf, h, 1000 + i, "line " + std::to_string(i));
+        t.relay.onPacket(A, buf, n, 100 + i);
+    }
+    int chats = 0, notes = 0;
+    for (const std::string& l : t.log) {
+        chats += l.rfind("chat 'alice'", 0) == 0;
+        notes += l.find("logging too fast") != std::string::npos;
+    }
+    CHECK(chats == 5);
+    CHECK(notes == 1);
+}
+
 static void testSharedNames() {
     // Two players with the same name: kick and ban refuse the name (it would hit one of them at random);
     // the id still works.
@@ -558,6 +592,8 @@ int main() {
     testInfo();
     testBans();
     testSharedNames();
+    testKickBlocksWholeAddress();
+    testLogBudget();
     testFullNoticeAndPerIp();
     testMotd();
     testMirror();

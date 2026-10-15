@@ -59,6 +59,18 @@
 - **The server starts with `--config` pointing at a file that does not exist yet** (the systemd setup in
   docs/SERVER.md does that): it writes the commented default there, as it does without `--config`. Before, it
   stopped at once with "cannot read".
+- **A player who came back from a mission was never seen again**, not even his name tag (and "Go to" said
+  the player character was not available). When the mod missed the new level's player spawner, the scan
+  that finds it only ran if the player character already existed, which it did not without the spawner.
+  It now runs 20 s into a level whenever something is missing.
+- **Ghosts froze half a second after they appeared** when the game was started with the mod before the level
+  (the usual way), and the mod took the wrong spawner for them: the newest ghost spawner it saw, which is
+  not always the city's. It now looks at all of them and takes the one with its own data that holds the
+  game's own city ghost, before it makes a ghost (and again whenever the game builds a new one).
+- **Other players' ghosts no longer disappear for good** after the game rebuilds the city (a district
+  streaming out and in). The mod kept pointing at the ghost spawner the game had destroyed, so ghosts that
+  were taken away were never made again, while the log still said the spawner was found. A scan now
+  replaces a dead spawner, and a level may be scanned up to three times (not once) when something is missing.
 - **The overlay follows the game window's size again, and has a size setting.** The font was sized once,
   from the window as it was when the overlay started. The game starts in a 1280x720 window and then goes
   full screen, so on a 1440p or 4K screen the menu, markers and the wheel stayed at 720p size (the wheel

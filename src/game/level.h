@@ -35,6 +35,11 @@ std::string levelName();
 bool inFrontEnd();
 void* playerSpawner();
 void* ghostSpawner();                 // the level's city-ghost spawner (always loaded in free roam)
+// Picks the city-ghost spawner among all that were seen (own data object, holds a character that is not
+// one of ours, `ours` = our ghosts' characters). Game thread; cheap (at most every 0.5 s), so call it
+// before every spawn: a hook that sees a newer spawner, or a scan that replaces a dead one, can change
+// the choice at any time.
+void chooseGhostSpawner(const void* const* ours, size_t oursCount);
 void* playerCharacter();              // local player's ServerCharacterEntity (game thread)
 bool spawnerAlive(void* spawner);
 bool characterAlive(void* character, void* spawner); // still in its spawner's spawned list

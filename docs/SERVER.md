@@ -120,6 +120,19 @@ in `mecmp.ini`. The menu then shows *Server: <name>*.
 Everyone on a server must run the same MECMP protocol version as the server (the server's first log
 line says which). Packets from other versions are ignored.
 
+## Hole punching (rendezvous)
+
+Every server also introduces players who host from the game to players who join them, so a host needs no
+forwarded port on most home routers. A host registers its address with the server named by `rendezvous=` in
+its `mecmp.ini` (every ~20 s); a joiner using that host's join code asks the same server, and the server tells
+each the other's address. Both then send at once and their routers let the traffic through. The server only
+passes those addresses (a few dozen bytes per join): the game's traffic goes directly between the players and
+never through the server. Registration and introductions use the same address-proving cookie as joining, and
+at most 10 introductions to one host are made per 10 s. `status` shows how many hosts are registered.
+
+It does not work on every connection (some mobile and carrier networks give each outgoing connection another
+port). Then joining is as before: the host forwards the port, or everyone joins a dedicated server.
+
 ## Test it alone
 
 Run the server on your own PC on another port and join it with the mirror on:

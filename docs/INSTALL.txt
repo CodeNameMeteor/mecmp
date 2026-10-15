@@ -34,8 +34,11 @@ PLAY
 - Keys and gamepad buttons can be changed on the Controls tab (the middle button and Mouse 4 and 5 can be bound too).
 
 HOSTING
-The mod asks your router to open UDP port 47800 (UPnP). If your router does not allow that,
-forward UDP 47800 to your PC by hand, or let a friend host, or use a dedicated server.
+The mod asks your router to open UDP port 47800 (UPnP), and also registers with the community server
+for hole punching: when a friend joins with your code, the server introduces you to each other and the
+game connects directly, which works on most home routers without opening anything. If neither works
+(some mobile and carrier networks), forward UDP 47800 to your PC by hand, or let a friend host, or use
+a dedicated server. ([net] rendezvous in mecmp.ini; empty turns hole punching off.)
 
 DEDICATED SERVER
 mecmp_server.exe runs a session without the game (Windows; a Linux build is in the release too).

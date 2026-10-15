@@ -59,6 +59,9 @@ struct Settings {
     uint16_t port = 47800;
     std::string join;                     // join code or ip:port of the host; empty = host a session
     bool autoStart = false;               // start that session when the game starts (else wait for the menu)
+    // A dedicated server that introduces hosts and joiners for hole punching (no port forwarding for most
+    // routers); only the introduction goes through it, never game traffic. Empty = off.
+    std::string rendezvous = "34.27.13.116:47800";
     float loopbackOffset = 3.0f;          // solo test: metres along world X the mirrored ghost stands
     std::string servers;                  // the menu's server list: addresses, comma separated
     bool membersMayHardSummon = false;    // when you host: members may pull players in (a hard summon)

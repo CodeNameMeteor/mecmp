@@ -771,6 +771,8 @@ void handleAdmission(const proto::Header& h, const char* buf, int n, const socka
     admitMember(from, h.session);
 }
 
+void handleRendezvous(const proto::Header& h, const char* buf, int n, const sockaddr_in& from); // hole punching, below
+
 void handlePacket(const char* buf, int n, const sockaddr_in& from) {
     proto::Header h;
     if (n < static_cast<int>(sizeof(h))) { ++g_dropped; return; }
@@ -786,6 +788,8 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
         ++g_dropped;
         return;
     }
+    // Hole punching: the rendezvous server's answers. Never stored or forwarded.
+    if (h.type == proto::kTypeRendezvous) { handleRendezvous(h, buf, n, from); return; }
     // Admission: a challenge from the host, or a stranger's answer. Never stored or forwarded.
     if (h.type == proto::kTypeChallenge || h.type == proto::kTypeAnswer) { handleAdmission(h, buf, n, from); return; }
     // Only the packet types we know may create state or be forwarded to other players.
@@ -1136,6 +1140,132 @@ void hostSetup(uint32_t generation) {
     if (!lan.empty()) MLOG("net: join code for players on your own network: %s", lan.c_str());
 }
 
+// --- Hole punching (RENDEZVOUS in protocol.h) ---------------------------------------------------------
+// A dedicated server ([net] rendezvous in mecmp.ini) introduces a host and a joiner to each other; then both
+// send at once (the host a CHALLENGE, the joiner its HELLO) and most home routers let both through, so the host
+// needs no forwarded port. Only the introduction goes through the server, never game traffic. If it does not
+// work, joining is exactly as before: straight to the join code's address.
+constexpr DWORD kRvRegisterEveryMs = 20000; // host: also keeps its router's mapping to the server open
+constexpr DWORD kRvAskEveryMs = 1000;       // joiner: until the host answers...
+constexpr DWORD kRvAskForMs = 20000;        // ...for this long at most
+constexpr int kPunches = 5;                 // host: CHALLENGEs to an introduced joiner...
+constexpr DWORD kPunchGapMs = 300;          // ...this far apart
+struct Punch { sockaddr_in to; int left; DWORD next; };
+// Guarded by g_m.
+sockaddr_in g_rvAddr{};
+bool g_haveRv = false;        // the server's address is known (looked up when the session started)
+uint64_t g_rvCookie = 0;      // its cookie for our address
+DWORD g_rvLastSent = 0;       // 0 = send now
+DWORD g_rvStartedAt = 0;
+bool g_rvAsking = false;      // joiner: still asking to be introduced
+std::vector<Punch> g_punches; // host
+std::atomic<bool> g_helloNow{false}; // joiner: introduced; say hello at once instead of within the second
+
+// The rendezvous server's address, looked up on a helper thread (it may be a name) when a session starts.
+void lookUpRendezvous(uint32_t generation, std::string text, bool join, sockaddr_in hostAddr) {
+    WSADATA wsa;
+    if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0) return;
+    sockaddr_in a{};
+    const bool found = parsePeer(text, a);
+    WSACleanup();
+    if (!found) {
+        MLOG("net: the rendezvous server '%s' could not be looked up; no hole punching this session", text.c_str());
+        return;
+    }
+    std::lock_guard<std::mutex> lock(g_m);
+    if (generation != g_generation || !g_run) return;
+    if (join && sameAddr(a, hostAddr)) return; // joining the rendezvous server itself: nothing to punch
+    g_rvAddr = a;
+    g_haveRv = true;
+    g_rvCookie = 0;
+    g_rvLastSent = 0;
+    g_rvStartedAt = GetTickCount();
+    g_rvAsking = join;
+    VLOG("net: hole punching through %s", addrToString(a).c_str());
+}
+
+void handleRendezvous(const proto::Header& h, const char* buf, int n, const sockaddr_in& from) {
+    proto::Rendezvous r;
+    if (!proto::readRendezvous(buf + sizeof(h), static_cast<size_t>(n) - sizeof(h), r)) { ++g_dropped; return; }
+    std::lock_guard<std::mutex> lock(g_m);
+    if (!g_haveRv || !sameAddr(from, g_rvAddr)) { ++g_dropped; return; } // only the server we asked
+    sockaddr_in peer{};
+    peer.sin_family = AF_INET;
+    peer.sin_addr.s_addr = htonl(r.ip);
+    peer.sin_port = htons(r.port);
+    switch (r.op) {
+    case proto::kRvChallenge:
+        g_rvCookie = r.cookie;
+        g_rvLastSent = 0; // again at once, with the cookie
+        break;
+    case proto::kRvPeer:
+        if (g_role == Role::Host) {
+            if (!r.ip || !r.port || memberFrom(peer)) break;
+            for (const Punch& p : g_punches)
+                if (sameAddr(p.to, peer)) return;
+            if (g_punches.size() < 32) g_punches.push_back({peer, kPunches, GetTickCount()});
+            if (peerLogAllowed()) MLOG("net: a player at %s is joining through hole punching", addrToString(peer).c_str());
+        } else if (g_rvAsking && !g_heardFromHost) {
+            // The host as the server sees it. Its router may show another port than the join code's: the host's
+            // packets come from this one, and only packets from the host are taken.
+            if (peer.sin_addr.s_addr == g_hostAddr.sin_addr.s_addr && peer.sin_port != g_hostAddr.sin_port && r.port) {
+                for (auto& to : g_sendTo)
+                    if (sameAddr(to, g_hostAddr)) to = peer;
+                g_hostAddr = peer;
+            }
+            g_helloNow = true;
+            MLOG("net: introduced to the host through the rendezvous server; connecting directly");
+        }
+        break;
+    case proto::kRvUnknown:
+        if (g_role == Role::Join && g_rvAsking) {
+            g_rvAsking = false;
+            MLOG("net: the host is not registered for hole punching (an older version, or another rendezvous server); "
+                 "joining directly");
+        }
+        break;
+    default: break;
+    }
+}
+
+// Network thread, every pass: register (host) or ask to be introduced (joiner), and the host's punches.
+void rendezvousTick() {
+    std::lock_guard<std::mutex> lock(g_m);
+    const DWORD now = GetTickCount();
+    for (size_t i = 0; i < g_punches.size();) {
+        Punch& p = g_punches[i];
+        if (static_cast<int32_t>(now - p.next) >= 0) {
+            if (memberFrom(p.to)) p.left = 0; // already in
+            else sendChallenge(p.to);
+            --p.left;
+            p.next = now + kPunchGapMs;
+        }
+        if (p.left <= 0) g_punches.erase(g_punches.begin() + static_cast<long>(i));
+        else ++i;
+    }
+    if (!g_haveRv) return;
+    proto::Rendezvous r;
+    if (g_role == Role::Host) {
+        if (g_rvLastSent && now - g_rvLastSent < kRvRegisterEveryMs) return;
+        r.op = proto::kRvRegister;
+    } else {
+        if (!g_rvAsking) return;
+        if (g_heardFromHost || now - g_rvStartedAt > kRvAskForMs) {
+            g_rvAsking = false;
+            return;
+        }
+        if (g_rvLastSent && now - g_rvLastSent < kRvAskEveryMs) return;
+        r.op = proto::kRvIntroduce;
+        r.ip = ntohl(g_hostAddr.sin_addr.s_addr);
+        r.port = ntohs(g_hostAddr.sin_port);
+    }
+    g_rvLastSent = now | 1;
+    r.cookie = g_rvCookie;
+    char out[proto::kMaxPacket];
+    const size_t len = proto::writeRendezvous(out, header(proto::kTypeRendezvous), r);
+    sendto(g_sock, out, static_cast<int>(len), 0, reinterpret_cast<const sockaddr*>(&g_rvAddr), sizeof(g_rvAddr));
+}
+
 // Packets read per pass. The rest stay in the socket for the next pass, so a flood cannot keep the
 // network thread busy and starve its other work (sends, timeouts, the router lease).
 constexpr int kMaxReadsPerPass = 256;
@@ -1203,7 +1333,8 @@ void threadMain() {
             sendPendingBursts();
             sendActivity();
         }
-        if (now - lastHello >= 1000) { lastHello = now; sendHello(); }
+        if (now - lastHello >= 1000 || g_helloNow.exchange(false)) { lastHello = now; sendHello(); }
+        rendezvousTick();
         if (now - lastStats >= 30000) { lastStats = now; MLOG("net: %s", describe().c_str()); }
         if (now - lastHousekeeping >= 1000) {
             lastHousekeeping = now;
@@ -1226,8 +1357,10 @@ void threadMain() {
                                  g_reserved.end());
             } else if (!g_heardFromHost && now - started > 10000 && now - lastJoinWarn > 20000) {
                 lastJoinWarn = now;
-                MLOG("net: no answer from the host %s yet. Check the join code, and that the host is in game.",
-                     addrToString(g_hostAddr).c_str());
+                MLOG("net: no answer from the host %s yet. Check the join code, and that the host is in game. If it still "
+                     "does not work, the host needs UDP %u forwarded on their router (or UPnP on), or you can both join a "
+                     "dedicated server.",
+                     addrToString(g_hostAddr).c_str(), ntohs(g_hostAddr.sin_port));
             }
         }
         if (g_role == Role::Host && now - lastLease > 30 * 60 * 1000) { // renew the router mapping
@@ -1264,6 +1397,10 @@ bool startLocked(uint16_t port, const std::string& join, float loopbackOffset, c
         g_sendTo.clear();
         g_members.clear();
         g_reserved.clear();
+        g_haveRv = false;
+        g_rvAsking = false;
+        g_punches.clear();
+        g_helloNow = false;
         g_heardFromHost = false;
         g_hostSession = 0;
         g_serverName.clear();
@@ -1361,6 +1498,11 @@ bool startLocked(uint16_t port, const std::string& join, float loopbackOffset, c
     g_run = true;
     g_thread = std::thread(threadMain);
     if (g_role == Role::Host) std::thread(hostSetup, g_generation.load()).detach();
+    // Hole punching: not for a host on our own network (or ourselves: the solo test), which is reached directly.
+    const std::string rv = config::get()->rendezvous;
+    const bool local = g_role == Role::Join && isPrivate(ntohl(g_hostAddr.sin_addr.s_addr));
+    if (!rv.empty() && !local)
+        std::thread(lookUpRendezvous, g_generation.load(), rv, g_role == Role::Join, g_hostAddr).detach();
     return true;
 }
 

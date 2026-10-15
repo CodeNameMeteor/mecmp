@@ -1500,8 +1500,8 @@ bool startLocked(uint16_t port, const std::string& join, float loopbackOffset, c
     if (g_role == Role::Host) std::thread(hostSetup, g_generation.load()).detach();
     // Hole punching: not for a host on our own network (or ourselves: the solo test), which is reached directly.
     const std::string rv = config::get()->rendezvous;
-    const bool local = g_role == Role::Join && isPrivate(ntohl(g_hostAddr.sin_addr.s_addr));
-    if (!rv.empty() && !local)
+    const bool hostOnLan = g_role == Role::Join && isPrivate(ntohl(g_hostAddr.sin_addr.s_addr));
+    if (!rv.empty() && !hostOnLan)
         std::thread(lookUpRendezvous, g_generation.load(), rv, g_role == Role::Join, g_hostAddr).detach();
     return true;
 }

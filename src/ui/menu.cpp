@@ -553,9 +553,13 @@ void privacySection() {
 }
 
 // Display tab: sizes, what is drawn in the game, voice.
+void shownInGame();
+
 void displaySection() {
     static struct { float value = 1.f; bool editing = false; } g_scaleEdit; // saved when the slider is let go
-    ImGui::SeparatorText("Interface size");
+    if (ImGui::CollapsingHeader("Shown in game", ImGuiTreeNodeFlags_DefaultOpen)) shownInGame();
+    if (!ImGui::CollapsingHeader("Advanced##display")) return;
+    ImGui::TextUnformatted("Interface size");
     ImGui::SetNextItemWidth(ImGui::GetFontSize() * 10);
     float scale = g_scaleEdit.editing ? g_scaleEdit.value : config::get()->uiScale;
     if (ImGui::SliderFloat("##uiscale", &scale, 0.5f, 2.f, "%.2f x", ImGuiSliderFlags_AlwaysClamp)) {
@@ -576,7 +580,10 @@ void displaySection() {
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Size of the menu, markers, wheel and notices. 1.0 follows the game window's height.\n"
                           "Applies when you let go of the slider.");
-    ImGui::SeparatorText("Shown in game");
+}
+
+// What the overlay draws in the game.
+void shownInGame() {
     bool showNames = config::get()->showNames;
     if (ImGui::Checkbox("Names above players", &showNames))
         config::change([showNames](config::Settings& c) { c.showNames = showNames; });
@@ -1291,9 +1298,11 @@ void markerLists(const config::Settings& cfg) {
     othersList(cfg, pings, me);
 }
 
+// The tabs' groups fold away: the ones used most start open, the rest (and each tab's Advanced) closed.
+constexpr ImGuiTreeNodeFlags kOpenGroup = ImGuiTreeNodeFlags_DefaultOpen;
+
 // The main colors (every marker without colors of its own) and the two resets.
 void colorsGroup(const config::Settings& cfg) {
-    ImGui::SeparatorText("Colors");
     markerColor("##pingcolor", cfg.pingColor, &config::Settings::pingColor, "The color of your markers", 255);
     ImGui::SameLine();
     ImGui::TextUnformatted("Main");
@@ -1333,20 +1342,37 @@ void colorsGroup(const config::Settings& cfg) {
     ImGui::TextDisabled("A marker can have colors of its own: the swatches next to it in Marker wheels.");
 }
 
+void markerBasics(const config::Settings& cfg);
+void wheelsGroup(const config::Settings& cfg);
+
 void markersSection() {
     const auto cfgPtr = config::get();
     const config::Settings& cfg = *cfgPtr;
-    ImGui::SeparatorText("Markers");
+    const bool open = ImGui::CollapsingHeader("Markers", kOpenGroup);
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("The marker keys and buttons are on the Controls tab");
+    if (open) markerBasics(cfg);
+    if (ImGui::CollapsingHeader("Colors", kOpenGroup)) colorsGroup(cfg);
+    if (ImGui::CollapsingHeader("Wheels", kOpenGroup)) wheelsGroup(cfg);
+    if (ImGui::CollapsingHeader("Manage markers", kOpenGroup)) {
+        if (ImGui::SmallButton("Clear my markers")) net::clearPing();
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Removes all your markers for everyone");
+        markerLists(cfg);
+    }
+    if (ImGui::CollapsingHeader("Advanced##markers")) {
+        bool pingPulse = cfg.pingPulse;
+        if (ImGui::Checkbox("Flash markers when placed", &pingPulse))
+            config::change([pingPulse](config::Settings& c) { c.pingPulse = pingPulse; });
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("New and moved markers blink for a split second so they are easier to spot");
+    }
+}
+
+// Showing and placing markers, how long they last, how many.
+void markerBasics(const config::Settings& cfg) {
     bool showPings = cfg.showPings;
     if (ImGui::Checkbox("Show markers", &showPings)) config::change([showPings](config::Settings& c) { c.showPings = showPings; });
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Shows your markers and everyone else's. A marker that is off screen becomes an arrow\n"
                           "on the edge of the screen.");
-    bool pingPulse = cfg.pingPulse;
-    if (ImGui::Checkbox("Flash markers when placed", &pingPulse))
-        config::change([pingPulse](config::Settings& c) { c.pingPulse = pingPulse; });
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("New and moved markers blink for a split second so they are easier to spot");
     const bool canAim = game::raycast::available();
     bool pingAim = cfg.pingAim && canAim;
     ImGui::BeginDisabled(!canAim);
@@ -1379,10 +1405,10 @@ void markersSection() {
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("How many markers you can have at the same time. Your oldest one is removed when you go\n"
                           "over the limit. Placing the same marker within 1.5 m of one of yours moves it instead.");
+}
 
-    colorsGroup(cfg);
-
-    ImGui::SeparatorText("Wheels");
+// The marker wheels and the quick answers, each folded.
+void wheelsGroup(const config::Settings& cfg) {
     if (ImGui::TreeNode("Marker wheels")) {
         if (ImGui::BeginTabBar("wheels")) {
             for (int w = 0; w < cfg.wheelCount; ++w) {
@@ -1420,19 +1446,11 @@ void markersSection() {
         reactionEditor(cfg);
         ImGui::TreePop();
     }
-
-    ImGui::SeparatorText("Manage markers");
-    if (ImGui::SmallButton("Clear my markers")) net::clearPing();
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Removes all your markers for everyone");
-    markerLists(cfg);
 }
 
 void controlsMenu(const config::Settings& c);
 void controlsMarkers(const config::Settings& c);
 void controlsAdvanced(const config::Settings& c);
-
-// The Controls tab's groups fold away: the ones used most start open, the rest (and Advanced) closed.
-constexpr ImGuiTreeNodeFlags kOpenGroup = ImGuiTreeNodeFlags_DefaultOpen;
 
 void controlsSection() {
     const auto cfg = config::get();

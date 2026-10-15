@@ -35,7 +35,7 @@ struct OnlineId {
 };
 static_assert(sizeof(OnlineId) == 0x28, "OnlineId");
 
-using AssignSlotFn = void* (*)(void* manager, const OnlineId* id, const float* pos, int priority);
+using AssignSlotFn = void* (*)(void* manager, const OnlineId* id, const float* pos, int priority); // pos: Vec4, 16-byte aligned
 
 std::atomic<const char*> g_status{"not seen yet"};
 
@@ -130,7 +130,9 @@ void updateManager(uintptr_t mgr, const std::vector<net::RemoteInfo>& players, b
         uintptr_t slot = 0;
         for (size_t i = 0; i < count && !slot; ++i)
             if (slotId(i) == w.oid.id) slot = range[0] + i * Slot_Size;
-        const float pos[4] = {st.pos[0], st.pos[1], st.pos[2], 0.f};
+        // assignSlot copies it with MOVAPS (0x143a40681): it must be 16-byte aligned. A plain float[4] on the stack is
+        // only 4-byte aligned in an MSVC Release build, and the game crashed there.
+        alignas(16) const float pos[4] = {st.pos[0], st.pos[1], st.pos[2], 0.f};
         if (!slot || !placed(mgr, w.oid.id)) {
             // A slot of its own (or the friend slot the game already gave them, raised to our priority): the
             // game spawns the marker prefab for a slot the first time it is used.

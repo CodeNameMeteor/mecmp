@@ -1,47 +1,94 @@
 name: release
 
-# Push a tag like v0.9.0 to build the release packages and open a draft GitHub release with them
-# (publish it by hand after a last look). Run it by hand ("Run workflow") to only build the packages.
+# Two channels, chosen by the tag:
+#   v0.9.0         release: Release build, developer keys off, a draft GitHub release (publish it by hand after a last look)
+#   v0.9.1-beta.1  beta: Debug build with the developer keys on (verbose log, F7/F9/F10/F12), a draft pre-release
+# The tag's version must match src/app/mod.h (the part before the first "-"). "Run workflow" by hand builds the
+# packages only, in the channel picked there (beta by default), and makes no release.
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      build:
+        description: "Channel to build: beta (Debug, verbose log, developer keys) or release"
+        type: choice
+        options: [beta, release]
+        default: beta
 
 permissions:
   contents: write
 
 jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    outputs:
+      channel: ${{ steps.plan.outputs.channel }}
+      label: ${{ steps.plan.outputs.label }}
+      build_type: ${{ steps.plan.outputs.build_type }}
+      debug_keys: ${{ steps.plan.outputs.debug_keys }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Channel and version
+        id: plan
+        env:
+          BUILD_INPUT: ${{ github.event.inputs.build }}
+        run: |
+          ver=$(sed -n 's/.*kVersion = "\(.*\)".*/\1/p' src/app/mod.h)
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            tag="${GITHUB_REF_NAME#v}"
+            base="${tag%%-*}" # 0.9.1-beta.1 -> 0.9.1
+            if [ "$base" != "$ver" ]; then
+              echo "Tag ${GITHUB_REF_NAME} does not match the mod's version $ver (src/app/mod.h)"; exit 1
+            fi
+            label="$tag"
+            if [ "$tag" = "$base" ]; then channel=release; else channel=beta; fi
+          else
+            channel="${BUILD_INPUT:-beta}"
+            if [ "$channel" = beta ]; then label="$ver-test.$GITHUB_RUN_NUMBER"; else label="$ver"; fi
+          fi
+          if [ "$channel" = beta ]; then build_type=Debug; debug_keys=ON; else build_type=Release; debug_keys=OFF; fi
+          {
+            echo "channel=$channel"
+            echo "label=$label"
+            echo "build_type=$build_type"
+            echo "debug_keys=$debug_keys"
+          } >> "$GITHUB_OUTPUT"
+          echo "Building $label: $channel (CMAKE_BUILD_TYPE=$build_type, MECMP_DEBUG_KEYS=$debug_keys)"
+
   windows:
+    needs: plan
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Version
-        id: v
-        run: |
-          ver=$(sed -n 's/.*kVersion = "\(.*\)".*/\1/p' src/app/mod.h)
-          echo "version=$ver" >> "$GITHUB_OUTPUT"
-          if [ "${GITHUB_REF_TYPE}" = "tag" ] && [ "${GITHUB_REF_NAME}" != "v$ver" ]; then
-            echo "Tag ${GITHUB_REF_NAME} does not match the mod's version $ver (src/app/mod.h)"; exit 1
-          fi
       - name: Install MinGW-w64 and CMake
         run: sudo apt-get update && sudo apt-get install -y g++-mingw-w64-x86-64 cmake ninja-build zip
-      - name: Build (x64, Release, no developer keys)
+      - name: Build (x64, ${{ needs.plan.outputs.channel }}, developer keys ${{ needs.plan.outputs.debug_keys }})
         run: |
           cmake -S . -B build -G Ninja \
             -DCMAKE_SYSTEM_NAME=Windows \
             -DCMAKE_CXX_COMPILER=x86_64-w64-mingw32-g++-posix \
             -DCMAKE_C_COMPILER=x86_64-w64-mingw32-gcc-posix \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DMECMP_DEBUG_KEYS=OFF
+            -DCMAKE_BUILD_TYPE=${{ needs.plan.outputs.build_type }} \
+            -DMECMP_DEBUG_KEYS=${{ needs.plan.outputs.debug_keys }}
           cmake --build build
       - name: Package
         run: |
-          name="MECMP-${{ steps.v.outputs.version }}-windows"
+          name="MECMP-${{ needs.plan.outputs.label }}-windows"
           mkdir -p "pkg/$name/docs"
           # version.dll is the loader: copied into the game folder, it loads mecmp.dll with the game (no injector).
           cp build/mecmp.dll build/version.dll build/mecmp_inject.exe build/mecmp_server.exe "pkg/$name/"
           test -s "pkg/$name/version.dll" && test -s "pkg/$name/mecmp.dll"
-          cp docs/INSTALL.txt "pkg/$name/README.txt"
+          if [ "${{ needs.plan.outputs.channel }}" = beta ]; then
+            {
+              echo "BETA BUILD. This is a debug build: verbose logging is on and the developer keys are enabled"
+              echo "(F7, F9, F10, F12). Send mecmp.log with any bug report."
+              echo
+              cat docs/INSTALL.txt
+            } > "pkg/$name/README.txt"
+          else
+            cp docs/INSTALL.txt "pkg/$name/README.txt"
+          fi
           cp LICENSE THIRD_PARTY_NOTICES.md CHANGELOG.md "pkg/$name/"
           cp docs/SERVER.md "pkg/$name/docs/"
           (cd pkg && zip -r "../$name.zip" "$name")
@@ -51,22 +98,22 @@ jobs:
           path: MECMP-*-windows.zip
 
   linux-server:
+    needs: plan
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Build the server
+      - name: Build the server (${{ needs.plan.outputs.build_type }})
         run: |
-          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=${{ needs.plan.outputs.build_type }}
           cmake --build build --target mecmp_server
-          strip build/mecmp_server
+          if [ "${{ needs.plan.outputs.build_type }}" = Release ]; then strip build/mecmp_server; fi
       - name: Server tests
         run: |
           g++ -std=c++17 -Wall -Wextra -Isrc tests/server_test.cpp src/server/relay.cpp src/server/discord.cpp src/net/protocol.cpp -ldl -pthread -o server_test
           ./server_test
       - name: Package
         run: |
-          ver=$(sed -n 's/.*kVersion = "\(.*\)".*/\1/p' src/app/mod.h)
-          name="mecmp_server-$ver-linux-x64"
+          name="mecmp_server-${{ needs.plan.outputs.label }}-linux-x64"
           mkdir -p "pkg/$name"
           cp build/mecmp_server docs/SERVER.md LICENSE "pkg/$name/"
           tar -C pkg -czf "$name.tar.gz" "$name"
@@ -77,12 +124,12 @@ jobs:
 
   release:
     if: github.ref_type == 'tag'
-    needs: [windows, linux-server]
+    needs: [plan, windows, linux-server]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # the full history: the commits since the previous release
+          fetch-depth: 0 # the full history: the commits since the previous release or beta
       - uses: actions/download-artifact@v4
         with:
           path: dist
@@ -90,10 +137,18 @@ jobs:
       - name: Draft release
         env:
           GH_TOKEN: ${{ github.token }}
+          CHANNEL: ${{ needs.plan.outputs.channel }}
         run: |
           ver="${GITHUB_REF_NAME#v}"
-          # This version's section of CHANGELOG.md (from its heading to the next one).
-          awk -v v="$ver" '$0 ~ "^## "v {on=1; next} on && /^## / {exit} on' CHANGELOG.md > notes.md
+          base="${ver%%-*}"
+          section() { awk -v v="$1" '$0 ~ "^## "v"($|[: ])" {on=1; next} on && /^## / {exit} on' CHANGELOG.md; }
+          # This version's section of CHANGELOG.md (from its heading to the next one). A beta without its own
+          # section gets the Unreleased one: the changes it is testing.
+          section "$ver" > notes.md
+          if [ "$CHANNEL" = beta ] && ! grep -q '[^[:space:]]' notes.md; then section "Unreleased" > notes.md; fi
+          if [ "$CHANNEL" = beta ]; then
+            printf '\nBeta build: a debug build with verbose logging and the developer keys (F7, F9, F10, F12).\n' >> notes.md
+          fi
           # Then the commits since the previous tag (all of them for the first release), newest first.
           prev=$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || true)
           if [ -n "$prev" ]; then range="$prev..$GITHUB_REF_NAME"; else range="$GITHUB_REF_NAME"; fi
@@ -104,7 +159,8 @@ jobs:
             git log --no-merges --pretty='- %s (%h)' "$range"
           } >> notes.md
           prerelease=""
-          case "$ver" in 0.*) prerelease="--prerelease" ;; esac
+          if [ "$CHANNEL" = beta ]; then prerelease="--prerelease"; fi
+          case "$base" in 0.*) prerelease="--prerelease" ;; esac
           # If a draft with this tag already exists (made by hand), add the files to it and keep its notes.
           gh release create "$GITHUB_REF_NAME" dist/* --draft $prerelease \
             --title "MECMP $ver" --notes-file notes.md \

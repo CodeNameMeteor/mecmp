@@ -24,6 +24,12 @@ std::mutex g_m;             // guards g_settings and g_queue
 std::shared_ptr<const Settings> g_settings = std::make_shared<const Settings>();
 struct Change { std::function<void(Settings&)> edit; bool persist; };
 std::vector<Change> g_queue;
+// Saving: a persisting change marks the file dirty; applyPending writes it once the edits settle, so a
+// colour drag or a typed name is one write, not one per step. Guarded by g_m.
+bool g_saveWanted = false;
+DWORD g_firstUnsavedAt = 0, g_lastEditAt = 0;
+constexpr DWORD kSaveQuietMs = 400; // written this long after the last edit...
+constexpr DWORD kSaveMaxMs = 2000;  // ...or this long after the first unsaved one at the latest
 std::wstring g_dir;
 
 constexpr const char* kDefaultIni =
@@ -462,20 +468,28 @@ void change(std::function<void(Settings&)> edit, bool persist) {
 void applyPending() {
     std::vector<Change> todo;
     std::shared_ptr<const Settings> snapshot;
-    bool persist = false;
+    const DWORD now = GetTickCount();
     {
         std::lock_guard<std::mutex> lock(g_m);
-        if (g_queue.empty()) return;
-        todo.swap(g_queue);
-        auto next = std::make_shared<Settings>(*g_settings); // copy-on-write: published, never edited in place
-        for (auto& c : todo) {
-            c.edit(*next);
-            persist = persist || c.persist;
+        if (!g_queue.empty()) {
+            todo.swap(g_queue);
+            auto next = std::make_shared<Settings>(*g_settings); // copy-on-write: published, never edited in place
+            bool persist = false;
+            for (auto& c : todo) {
+                c.edit(*next);
+                persist = persist || c.persist;
+            }
+            g_settings = next;
+            if (persist) {
+                if (!g_saveWanted) g_firstUnsavedAt = now;
+                g_saveWanted = true;
+                g_lastEditAt = now;
+            }
         }
-        g_settings = next;
-        snapshot = next;
+        if (!g_saveWanted || (now - g_lastEditAt < kSaveQuietMs && now - g_firstUnsavedAt < kSaveMaxMs)) return;
+        g_saveWanted = false;
+        snapshot = g_settings;
     }
-    if (!persist) return;
     const std::wstring ini = g_dir + L"mecmp.ini";
     auto put = [&](const wchar_t* sec, const wchar_t* key, const std::string& v) {
         // Sized to the value: a fixed buffer that is too small makes the conversion fail, and the value is

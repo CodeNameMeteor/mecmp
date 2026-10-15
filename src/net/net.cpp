@@ -549,10 +549,9 @@ void receiveReact(Remote& r, bool own, const char* payload, size_t len) { // cal
     if (own) return;                           // sendReact already put ours under the marker
     if (!r.reactSeen.add(re.id)) return;       // a repeat
     const DWORD now = GetTickCount();
-    if (now - r.reactBurstAt > kChatBurstMs) { r.reactBurstAt = now; r.reactBurst = 0; }
-    if (++r.reactBurst > kReactBurst) return;
-    // Under the marker, for everyone who has it.
-    if (PingCell* c = cellOf(re.target, re.cell); c && c->live(now)) {
+    // Under the marker, for everyone who has it (one mark per player and marker, so no burst cap needed),
+    // unless the answer was for a marker that has been replaced in this cell since.
+    if (PingCell* c = cellOf(re.target, re.cell); c && c->live(now) && c->ping.label == re.title) {
         ReactionMark mark;
         mark.from = r.id;
         mark.name = r.name.empty() ? std::string("Runner") : r.name;
@@ -563,6 +562,8 @@ void receiveReact(Remote& r, bool own, const char* payload, size_t len) { // cal
         addMark(*c, std::move(mark));
     }
     if (re.target != g_session) return; // the notice is for the marker's owner
+    if (now - r.reactBurstAt > kChatBurstMs) { r.reactBurstAt = now; r.reactBurst = 0; }
+    if (++r.reactBurst > kReactBurst) return;
     ReactionInfo info;
     info.from = r.name.empty() ? std::string("Runner") : r.name;
     info.text = re.text;

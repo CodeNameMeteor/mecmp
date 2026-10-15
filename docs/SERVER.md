@@ -78,7 +78,7 @@ When the server stops it changes to "offline". Delete it in Discord and the serv
 Keep the webhook URL private: anyone who has it can post to your channel. The server never sends it to
 players or writes it to the log. Posts are gathered for a couple of seconds and sent together, well under
 Discord's limits; player names cannot ping anyone. On Linux the webhook needs libcurl
-(`sudo apt install libcurl4`, already there on most systems); without it the server runs and logs that
+(`sudo apt install libcurl4t64` on Ubuntu 24.04, `libcurl4` on older systems); without it the server runs and logs that
 the webhook is off.
 
 Console commands (type them in the server's window):

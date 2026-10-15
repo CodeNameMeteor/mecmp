@@ -379,6 +379,40 @@ static void testLogBudget() {
     CHECK(notes == 1);
 }
 
+static void testSessionGrace() {
+    // A player who goes silent keeps its session id: another address cannot take it for the grace time,
+    // its own address can come back, and after that the id is free.
+    Harness t;
+    auto hA = hello(1, "alice"), hB = hello(2, "bob");
+    t.relay.onPacket(A, hA.data(), hA.size(), 0);
+    t.relay.onPacket(B, hB.data(), hB.size(), 0);
+    for (uint32_t ms = 1000; ms <= 70000; ms += 1000) { // bob keeps talking; alice goes silent
+        t.relay.onPacket(B, hB.data(), hB.size(), ms);
+        t.relay.tick(ms);
+        if (ms == 11000) {
+            CHECK(t.relay.members().size() == 1 && t.relay.members()[0].addr == B); // alice timed out
+            const Addr C{0x0a000003, 5000};
+            t.relay.onPacket(C, hA.data(), hA.size(), ms); // an impostor with alice's id: refused
+            CHECK(t.relay.members().size() == 1);
+            t.relay.onPacket(A, hA.data(), hA.size(), ms); // alice itself, from its own address: back
+            CHECK(t.relay.members().size() == 2);
+            // Alice is silent from here on: she times out at 61000 (last heard at 11000), so her id is
+            // reserved until 61000 + 60000 = 121000.
+        }
+    }
+    // Still reserved for alice at 70500 (until 121000): the impostor is refused.
+    const Addr C{0x0a000003, 5000};
+    t.relay.onPacket(C, hA.data(), hA.size(), 70500);
+    bool cAdmitted = false;
+    for (const auto& m : t.relay.members()) cAdmitted = cAdmitted || m.addr == C;
+    CHECK(!cAdmitted);
+    t.relay.tick(130000); // after the grace time
+    t.relay.onPacket(C, hA.data(), hA.size(), 130000);
+    cAdmitted = false;
+    for (const auto& m : t.relay.members()) cAdmitted = cAdmitted || m.addr == C;
+    CHECK(cAdmitted);
+}
+
 static void testSharedNames() {
     // Two players with the same name: kick and ban refuse the name (it would hit one of them at random);
     // the id still works.
@@ -593,6 +627,7 @@ int main() {
     testBans();
     testSharedNames();
     testKickBlocksWholeAddress();
+    testSessionGrace();
     testLogBudget();
     testFullNoticeAndPerIp();
     testMotd();

@@ -56,6 +56,8 @@ Member* Relay::find(const Addr& a) {
 }
 
 bool Relay::sessionTaken(uint32_t session, const Addr& except) const {
+    for (const auto& r : reserved_)
+        if (r.session == session && r.addr != except) return true;
     for (const auto& m : members_)
         if (m.session == session && m.addr != except) return true;
     return session == session_;
@@ -287,8 +289,13 @@ void Relay::queueChat(const std::string& raw, const Addr* only) {
 }
 
 void Relay::tick(uint32_t nowMs) {
+    for (size_t i = 0; i < reserved_.size();) {
+        if (static_cast<int32_t>(nowMs - reserved_[i].until) >= 0) reserved_.erase(reserved_.begin() + static_cast<long>(i));
+        else ++i;
+    }
     for (size_t i = 0; i < members_.size();) {
         if (nowMs - members_[i].lastSeen > cfg_.timeoutMs) {
+            reserved_.push_back({members_[i].session, members_[i].addr, nowMs + cfg_.sessionGraceMs});
             drop(i, "timed out");
             continue;
         }

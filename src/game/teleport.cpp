@@ -209,7 +209,8 @@ void tick() {
             }
             // Where we stood, so that a summon can be undone for a minute (returnLeftMs / requestReturn).
             LinearTransform before{};
-            if (readEntityTransform(player, before)) {
+            // A transform that is not a place (read during a level load) must not become the way back.
+            if (readEntityTransform(player, before) && finite(before.trans, 3)) {
                 g_back = before;
                 g_backCharacter = player;
                 g_backAt = GetTickCount() | 1; // never 0
@@ -229,7 +230,7 @@ void tick() {
         }
         g_retries = 0;
         g_character = player;
-        g_haveFrom = source != Back && readEntityTransform(player, g_from);
+        g_haveFrom = source != Back && readEntityTransform(player, g_from) && finite(g_from.trans, 3);
         g_groundAt = g_steadyAt = 0;
         teleportTo(player, g_target);
         setPhase(Hold);

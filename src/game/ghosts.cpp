@@ -744,11 +744,14 @@ void tick(uint64_t tick, uint64_t ticksInLevel) {
                 }
                 continue;
             }
-            if (GetTickCount() - g_lastSpawnAt < kSpawnGapMs || !level::referenceSetup(ref)) continue;
+            if (GetTickCount() - g_lastSpawnAt < kSpawnGapMs) continue;
+            // Stamped before the lookup as well: with no reference yet, the lookup (up to 64 memory reads) is
+            // not repeated at every tick.
+            g_lastSpawnAt = GetTickCount();
+            if (!level::referenceSetup(ref)) continue;
             net::PlayerState st;
             uint32_t age = 0;
             if (!net::remoteState(p.id, st, age)) continue;
-            g_lastSpawnAt = GetTickCount();
             spawnGhost(p.id, p.name, p.look, p.outfit, st);
         }
     }

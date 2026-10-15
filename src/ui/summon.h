@@ -26,6 +26,9 @@ struct Input {
     bool declineDown = false;
 };
 void update(const Input& in); // once a frame, before draw()
+// The level changed: the summons waiting from the old one are dropped (a hard one would otherwise be taken
+// in the new level). Any thread; the render thread does the clearing in update().
+void levelChanged();
 void draw();                  // the panel and the markers
 
 // True while a key is taken from the game: the accept key while a summon waits, the decline key also

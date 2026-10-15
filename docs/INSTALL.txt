@@ -44,7 +44,9 @@ Audio turned on. Everyone joins the same Mumble server. The menu shows whether i
 
 GOOD TO KNOW
 - Everyone needs the same MECMP version.
-- The mod does not touch the game's online services, Denuvo or the EA app.
+- The mod does not touch the game's online services, Denuvo or the EA app. The one exception is the
+  opt-in share_profile setting (off by default): then your EA online id and profile name go to the other
+  players in your session, in the clear, so their maps can show your Runner Tag.
 - Traffic is not encrypted: only play with people and servers you trust.
 - Problems? Send mecmp.log (and mecmp.prev.log after a crash) with your report.
 

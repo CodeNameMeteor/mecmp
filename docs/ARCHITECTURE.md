@@ -281,7 +281,8 @@ UDP, one socket. Sessions have one host and any number of joiners (up to 16).
   ip:port into a 10-character Crockford base32 code. The host forwards every joiner's packets
   unchanged to all other joiners, so only the host has to be reachable. The host keeps the rules of
   `net/host_guard.h` for them: at most 4 joiners from one IP address, each joiner's packets bound to the
-  session id it joined with (only a HELLO may change it, to an unused id), and at most 80 packets a
+  session id it joined with (only a HELLO may change it, to an unused id; a player who went silent keeps
+  its id for a minute, for its own address only), and at most 80 packets a
   second per joiner (burst 160); anything beyond that is dropped, not forwarded.
 - **Join**: send to the host only; everyone else's packets arrive through the host.
 - **Dedicated server** (`tools/server/mecmp_server.cpp`, rules in `server/relay.cpp`, docs/SERVER.md):

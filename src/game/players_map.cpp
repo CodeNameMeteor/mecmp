@@ -90,7 +90,8 @@ void updateManager(uintptr_t mgr, const std::vector<net::RemoteInfo>& players, b
     static size_t loggedCount = 0;
     if (count != loggedCount) {
         loggedCount = count;
-        MLOG("map: the game's friend markers have %zu slots (players beyond that are not shown on the map)", count);
+        MLOG("map: the game's friend markers have %llu slots (players beyond that are not shown on the map)",
+             static_cast<unsigned long long>(count));
     }
     auto slotId = [&](size_t i) {
         uint64_t id = 0;
@@ -170,7 +171,7 @@ void beforeManagerUpdate(void* pool) {
             snprintf(one, sizeof(one), " %p (vtable %p)", reinterpret_cast<void*>(entries[i * 2]), reinterpret_cast<void*>(vt));
             what += one;
         }
-        VLOG("map: the friend-marker pool %p holds %zu manager(s):%s", pool, n, what.c_str());
+        VLOG("map: the friend-marker pool %p holds %llu manager(s):%s", pool, static_cast<unsigned long long>(n), what.c_str());
     }
     const bool enabled = config::get()->playersOnMap && net::running();
     const std::vector<net::RemoteInfo> players = enabled ? net::remotes(kShowAfterMs) : std::vector<net::RemoteInfo>{};

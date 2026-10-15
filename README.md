@@ -6,7 +6,9 @@ Free roam: one player hosts and friends join with a code, or everyone joins a de
 
 The mod does not touch the game's online services, Denuvo or the EA app. It talks to other
 players over its own small UDP connection (port 47800 by default). Custom servers that only
-change the server address (e.g. Beat Revival) keep working alongside it.
+change the server address (e.g. Beat Revival) keep working alongside it. The only exception is the
+opt-in `share_profile` setting (off by default), which sends your EA online id and profile name to
+the players in your session.
 
 Status: public beta (0.9.0, see [CHANGELOG.md](CHANGELOG.md)). Ghosts are visual only (no collision).
 Download the latest release from the [Releases](https://github.com/CodeNameMeteor/mecmp/releases) page.

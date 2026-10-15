@@ -78,7 +78,7 @@ When the server stops it changes to "offline". Delete it in Discord and the serv
 Keep the webhook URL private: anyone who has it can post to your channel. The server never sends it to
 players or writes it to the log. Posts are gathered for a couple of seconds and sent together, well under
 Discord's limits; player names cannot ping anyone. On Linux the webhook needs libcurl
-(`sudo apt install libcurl4`, already there on most systems); without it the server runs and logs that
+(`sudo apt install libcurl4t64` on Ubuntu 24.04, `libcurl4` on older systems); without it the server runs and logs that
 the webhook is off.
 
 Console commands (type them in the server's window):
@@ -181,7 +181,9 @@ changes can come back. There are no accounts to ban instead.
 - Packets must be MECMP packets of the server's protocol version and a known type, at most 1 KB.
 - A player is an address. Their first packet ties their player id to that address: packets with
   another player's id are dropped, so nobody can move or speak as someone else. A restarted game
-  (new id, same address) is accepted with its HELLO.
+  (new id, same address) is accepted with its HELLO. A player who times out keeps its id reserved for
+  a minute: another address cannot use that id meanwhile, and the player's own address can come back.
+  After the minute the id is free.
 - At most 80 packets a second per player (bursts up to 160); a client sends about 31.
 - Only the server may say it hosts: the host, server and members-may-pull-in flags are cleared from
   forwarded HELLOs. Summons are forwarded as they are, and players do not trust a summon's "vouched"

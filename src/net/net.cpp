@@ -121,6 +121,10 @@ std::mutex g_m;
 std::map<uint32_t, Remote> g_remotes;     // by session id
 std::vector<sockaddr_in> g_sendTo;        // JOIN: the host. HOST: kept in sync with g_members
 std::vector<Member> g_members;            // HOST: connected joiners
+// HOST: session ids of joiners who went silent. Only their own address may use the id again for kSessionGraceMs.
+struct Reserved { uint32_t session; sockaddr_in addr; DWORD until; };
+std::vector<Reserved> g_reserved;        // guarded by g_m
+constexpr DWORD kSessionGraceMs = 60000;
 sockaddr_in g_hostAddr{};                 // JOIN
 std::atomic<bool> g_heardFromHost{false};
 std::string g_joinCode, g_lanCode;
@@ -455,6 +459,8 @@ Member* memberFrom(const sockaddr_in& from) {
 // True if another player (or the host itself) already speaks with this session id.
 bool sessionInUse(uint32_t session, const sockaddr_in& except) {
     if (session == g_session) return true;
+    for (const auto& r : g_reserved)
+        if (r.session == session && !sameAddr(r.addr, except)) return true;
     for (const auto& m : g_members)
         if (m.session == session && !sameAddr(m.addr, except)) return true;
     return false;
@@ -1045,10 +1051,14 @@ void threadMain() {
                 for (size_t i = 0; i < g_members.size();) {
                     if (now - g_members[i].lastSeen < 15000) { ++i; continue; }
                     if (peerLogAllowed()) MLOG("net: %s left", addrToString(g_members[i].addr).c_str());
+                    g_reserved.push_back({g_members[i].session, g_members[i].addr, now + kSessionGraceMs});
                     for (size_t k = 0; k < g_sendTo.size(); ++k)
                         if (sameAddr(g_sendTo[k], g_members[i].addr)) { g_sendTo.erase(g_sendTo.begin() + static_cast<long>(k)); break; }
                     g_members.erase(g_members.begin() + static_cast<long>(i));
                 }
+                g_reserved.erase(std::remove_if(g_reserved.begin(), g_reserved.end(),
+                                                [now](const Reserved& r) { return static_cast<int32_t>(now - r.until) >= 0; }),
+                                 g_reserved.end());
             } else if (!g_heardFromHost && now - started > 10000 && now - lastJoinWarn > 20000) {
                 lastJoinWarn = now;
                 MLOG("net: no answer from the host %s yet. Check the join code, and that the host is in game.",
@@ -1074,6 +1084,7 @@ bool start(uint16_t port, const std::string& join, float loopbackOffset, const s
         g_remotes.clear();
         g_sendTo.clear();
         g_members.clear();
+        g_reserved.clear();
         g_heardFromHost = false;
         g_hostSession = 0;
         g_serverName.clear();

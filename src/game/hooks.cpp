@@ -133,11 +133,12 @@ bool installFactory(Factory f, uintptr_t slotVa, uintptr_t expectedVa, FactoryFn
         }
         MLOG("hook %s: already redirected by another component; chaining in front of it", kNames[f]);
     }
+    // The original is stored before the slot is patched: a call that gets in between must reach it.
+    g_orig[f] = reinterpret_cast<FactoryFn>(current);
     if (!mem::patchPointer(slot, reinterpret_cast<uintptr_t>(hook), nullptr)) {
         MLOG("hook %s: VirtualProtect failed (%lu)", kNames[f], GetLastError());
         return false;
     }
-    g_orig[f] = reinterpret_cast<FactoryFn>(current);
     undo.push_back({slot, current});
     VLOG("hook %s: installed", kNames[f]);
     return true;
@@ -196,11 +197,11 @@ void installUIPauseHook(std::vector<Patch>& undo) {
              reinterpret_cast<void*>(rva(Fn_PamUISystemUpdate)));
         return;
     }
+    g_origUISystemUpdate = reinterpret_cast<UISystemUpdateFn>(current); // before the patch, as above
     if (!mem::patchPointer(slot, reinterpret_cast<uintptr_t>(&uiSystemUpdate), nullptr)) {
         MLOG("hook UI pause: VirtualProtect failed (%lu)", GetLastError());
         return;
     }
-    g_origUISystemUpdate = reinterpret_cast<UISystemUpdateFn>(current);
     undo.push_back({slot, current});
     VLOG("hook UI pause: installed");
 }

@@ -32,6 +32,8 @@ std::string format(uint16_t buttons);     // bits -> "LS+RS"
 // they are read with held() and hidden from the game only while setSummonHidden asks for it.
 enum class Action { Menu, Ping, PingClear, React, SummonAccept, SummonDecline, Count };
 void setBinding(uint16_t buttons, Action action = Action::Menu); // 0 = none
+// False if another action already has exactly these buttons (a press would do two things at once).
+bool bindingFree(uint16_t buttons, Action action);
 // True while all of the action's buttons are held on some pad (never while a binding is recorded).
 bool held(Action action);
 // The summon panel is up: the game does not see the accept / decline buttons (as for the open wheel).

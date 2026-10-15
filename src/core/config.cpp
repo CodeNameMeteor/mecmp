@@ -52,6 +52,8 @@ constexpr const char* kDefaultIni =
     "; forwarded port on most routers (only that introduction goes through it, never the game's traffic). The host\r\n"
     "; and the joiner need the same one. Empty = off: joining goes straight to the join code's address, as before.\r\n"
     "rendezvous=34.27.13.116:47800\r\n"
+    "; HOST: 1 = ask your router to open the port (UPnP); 0 = do not (hole punching and forwarded ports still work)\r\n"
+    "upnp=1\r\n"
     "; the menu's server list: dedicated servers' addresses, comma separated (the menu edits it)\r\n"
     "servers=\r\n"
     "; solo test (developer builds) only: how far the mirrored ghost stands from you, along world X (metres)\r\n"
@@ -428,6 +430,7 @@ void load(const std::wstring& dir) {
     // Files from before this setting existed started the session at launch: keep that for them.
     s.autoStart = readInt(ini, L"net", L"auto_start", 1) != 0;
     s.rendezvous = readString(ini, L"net", L"rendezvous", s.rendezvous.c_str());
+    s.upnp = readInt(ini, L"net", L"upnp", 1) != 0;
     const float offset = static_cast<float>(atof(readString(ini, L"net", L"loopback_offset", "3.0").c_str()));
     s.loopbackOffset = std::isfinite(offset) ? offset : 3.0f; // "nan" or "inf" would poison the mirrored position
     s.name = readString(ini, L"player", L"name", "Runner");
@@ -629,6 +632,7 @@ void applyPending() {
     put(L"net", L"servers", snapshot->servers);
     put(L"net", L"auto_start", snapshot->autoStart ? "1" : "0");
     put(L"net", L"rendezvous", snapshot->rendezvous);
+    put(L"net", L"upnp", snapshot->upnp ? "1" : "0");
     put(L"player", L"look", snapshot->look);
     {
         namespace proto = net::protocol;

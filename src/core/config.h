@@ -62,6 +62,7 @@ struct Settings {
     // A dedicated server that introduces hosts and joiners for hole punching (no port forwarding for most
     // routers); only the introduction goes through it, never game traffic. Empty = off.
     std::string rendezvous = "34.27.13.116:47800";
+    bool upnp = true;                     // host: ask the router to open the port (UPnP)
     float loopbackOffset = 3.0f;          // solo test: metres along world X the mirrored ghost stands
     std::string servers;                  // the menu's server list: addresses, comma separated
     bool membersMayHardSummon = false;    // when you host: members may pull players in (a hard summon)

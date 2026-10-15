@@ -159,6 +159,10 @@ uint16_t g_routerMapped = 0; // port we mapped (0 = none)
 std::atomic<uint16_t> g_routerWanted{0}; // port the current session wants mapped (0 = none); not under g_routerM
 
 bool routerMap(uint16_t port, upnp::Result* out) {
+    if (!config::get()->upnp) { // [net] upnp=0: the router is not asked (to test hole punching, or by choice)
+        if (out) out->error = "turned off in mecmp.ini ([net] upnp=0)";
+        return false;
+    }
     std::lock_guard<std::mutex> lock(g_routerM);
     if (g_routerWanted != port) return false; // the session changed meanwhile
     upnp::Result r = upnp::mapUdpPort(port, "MECMP", 3600);

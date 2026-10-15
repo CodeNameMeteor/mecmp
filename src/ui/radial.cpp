@@ -32,6 +32,7 @@ namespace {
 constexpr float kPi = 3.14159265f;
 // Sizes in units of the font size, so the wheel scales with the UI.
 constexpr float kDeadZone = 1.5f, kInner = 3.0f, kOuter = 7.5f;
+constexpr float kWheelScale = 1.15f; // the wheel is drawn this much bigger than the font size alone gives
 // The pointer is kept this close to the middle, so turning to the opposite wedge is a short move;
 // it is drawn stretched out to the ring (shownPointer), so the wheel looks as it did.
 constexpr float kPointerMax = 3.75f;
@@ -116,7 +117,9 @@ void answer(int slot) {
         g_note = "That answer has no text";
         return;
     }
-    net::sendReact(g_target.owner, g_target.index, g_target.label, text);
+    uint8_t rgb[3], accent[3];
+    config::markerColors(*cfg, cfg->reactions[slot], rgb, accent);
+    net::sendReact(g_target.owner, g_target.index, g_target.label, text, cfg->reactions[slot].glyph, rgb, accent);
     g_note = "You answered " + (g_target.name.empty() ? std::string("a marker") : g_target.name) + ": " + text;
     if (cfg->reactLast != slot) config::change([slot](config::Settings& c) { c.reactLast = slot; });
 }
@@ -357,7 +360,7 @@ void draw() {
     Mode mode = Mode::Markers;
     float fade = 1.f;
     std::string target;
-    const float unit = ImGui::GetFontSize();
+    const float unit = ImGui::GetFontSize() * kWheelScale;
     {
         std::lock_guard<std::mutex> lock(g_m);
         if (!g_note.empty()) {
@@ -402,9 +405,6 @@ void draw() {
     const ImVec2 screen = ImGui::GetIO().DisplaySize;
     const ImVec2 mid(screen.x * 0.5f, screen.y * 0.5f);
     const float rIn = unit * kInner, rOut = unit * kOuter;
-    uint8_t rgb[3] = {255, 210, 60}, accent[3] = {255, 255, 255};
-    net::protocol::parseRgb(cfg->pingColor, rgb);
-    net::protocol::parseRgb(cfg->pingAccent, accent);
     // The slot a short press places, if it is on this wheel.
     const int tapWheel = cfg->pingTap ? cfg->pingFixedWheel : cfg->pingLastWheel;
     const int tapSlot = cfg->pingTap ? cfg->pingFixedSlot : cfg->pingLastSlot;
@@ -418,22 +418,28 @@ void draw() {
         const float centre = -kPi * 0.5f + static_cast<float>(i) * step; // wedge 0 straight up, then clockwise
         const float a0 = centre - step * 0.5f + gap, a1 = centre + step * 0.5f - gap;
         const bool on = i == hot;
+        uint8_t rgb[3], accent[3]; // each marker in its own colors
+        config::markerColors(*cfg, slots[i], rgb, accent);
         const int segs = std::max(6, static_cast<int>(14.f * step / 0.70f));
         dl->PathArcTo(mid, rOut, a0, a1, segs);
         dl->PathArcTo(mid, rIn, a1, a0, segs);
-        dl->PathFillConcave(scaled(on ? rgba(rgb, 175) : IM_COL32(24, 24, 30, 205), fade));
+        // A slot without a title is not set: drawn at half opacity (it still works, as an icon only).
+        const bool unset = slots[i].label.empty();
+        dl->PathFillConcave(scaled(on ? rgba(rgb, unset ? 100 : 175) : IM_COL32(24, 24, 30, unset ? 110 : 205), fade));
         dl->PathArcTo(mid, rOut, a0, a1, segs);
         dl->PathArcTo(mid, rIn, a1, a0, segs);
-        dl->PathStroke(scaled(on ? IM_COL32(255, 255, 255, 235) : IM_COL32(255, 255, 255, 60), fade), ImDrawFlags_Closed, on ? 2.5f : 1.f);
+        dl->PathStroke(scaled(on ? IM_COL32(255, 255, 255, unset ? 140 : 235) : IM_COL32(255, 255, 255, unset ? 30 : 60), fade),
+                       ImDrawFlags_Closed, on ? 2.5f : 1.f);
 
         const float dx = std::cos(centre), dy = std::sin(centre);
         // The slot's digit at the inner ring, its icon further out.
         snprintf(num, sizeof(num), "%d", i + 1);
         centred(dl, font, unit * 0.8f, ImVec2(mid.x + dx * (rIn + unit * 0.65f), mid.y + dy * (rIn + unit * 0.65f)),
-                scaled(on ? IM_COL32(255, 255, 255, 255) : IM_COL32(200, 200, 205, 220), fade), num);
+                scaled(on ? IM_COL32(255, 255, 255, unset ? 140 : 255) : IM_COL32(200, 200, 205, unset ? 110 : 220), fade), num);
         const float rIcon = rIn + (rOut - rIn) * 0.6f;
+        const int iconA = unset ? 128 : 255;
         drawGlyph(dl, slots[i].glyph, ImVec2(mid.x + dx * rIcon, mid.y + dy * rIcon), unit * (on ? 1.15f : 0.95f),
-                  on ? IM_COL32(255, 255, 255, 255) : rgba(rgb, 255), fade, rgba(accent, 255));
+                  on ? IM_COL32(255, 255, 255, iconA) : rgba(rgb, iconA), fade * (unset ? 0.5f : 1.f), rgba(accent, iconA));
         if (i == markSlot)
             dl->AddCircleFilled(ImVec2(mid.x + dx * (rOut - unit * 0.4f), mid.y + dy * (rOut - unit * 0.4f)), unit * 0.16f,
                                 scaled(IM_COL32(255, 255, 255, 220), fade));

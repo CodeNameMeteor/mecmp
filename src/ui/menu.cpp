@@ -718,6 +718,31 @@ void markerColor(const char* id, const std::string& current, std::string config:
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", tip);
 }
 
+// A marker's own color (or accent): a swatch that opens a picker. Faded while it follows the main
+// color (`own` empty); right-click drops the own color again. Returns true with `out` set on a change
+// (`out` empty = back to the main color).
+bool ownColor(const char* id, const std::string& own, const uint8_t shown[3], const char* what, std::string& out) {
+    float col[3] = {shown[0] / 255.f, shown[1] / 255.f, shown[2] / 255.f};
+    if (own.empty()) ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.35f);
+    bool changed = false;
+    if (ImGui::ColorEdit3(id, col, ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_NoTooltip)) {
+        uint8_t rgb[3];
+        for (int i = 0; i < 3; ++i) rgb[i] = static_cast<uint8_t>(col[i] < 0 ? 0 : (col[i] > 1 ? 255 : col[i] * 255.f + 0.5f));
+        out = net::protocol::formatRgb(rgb);
+        changed = true;
+    }
+    if (own.empty()) ImGui::PopStyleVar();
+    if (!own.empty() && ImGui::IsItemClicked(ImGuiMouseButton_Right)) {
+        out.clear();
+        changed = true;
+    }
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+        if (own.empty()) ImGui::SetTooltip("This marker's %s: the main one. Click to give it its own.", what);
+        else ImGui::SetTooltip("This marker's own %s. Right-click: back to the main one.", what);
+    }
+    return changed;
+}
+
 // "Wheel 1: Nice!"
 std::string slotName(const config::Settings& cfg, int wheel, int slot) {
     const std::string& label = cfg.wheels[wheel][slot].label;
@@ -844,13 +869,22 @@ void tapModeRows(const config::Settings& cfg) {
     }
 }
 
-// A square button showing icon `glyph`. True when clicked.
-bool iconButton(const char* id, uint8_t glyph, float size, ImU32 fill, ImU32 accent, bool selected) {
+// Half of a color's opacity: for what is not set (an untitled slot).
+ImU32 halved(ImU32 color) {
+    const ImU32 a = ((color >> IM_COL32_A_SHIFT) & 0xFF) / 2;
+    return (color & ~(0xFFu << IM_COL32_A_SHIFT)) | (a << IM_COL32_A_SHIFT);
+}
+
+// A square button showing icon `glyph`. True when clicked. `dim`: drawn at half opacity.
+bool iconButton(const char* id, uint8_t glyph, float size, ImU32 fill, ImU32 accent, bool selected, bool dim = false) {
     ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(selected ? ImGuiCol_Header : ImGuiCol_FrameBg));
+    if (dim) ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.5f);
     const bool clicked = ImGui::Button(id, ImVec2(size, size));
+    if (dim) ImGui::PopStyleVar();
     ImGui::PopStyleColor();
     const ImVec2 a = ImGui::GetItemRectMin();
-    drawGlyph(ImGui::GetWindowDrawList(), glyph, ImVec2(a.x + size * 0.5f, a.y + size * 0.5f), size * 0.33f, fill, 1.f, accent);
+    drawGlyph(ImGui::GetWindowDrawList(), glyph, ImVec2(a.x + size * 0.5f, a.y + size * 0.5f), size * 0.33f, dim ? halved(fill) : fill,
+              dim ? 0.5f : 1.f, dim ? halved(accent) : accent);
     return clicked;
 }
 
@@ -891,26 +925,30 @@ void removeWheel(const config::Settings& cfg, int w) {
 }
 
 // One slot per row: the icon (click for the list of icons) and the title, which is what the others
-// read. Rows past `shown` are kept but not on the wheel: greyed out. `setGlyph` / `setLabel` store a change.
-template <class SetGlyph, class SetLabel>
+// read, then (marker wheels only) the marker's own color and accent. Rows past `shown` are kept but not on
+// the wheel: greyed out. `setGlyph` / `setLabel` / `setColor` store a change.
+template <class SetGlyph, class SetLabel, class SetColor>
 void slotRows(const config::Settings& cfg, const config::Wheel& slots, int shown, char (*buf)[net::protocol::kMaxPingLabelBytes + 1],
-              SetGlyph setGlyph, SetLabel setLabel) {
-    uint8_t rgb[3] = {255, 210, 60}, acc[3] = {255, 255, 255};
-    net::protocol::parseRgb(cfg.pingColor, rgb);
-    net::protocol::parseRgb(cfg.pingAccent, acc);
-    const ImU32 fill = IM_COL32(rgb[0], rgb[1], rgb[2], 255), accent = IM_COL32(acc[0], acc[1], acc[2], 255);
+              SetGlyph setGlyph, SetLabel setLabel, bool colors, SetColor setColor) {
     const float h = ImGui::GetFrameHeight();
     for (int i = 0; i < config::kPingSlots; ++i) {
+        uint8_t rgb[3], acc[3];
+        config::markerColors(cfg, slots[i], rgb, acc);
+        const ImU32 fill = IM_COL32(rgb[0], rgb[1], rgb[2], 255), accent = IM_COL32(acc[0], acc[1], acc[2], 255);
         ImGui::PushID(i);
         ImGui::BeginDisabled(i >= shown);
         ImGui::AlignTextToFramePadding();
         ImGui::TextDisabled("%d", i + 1);
         ImGui::SameLine();
-        if (iconButton("##icon", slots[i].glyph, h, fill, accent, false)) ImGui::OpenPopup("icons");
+        const bool untitled = buf[i][0] == 0; // not set: its icon and colors are shown at half opacity
+        if (iconButton("##icon", slots[i].glyph, h, fill, accent, false, untitled)) ImGui::OpenPopup("icons");
         if (ImGui::BeginPopup("icons")) {
+            int shownGlyphs = 0;
             for (int g = 0; g < kGlyphCount; ++g) {
+                // The ring and the dot are no longer offered; a slot that has one keeps it.
+                if (!glyphPickable(g) && g != slots[i].glyph) continue;
                 ImGui::PushID(g);
-                if (g % 8) ImGui::SameLine();
+                if (shownGlyphs++ % 8) ImGui::SameLine();
                 if (iconButton("##pick", static_cast<uint8_t>(g), h * 1.4f, fill, accent, g == slots[i].glyph)) {
                     setGlyph(i, static_cast<uint8_t>(g));
                     ImGui::CloseCurrentPopup();
@@ -920,7 +958,7 @@ void slotRows(const config::Settings& cfg, const config::Wheel& slots, int shown
             ImGui::EndPopup();
         }
         ImGui::SameLine();
-        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 14);
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * (colors ? 12.5f : 14.f)); // room for the two swatches
         if (ImGui::InputTextWithHint("##label", "(no title)", buf[i], sizeof(buf[i])))
             setLabel(i, net::protocol::cleanPingLabel(buf[i]));
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
@@ -929,6 +967,15 @@ void slotRows(const config::Settings& cfg, const config::Wheel& slots, int shown
                               static_cast<int>(net::protocol::kMaxPingLabelBytes), static_cast<int>(net::protocol::kMaxPingLabelBytes),
                               static_cast<int>(net::protocol::kMaxPingLabelBytes / 2),
                               i >= shown ? "\nNot on the wheel at the moment (see Slots); kept for later." : "");
+        if (colors) {
+            std::string hex;
+            if (untitled) ImGui::PushStyleVar(ImGuiStyleVar_Alpha, ImGui::GetStyle().Alpha * 0.5f);
+            ImGui::SameLine();
+            if (ownColor("##color", slots[i].color, rgb, "color", hex)) setColor(i, false, hex);
+            ImGui::SameLine(0, 2);
+            if (ownColor("##accent", slots[i].accent, acc, "secondary color", hex)) setColor(i, true, hex);
+            if (untitled) ImGui::PopStyleVar();
+        }
         ImGui::EndDisabled();
         ImGui::PopID();
     }
@@ -959,7 +1006,10 @@ void wheelEditor(const config::Settings& cfg, int w) {
     slotRows(
         cfg, cfg.wheels[w], shown, g_label[w],
         [w](int i, uint8_t g) { config::change([w, i, g](config::Settings& c) { c.wheels[w][i].glyph = g; }); },
-        [w](int i, const std::string& text) { config::change([w, i, text](config::Settings& c) { c.wheels[w][i].label = text; }); });
+        [w](int i, const std::string& text) { config::change([w, i, text](config::Settings& c) { c.wheels[w][i].label = text; }); },
+        true, [w](int i, bool accent, const std::string& hex) {
+            config::change([w, i, accent, hex](config::Settings& c) { (accent ? c.wheels[w][i].accent : c.wheels[w][i].color) = hex; });
+        });
     const bool own = w >= config::kDefaultWheels; // a wheel the player added
     if (ImGui::SmallButton("Reset this wheel")) {
         loadLabels(w, config::defaultWheel(w));
@@ -987,7 +1037,10 @@ void reactionEditor(const config::Settings& cfg) {
     slotRows(
         cfg, cfg.reactions, shown, g_reactLabel,
         [](int i, uint8_t g) { config::change([i, g](config::Settings& c) { c.reactions[i].glyph = g; }); },
-        [](int i, const std::string& text) { config::change([i, text](config::Settings& c) { c.reactions[i].label = text; }); });
+        [](int i, const std::string& text) { config::change([i, text](config::Settings& c) { c.reactions[i].label = text; }); },
+        true, [](int i, bool accent, const std::string& hex) {
+            config::change([i, accent, hex](config::Settings& c) { (accent ? c.reactions[i].accent : c.reactions[i].color) = hex; });
+        });
     if (ImGui::SmallButton("Reset the answers")) {
         const config::Wheel d = config::defaultReactions();
         for (int i = 0; i < config::kPingSlots; ++i) snprintf(g_reactLabel[i], sizeof(g_reactLabel[i]), "%s", d[i].label.c_str());
@@ -1065,10 +1118,12 @@ std::string distanceText(const float pos[3], const float* me) {
 
 const char* titleOr(const std::string& label) { return label.empty() ? "(no title)" : label.c_str(); }
 
-void addBookmark(const std::string& label, uint8_t glyph, const float pos[3]) {
+void addBookmark(const std::string& label, uint8_t glyph, const float pos[3], const std::string& color, const std::string& accent) {
     config::Bookmark b;
     b.label = label;
     b.glyph = glyph;
+    b.color = color;
+    b.accent = accent;
     memcpy(b.pos, pos, sizeof(b.pos));
     config::change([b](config::Settings& c) {
         if (c.bookmarks.size() < config::kMaxBookmarks) c.bookmarks.push_back(b);
@@ -1079,7 +1134,17 @@ void addBookmark(const std::string& label, uint8_t glyph, const float pos[3]) {
 void bookmarkButton(const config::Settings& cfg, const net::PingInfo& p) {
     const bool full = cfg.bookmarks.size() >= config::kMaxBookmarks;
     ImGui::BeginDisabled(full);
-    if (ImGui::SmallButton("Bookmark")) addBookmark(p.label, p.glyph, p.pos);
+    if (ImGui::SmallButton("Bookmark")) {
+        // One of my markers in colors of its own keeps them; anything else is placed in my main colors.
+        std::string color, accent;
+        if (p.own) {
+            uint8_t rgb[3], acc[3];
+            config::markerColors(cfg, std::string(), std::string(), rgb, acc);
+            if (memcmp(rgb, p.rgb, 3)) color = net::protocol::formatRgb(p.rgb);
+            if (memcmp(acc, p.accent, 3)) accent = net::protocol::formatRgb(p.accent);
+        }
+        addBookmark(p.label, p.glyph, p.pos, color, accent);
+    }
     ImGui::EndDisabled();
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
         ImGui::SetTooltip(full ? "You have %d bookmarks already: delete one first" : "Saves this spot, icon and title to your bookmarks",
@@ -1131,11 +1196,10 @@ void bookmarkList(const config::Settings& cfg, const float* me) {
     snprintf(head, sizeof(head), "Bookmarks (%d)###bookmarks", static_cast<int>(cfg.bookmarks.size()));
     if (!ImGui::TreeNode(head)) return;
     if (cfg.bookmarks.empty()) ImGui::TextDisabled("Nothing saved yet. \"Bookmark\" on a marker saves its spot.");
-    uint8_t rgb[3] = {255, 210, 60}, accent[3] = {255, 255, 255};
-    net::protocol::parseRgb(cfg.pingColor, rgb);
-    net::protocol::parseRgb(cfg.pingAccent, accent);
     for (int i = 0; i < static_cast<int>(cfg.bookmarks.size()); ++i) {
         const config::Bookmark& b = cfg.bookmarks[static_cast<size_t>(i)];
+        uint8_t rgb[3], accent[3];
+        config::markerColors(cfg, b, rgb, accent);
         ImGui::PushID(i);
         rowIcon(b.glyph, rgb, accent);
         ImGui::AlignTextToFramePadding();
@@ -1209,22 +1273,58 @@ void markerLists(const config::Settings& cfg) {
     othersList(cfg, pings, me);
 }
 
+// The main colors (every marker without colors of its own) and the two resets.
+void colorsGroup(const config::Settings& cfg) {
+    ImGui::SeparatorText("Colors");
+    markerColor("##pingcolor", cfg.pingColor, &config::Settings::pingColor, "The color of your markers", 255);
+    ImGui::SameLine();
+    ImGui::TextUnformatted("Main");
+    ImGui::SameLine();
+    markerColor("##pingaccent", cfg.pingAccent, &config::Settings::pingAccent, "The color of the detail inside your markers", 255);
+    ImGui::SameLine();
+    ImGui::TextUnformatted("Secondary");
+    static const config::Settings defaults; // render thread only
+    const bool mainChanged = cfg.pingColor != defaults.pingColor || cfg.pingAccent != defaults.pingAccent;
+    ImGui::BeginDisabled(!mainChanged);
+    if (ImGui::SmallButton("Reset colors"))
+        config::change([](config::Settings& c) {
+            const config::Settings d;
+            c.pingColor = d.pingColor;
+            c.pingAccent = d.pingAccent;
+        });
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip("Main and secondary back to red and white. Markers with colors of their own keep them.");
+    int own = 0;
+    for (int w = 0; w < cfg.wheelCount && w < config::kWheels; ++w)
+        for (const auto& s : cfg.wheels[w]) own += !s.color.empty() || !s.accent.empty() ? 1 : 0;
+    for (const auto& s : cfg.reactions) own += !s.color.empty() || !s.accent.empty() ? 1 : 0;
+    ImGui::SameLine();
+    char reset[48];
+    snprintf(reset, sizeof(reset), "Reset own colors (%d)###resetown", own);
+    ImGui::BeginDisabled(own == 0);
+    if (ImGui::SmallButton(reset))
+        config::change([](config::Settings& c) {
+            for (auto& wheel : c.wheels)
+                for (auto& s : wheel) s.color.clear(), s.accent.clear();
+            for (auto& s : c.reactions) s.color.clear(), s.accent.clear();
+        });
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip("Every marker on the wheels goes back to the main colors");
+    ImGui::TextDisabled("A marker can have colors of its own: the swatches next to it in Marker wheels.");
+}
+
 void markersSection() {
     const auto cfgPtr = config::get();
     const config::Settings& cfg = *cfgPtr;
-    markerLists(cfg);
+    ImGui::SeparatorText("Markers");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("The marker keys and buttons are on the Controls tab");
     bool showPings = cfg.showPings;
     if (ImGui::Checkbox("Show markers", &showPings)) config::change([showPings](config::Settings& c) { c.showPings = showPings; });
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Shows your markers and everyone else's. A marker that is off screen becomes an arrow\n"
                           "on the edge of the screen.");
-    ImGui::SameLine();
-    markerColor("##pingcolor", cfg.pingColor, &config::Settings::pingColor, "Your marker's color", 255);
-    ImGui::SameLine();
-    markerColor("##pingaccent", cfg.pingAccent, &config::Settings::pingAccent, "Your secondary marker's color", 255);
-    ImGui::SameLine();
-    if (ImGui::SmallButton("Clear my markers")) net::clearPing();
-    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Removes all your markers for everyone");
     bool pingPulse = cfg.pingPulse;
     if (ImGui::Checkbox("Flash markers when placed", &pingPulse))
         config::change([pingPulse](config::Settings& c) { c.pingPulse = pingPulse; });
@@ -1262,7 +1362,9 @@ void markersSection() {
         ImGui::SetTooltip("How many markers you can have at the same time. Your oldest one is removed when you go\n"
                           "over the limit. Placing the same marker within 1.5 m of one of yours moves it instead.");
 
-    ImGui::TextDisabled("The marker keys and buttons are on the Controls tab.");
+    colorsGroup(cfg);
+
+    ImGui::SeparatorText("Wheels");
     if (ImGui::TreeNode("Marker wheels")) {
         if (ImGui::BeginTabBar("wheels")) {
             for (int w = 0; w < cfg.wheelCount; ++w) {
@@ -1292,11 +1394,19 @@ void markersSection() {
         ImGui::TreePop();
     }
     if (ImGui::TreeNode("Quick answers")) {
-        ImGui::TextDisabled("Look at another player's marker, then tap or hold %s: the owner gets your answer.",
+        ImGui::PushTextWrapPos(0.f);
+        ImGui::TextDisabled("Look at another player's marker, then tap or hold %s: the owner gets your answer, and\n"
+                            "its icon shows under the marker for everyone (up to three, then \"and N more\").",
                             cfg.reactKey.empty() ? "the react key" : ui::keyLabel(cfg.reactKey).c_str());
+        ImGui::PopTextWrapPos();
         reactionEditor(cfg);
         ImGui::TreePop();
     }
+
+    ImGui::SeparatorText("On the map now");
+    if (ImGui::SmallButton("Clear my markers")) net::clearPing();
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Removes all your markers for everyone");
+    markerLists(cfg);
 }
 
 void controlsSection() {

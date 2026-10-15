@@ -434,13 +434,32 @@ static void testReact() {
     in.title = "Roof";
     in.text = "Got it";
     n = protocol::writeReact(buf, h, in);
-    for (size_t cut = 0; cut + 1 < n - sizeof(h); ++cut) CHECK(!protocol::readReact(buf + sizeof(h), cut, out));
+    // (The last seven bytes, the icon and colours, are optional: a packet cut there is an older sender's.)
+    constexpr size_t kLook = 7;
+    for (size_t cut = 0; cut + 1 < n - sizeof(h) - kLook; ++cut) CHECK(!protocol::readReact(buf + sizeof(h), cut, out));
+    CHECK(protocol::readReact(buf + sizeof(h), n - sizeof(h) - kLook, out) && out.glyph == 31 && out.rgb[0] == 255 &&
+          out.accent[2] == 255 && out.text == "Got it"); // an older sender: the speech bubble, white
+    for (size_t cut = n - sizeof(h) - kLook; cut < n - sizeof(h); ++cut) { // a damaged tail is never read out of bounds
+        CHECK(protocol::readReact(buf + sizeof(h), cut, out));
+        CHECK(out.glyph == 31);
+    }
+    // The icon and its colours travel with the answer.
+    in.glyph = 24;
+    in.rgb[0] = 10; in.rgb[1] = 20; in.rgb[2] = 30;
+    in.accent[0] = 40; in.accent[1] = 50; in.accent[2] = 60;
+    n = protocol::writeReact(buf, h, in);
+    CHECK(protocol::readReact(buf + sizeof(h), n - sizeof(h), out));
+    CHECK(out.glyph == 24 && out.rgb[0] == 10 && out.rgb[1] == 20 && out.rgb[2] == 30 && out.accent[0] == 40 &&
+          out.accent[1] == 50 && out.accent[2] == 60);
+    in.glyph = 31;
+    in.rgb[0] = in.rgb[1] = in.rgb[2] = 255;
+    in.accent[0] = in.accent[1] = in.accent[2] = 255;
     // A cell that does not exist, and a text that claims to be longer than the packet.
     n = protocol::writeReact(buf, h, in);
     buf[sizeof(h) + 8] = static_cast<char>(protocol::kPingCells);
     CHECK(!protocol::readReact(buf + sizeof(h), n - sizeof(h), out));
     n = protocol::writeReact(buf, h, in);
-    buf[n - 1 - 6] = static_cast<char>(200); // the text's length byte
+    buf[n - 1 - 6 - kLook] = static_cast<char>(200); // the text's length byte
     CHECK(!protocol::readReact(buf + sizeof(h), n - sizeof(h), out));
     // Over-long and dirty texts are cut and cleaned like marker titles.
     in.title = "x";

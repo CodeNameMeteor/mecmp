@@ -231,7 +231,7 @@ struct Ping {
     uint32_t id = 0;
     float pos[3] = {0, 0, 0};
     uint8_t flags = 0;
-    uint8_t rgb[3] = {255, 210, 60};
+    uint8_t rgb[3] = {232, 50, 46};
     std::string label; // cleaned; empty = none
     uint8_t life = 0;  // see pingLifeMs
     uint8_t accent[3] = {255, 255, 255};
@@ -258,7 +258,10 @@ int choosePingCell(const PingCellView cells[kPingCells], int limit, uint8_t glyp
                    const float pos[3]);
 // True when a marker at `pos` is the one in `cell` again (same glyph and title, within kPingMergeMetres).
 bool samePingMarker(const PingCellView& cell, uint8_t glyph, const std::string& label, const float pos[3]);
-// type 6 REACT: u32 id | u32 target | u8 cell | u8 titleLength | title | u8 textLength | text.
+// type 6 REACT: u32 id | u32 target | u8 cell | u8 titleLength | title | u8 textLength | text
+//   [| u8 glyph | u8 rgb[3] | u8 accent[3]].
+// The last seven bytes are the answer's icon and colors, shown under the marker for everyone; an answer from a
+// version that does not send them is shown as the speech bubble, white.
 // A quick answer to the marker in `cell` of the player whose session id is `target` ("On my way").
 // `title` is that marker's title as the sender saw it (empty = none), so the owner can name it even if
 // the marker was replaced meanwhile. Everyone receives it (the host and servers forward it like any
@@ -270,6 +273,9 @@ struct React {
     uint8_t cell = 0;   // 0..kPingCells-1
     std::string title;  // cleaned, at most kMaxPingLabelBytes; may be empty
     std::string text;   // cleaned, at most kMaxPingLabelBytes; never empty
+    uint8_t glyph = 31; // the speech bubble
+    uint8_t rgb[3] = {255, 255, 255};
+    uint8_t accent[3] = {255, 255, 255};
 };
 size_t writeReact(char* buf, const Header& h, const React& r);
 // False for a short or damaged packet, a cell out of range, or an empty answer.

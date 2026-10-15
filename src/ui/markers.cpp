@@ -37,6 +37,16 @@ constexpr float kFeetFocusMetres = net::protocol::kPingMergeMetres;
 // A title that was moved off its marker gets a line back to it from this far on (font sizes).
 constexpr float kLeaderFrom = 0.8f;
 constexpr float kOffsetPerSecond = 14.f; // how fast a title glides to its place
+// Quick answers under a marker: up to this many icons in a row, the rest as "and N more".
+constexpr size_t kAnswerIcons = 3;
+constexpr float kAnswerGlidePerSecond = 12.f; // how fast the icons make room for a new one
+constexpr float kAnswerFadePerSecond = 6.f;
+
+// Where an answer's icon is drawn, in icon steps from the middle of its row, and how far it has faded in.
+struct AnswerPos {
+    float x = 0.f;
+    float a = 0.f;
+};
 
 // The focus: written by the render thread every frame, read by input threads.
 std::mutex g_focusM;
@@ -128,6 +138,8 @@ void draw() {
     static std::unordered_map<uint64_t, ImVec2> glide;        // marker -> the title's offset as drawn
     std::unordered_map<uint64_t, float> growNow;
     std::unordered_map<uint64_t, ImVec2> glideNow;
+    static std::unordered_map<uint64_t, AnswerPos> answers; // marker + answering player -> icon position; render thread only
+    std::unordered_map<uint64_t, AnswerPos> answersNow;
     Focus own, other;
 
     if (cfg->showPings) {
@@ -272,6 +284,32 @@ void draw() {
                     dl->AddCircle(c, r * (1.f + 3.4f * pulse.ring), colour(lit, fade * 0.75f), 0, unit * 0.14f * (1.f - 0.5f * pulse.ring));
                 }
                 drawGlyph(dl, p.glyph, ImVec2(e.x, e.y), r * pulse.scale, colour(lit, alpha), alpha, colour(litAccent, alpha));
+                // The answers to it, under it: a row of up to three icons, kept in the middle as one block.
+                // A new answer comes in on the right and the ones before it make room by gliding left.
+                if (!p.reactions.empty()) {
+                    const size_t n = std::min(p.reactions.size(), kAnswerIcons);
+                    const float ar = r * pulse.scale * 0.5f; // an answer's icon radius: half the marker's
+                    const float step = ar * 2.4f;
+                    const float rowY = e.y + r * pulse.scale + ar * 1.4f;
+                    const float glideF = std::clamp(kAnswerGlidePerSecond * dt, 0.f, 1.f);
+                    for (size_t k = 0; k < n; ++k) {
+                        const net::ReactionMark& m = p.reactions[k];
+                        const uint64_t id = (it.key * 0x9E3779B97F4A7C15ull) ^ m.from;
+                        const float want = static_cast<float>(k) - static_cast<float>(n - 1) * 0.5f;
+                        const auto was = answers.find(id);
+                        AnswerPos pos = was == answers.end() ? AnswerPos{want + 0.35f, 0.f} : was->second;
+                        pos.x += (want - pos.x) * glideF;
+                        pos.a = std::min(1.f, pos.a + kAnswerFadePerSecond * dt);
+                        answersNow[id] = pos;
+                        const float aa = alpha * pos.a;
+                        drawGlyph(dl, m.glyph, ImVec2(e.x + pos.x * step, rowY), ar, colour(m.rgb, aa), aa, colour(m.accent, aa));
+                    }
+                    if (p.reactions.size() > n) {
+                        char more[24];
+                        snprintf(more, sizeof(more), "and %d more", static_cast<int>(p.reactions.size() - n));
+                        label(dl, font, unit * 0.75f, ImVec2(e.x, rowY + ar * 1.9f), more, alpha, screen);
+                    }
+                }
                 // The text goes above the marker, which points at something: below it would cover that.
                 // Name and distance sit on it, the marker's title (if it has one) above them. When two
                 // markers' texts would cover each other the farther one's moves aside (a line leads back).
@@ -292,6 +330,7 @@ void draw() {
     }
     grow.swap(growNow);
     glide.swap(glideNow);
+    answers.swap(answersNow);
     {
         std::lock_guard<std::mutex> lock(g_focusM);
         g_own = own;

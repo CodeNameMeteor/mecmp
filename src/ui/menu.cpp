@@ -16,6 +16,7 @@
 #include "app/mod.h"
 #include "core/config.h"
 #include "game/mumble_link.h"
+#include "game/player_audio.h"
 #include "game/ghosts.h"
 #include "game/ping_point.h"
 #include "game/raycast.h"
@@ -249,6 +250,10 @@ bool g_summonHard = false;       // "pull in" ticked (only offered while it can 
 void hostSettingsSection() {
     if (!net::hosting()) return;
     ImGui::SeparatorText("Host settings");
+    float reach = config::get()->boneReach;
+    if (ImGui::SliderFloat("Bone reach limit", &reach, .5f, 2.f, "%.2f m"))
+        config::change([reach](config::Settings& c) { c.boneReach = reach; });
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Limits each limb translation before forwarding. Bone weights and rotations cannot enlarge the body.");
     bool allow = config::get()->membersMayHardSummon;
     if (ImGui::Checkbox("Members may pull players in (hard summon)", &allow))
         config::change([allow](config::Settings& c) { c.membersMayHardSummon = allow; });
@@ -611,6 +616,14 @@ void shownInGame() {
 
 // Players tab: hearing the session's players (Mumble positional audio).
 void voiceSection() {
+    ImGui::SeparatorText("Player sounds");
+    bool audio = config::get()->playerAudio;
+    if (ImGui::Checkbox("Other players' movement sounds", &audio))
+        config::change([audio](config::Settings& c) { c.playerAudio = audio; });
+    float distance = config::get()->playerAudioDistance;
+    if (ImGui::SliderFloat("Sound distance", &distance, 5.f, 200.f, "%.0f m"))
+        config::change([distance](config::Settings& c) { c.playerAudioDistance = distance; });
+    ImGui::TextDisabled("%s", game::player_audio::status().c_str());
     ImGui::SeparatorText("Voice");
     bool mumble = config::get()->mumbleLink;
     if (ImGui::Checkbox("Positional voice (Mumble)", &mumble))

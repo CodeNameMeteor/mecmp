@@ -70,6 +70,18 @@ Solo test (developer builds only): *Solo test* in the menu, or `join=127.0.0.1:4
 ghost copies your moves 3 m away along the world X axis (`loopback_offset`); it stays put while you
 turn, so you can walk around it.
 
+## Player movement sounds
+
+Other players' footsteps, hand contacts, cloth movement and parkour landings play
+through the game's native audio graphs. The Players tab controls these sounds and
+their maximum distance (80 metres by default). Use the updated mod on both PCs and
+the updated dedicated server when using one. [Audio and bone protections](docs/PLAYER_AUDIO.md)
+describes the settings and native implementation.
+
+Hosts and dedicated servers limit limb reach before forwarding poses. Clients
+also enforce their own limits on bone size, translation, rotation, and packet
+shape before applying poses to the game.
+
 ## Positional voice (Mumble)
 
 MECMP has no voice chat of its own; it tells [Mumble](https://www.mumble.info) where you are, so

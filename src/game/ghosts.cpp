@@ -14,6 +14,7 @@
 #include "game/pose_math.h"
 #include <map>
 #include "net/net.h"
+#include "net/pose_limits.h"
 
 namespace mecmp::game::ghosts {
 namespace {
@@ -234,7 +235,9 @@ void placeAnchor(float* pose, int traj, const float pos[3]) {
 }
 
 // Server side: the streamed pose into the ghost's replay component, replicated to clients.
-void drive(Ghost& g, const net::PlayerState& st) {
+void drive(Ghost& g, const net::PlayerState& input) {
+    net::PlayerState st = input;
+    if (!net::limitPose(st)) return;
     auto* c = static_cast<uint8_t*>(getComponent(g.character, TI_PamServerReplayPlayerComponent));
     if (!c || !preparePose(c)) return;
     const uint32_t N = *reinterpret_cast<uint32_t*>(c + SRP_Setup);
@@ -585,7 +588,7 @@ void renderFrame() {
         uint32_t age = 0;
         {
             prof::Scope s(prof::RenderState);
-            if (!net::remoteState(targets[i].peer, st, age) || age >= kHideAfterMs) continue;
+            if (!net::remoteState(targets[i].peer, st, age) || age >= kHideAfterMs || !net::limitPose(st)) continue;
         }
         thread_local ClientCompView v;
         uint32_t idx[kMaxBones];

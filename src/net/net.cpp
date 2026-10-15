@@ -25,6 +25,7 @@
 #include "net/host_guard.h"
 #include "net/joincode.h"
 #include "net/protocol.h"
+#include "net/pose_limits.h"
 #include "net/summon_policy.h"
 #include "net/upnp.h"
 
@@ -79,6 +80,9 @@ struct Remote {
     int nameLogs = 0;         // name changes logged for this player (at most kMaxNameLogs)
     proto::ClockUnwrap clock; // sender's timestamps without the 49-day wrap
     proto::LossWindow loss;
+    proto::RecentIds<128> audioSeen;
+    DWORD audioWindow = 0;
+    int audioBurst = 0;
     proto::RecentIds<16> chatSeen; // message ids already shown (repeats are dropped)
     DWORD chatBurstAt = 0;       // flood limit
     int chatBurst = 0;
@@ -119,10 +123,12 @@ struct Member {
     sockaddr_in addr{};
     DWORD lastSeen = 0;
     uint32_t session = 0;     // the session id this joiner speaks with (see handlePacket)
+    proto::Decoder poseDecoder;
     guard::Bucket bucket;     // how fast it may send (net/host_guard.h)
 };
 
 std::mutex g_m;
+std::deque<RemoteAudio> g_audio;
 std::map<uint32_t, Remote> g_remotes;     // by session id
 std::vector<sockaddr_in> g_sendTo;        // JOIN: the host. HOST: kept in sync with g_members
 std::vector<Member> g_members;            // HOST: connected joiners
@@ -812,10 +818,28 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
             if (h.type != proto::kTypeHello || sessionInUse(h.session, from)) { ++g_dropped; return; }
             if (peerLogAllowed()) MLOG("net: %s is now session %08x (restarted)", addrToString(from).c_str(), h.session);
             m->session = h.session;
+            m->poseDecoder = {};
         }
         if (!m->bucket.take(GetTickCount())) { ++g_dropped; return; } // flooding: not forwarded, not processed
         // A joiner's HELLO goes on without the "I host" flag: only the host's own HELLO may set it.
         const char* out = buf;
+        if (h.type == proto::kTypeState) {
+            PlayerState state; bool full = false;
+            if (!proto::readState(buf + sizeof(h), static_cast<size_t>(n) - sizeof(h), m->poseDecoder, state, full)) {
+                ++g_dropped; return;
+            }
+            if (full) proto::commitBase(m->poseDecoder, state);
+            if (!limitPose(state, config::get()->boneReach)) { ++g_dropped; return; }
+            // A sanitized full pose does not depend on the sender's original
+            // delta base, including for a player who joined midway through it.
+            proto::Encoder encoder;
+            n = static_cast<int>(proto::writeState(relay, h, state, encoder));
+            if (!n) { ++g_dropped; return; }
+            out = relay;
+        } else if (h.type == proto::kTypeAudio) {
+            PlayerAudio sample;
+            if (!proto::readAudio(buf + sizeof(h), static_cast<size_t>(n) - sizeof(h), sample)) { ++g_dropped; return; }
+        }
         if (h.type == proto::kTypeHello && n > static_cast<int>(sizeof(h) + proto::kHelloFlagsOffset)) {
             memcpy(relay, buf, static_cast<size_t>(n));
             relay[sizeof(h) + proto::kHelloFlagsOffset] =
@@ -979,6 +1003,24 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
         const bool playerHost = g_role == Role::Host || (g_hostSession.load() != 0 && g_serverName.empty());
         const bool senderIsHost = g_role == Role::Join && playerHost && h.session == g_hostSession.load();
         receiveSummon(r, own, senderIsHost, playerHost, payload, len);
+        return;
+    }
+    if (h.type == proto::kTypeAudio) {
+        PlayerAudio sample;
+        const DWORD now = GetTickCount();
+        if (!proto::readAudio(payload, len, sample)) { ++g_dropped; return; }
+        if (r.audioSeen.seen(sample.id)) return;
+        if (now - r.audioWindow >= 1000) { r.audioWindow = now; r.audioBurst = 0; }
+        if (++r.audioBurst > 24 || !r.fill || now - r.lastTick > 1000) return;
+        r.audioSeen.add(sample.id);
+        if (g_audio.size() >= 256) g_audio.pop_front();
+        // Match the pose interpolation delay on the sender's clock. Do not
+        // advance the pose clock with an out-of-order audio timestamp.
+        const double captured = r.clock.ext + static_cast<int32_t>(sample.timeMs - r.lastTime);
+        const double until = captured + r.minDelta + kInterpDelayMs - nowMs();
+        if (until < -500. || until > 500.) return;
+        const DWORD playAt = now + static_cast<DWORD>(static_cast<int32_t>(std::max(0., until)));
+        g_audio.push_back({r.id, now, playAt, sample});
         return;
     }
     if (h.type != proto::kTypeState) return;
@@ -1261,6 +1303,7 @@ bool startLocked(uint16_t port, const std::string& join, float loopbackOffset, c
     {
         std::lock_guard<std::mutex> lock(g_m);
         g_remotes.clear();
+        g_audio.clear();
         g_sendTo.clear();
         g_members.clear();
         g_reserved.clear();
@@ -1444,8 +1487,23 @@ void shutdown(uint32_t routerWaitMs) {
 void publishLocal(const PlayerState& s) {
     std::lock_guard<std::mutex> lock(g_m);
     g_local = s;
+    if (!limitPose(g_local)) { g_haveLocal = false; return; }
     g_haveLocal = true;
     g_localAt = GetTickCount();
+}
+
+void publishAudio(PlayerAudio sample) {
+    std::lock_guard<std::mutex> lock(g_m);
+    if (!g_run || g_outBurst.size() >= 128) return;
+    sample.id = nextBurstId();
+    char buf[proto::kMaxPacket];
+    const size_t n = proto::writeAudio(buf, proto::Header{}, sample);
+    if (n) g_outBurst.push_back({proto::kTypeAudio, std::vector<char>(buf + sizeof(proto::Header), buf + n), 2});
+}
+std::vector<RemoteAudio> takeAudio() {
+    std::lock_guard<std::mutex> lock(g_m);
+    std::vector<RemoteAudio> out(g_audio.begin(), g_audio.end());
+    g_audio.clear(); return out;
 }
 
 bool localState(PlayerState& out) {

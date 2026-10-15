@@ -26,6 +26,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
@@ -120,6 +121,7 @@ bool readConfig(const std::string& path, Options& o, bool required) {
         if (k == "port") o.port = static_cast<uint16_t>(std::atoi(v.c_str()));
         else if (k == "name") o.relay.name = v;
         else if (k == "max_players") o.relay.maxPlayers = static_cast<size_t>(std::atoi(v.c_str()));
+        else if (k == "bone_reach") o.relay.boneReach = static_cast<float>(std::atof(v.c_str()));
         else if (k == "log") o.logPath = v;
         else if (k == "log_chat") o.relay.logChat = v != "0";
         else if (k == "mirror") o.relay.mirror = v == "1";
@@ -151,6 +153,8 @@ void writeDefaultConfig(const std::string& path) {
            "port=47800\n"
            "max_players=16\n"
            "max_per_ip=4\n"
+           "# maximum limb translation in metres (0.5..2; the world anchor is exempt)\n"
+           "bone_reach=1\n"
            "log=mecmp_server.log\n"
            "log_chat=1\n"
            "bans=bans.txt\n"
@@ -212,6 +216,7 @@ void finishSettings(Options& o) {
         o.relay.name.resize(mecmp::net::protocol::utf8PrefixLength(o.relay.name, mecmp::net::protocol::kMaxNameBytes));
     if (o.relay.maxPlayers < 1) o.relay.maxPlayers = 1;
     if (o.relay.maxPlayers > 64) o.relay.maxPlayers = 64;
+    o.relay.boneReach = std::isfinite(o.relay.boneReach) ? std::clamp(o.relay.boneReach, .5f, 2.f) : 1.f;
 }
 
 void onSignal(int) { g_quit = true; }

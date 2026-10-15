@@ -83,6 +83,11 @@ struct Settings {
     std::vector<Bookmark> bookmarks;      // at most kMaxBookmarks
     int pingSeconds = 30;                 // how long your markers stay: 5..300
     int pingMax = 3;                      // how many markers you can have at once: 1..5
+    // [protection]: every receiver also enforces a fixed 2 m ceiling.
+    float boneReach = 1.f; // host clamp on each non-anchor replay translation, metres (.5..2)
+    // [audio]
+    bool playerAudio = true;
+    float playerAudioDistance = 80.f;
     // [ghost]
     bool autoSpawn = true;
     // [ui]

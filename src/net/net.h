@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+#include "net/player_audio.h"
 
 namespace mecmp::net {
 namespace protocol { struct Result; } // net/protocol.h
@@ -62,6 +63,9 @@ void shutdown(uint32_t routerWaitMs = 2000);
 
 // Game thread: newest local state (sent by the network thread).
 void publishLocal(const PlayerState& s);
+void publishAudio(PlayerAudio sample);
+struct RemoteAudio { uint32_t peer = 0, receivedAt = 0, playAt = 0; PlayerAudio sample; };
+std::vector<RemoteAudio> takeAudio();
 // Our own newest state. False when none was published in the last second (not in a level). Any thread.
 bool localState(PlayerState& out);
 // Remote players heard from in the last `maxAgeMs`.

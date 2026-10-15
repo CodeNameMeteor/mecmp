@@ -45,6 +45,7 @@ struct Config {
     uint32_t kickBlockMs = 60000;
     uint32_t sessionGraceMs = 60000; // a player who timed out keeps its session id this long (see Relay::tick)
     bool logChat = true;
+    float boneReach = 1.f; // limb translation clamp; receivers also enforce 2 m
     // Test mode: each player also gets their own packets back as a second player ("mirror", 3 m away
     // along world X), so one person can test a server alone. Chat is not mirrored.
     bool mirror = false;
@@ -63,6 +64,7 @@ struct Member {
     double tokens = 0;
     uint32_t refillAt = 0;
     uint64_t packets = 0, dropped = 0;
+    net::protocol::Decoder poseDecoder;
     bool announced = false; // its join was logged with a name
     uint32_t logAt = 0;     // the start of its current log window (see Relay::logAllowed)
     int logBurst = 0;       // log lines it has caused in that window

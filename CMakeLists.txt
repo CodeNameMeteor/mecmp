@@ -57,6 +57,7 @@ add_library(mecmp SHARED
   src/game/ghosts.cpp
   src/game/models.cpp
   src/game/mumble_link.cpp
+  src/game/player_audio.cpp
   src/game/teleport.cpp
   src/game/local_player.cpp
   src/game/ping_point.cpp

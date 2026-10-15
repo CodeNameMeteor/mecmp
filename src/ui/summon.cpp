@@ -1,3 +1,4 @@
+#include "core/log.h"
 #include "ui/summon.h"
 
 #include <windows.h>
@@ -112,6 +113,7 @@ void go(const Pending& p) {
     const std::string name = p.name;
     const bool ok = game::teleport::requestToPos(p.pos, p.yaw);
     net::sendSummonReply(p.id, p.from, ok ? net::protocol::kSummonTeleporting : net::protocol::kSummonBusy);
+    if (!ok) MLOG("summon: could not go to %s: the teleport is busy or not available", name.c_str());
     notices::push(ok ? "Going to " + name : "Can't go right now");
     removePending(p.id, p.from);
 }
@@ -304,6 +306,7 @@ void update(const Input& in) {
 
     // What other players sent: new summons, withdrawals.
     for (const net::SummonInfo& s : net::takeSummons()) {
+        VLOG("summon: %s from %08x", s.cancel ? "withdrawn" : "received", s.from);
         if (s.cancel) {
             removePending(s.id, s.from);
             continue;

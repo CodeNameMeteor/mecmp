@@ -90,6 +90,13 @@ target_include_directories(mecmp PRIVATE src third_party/imgui)
 # not part of release builds: configure release builds with -DMECMP_DEBUG_KEYS=OFF.
 # Also the solo test (a ghost that mirrors you) and the F9 perf line.
 option(MECMP_DEBUG_KEYS "Developer build: hotkeys F7/F9/F10/F12, solo test (OFF for release builds)" ON)
+# The verbose log (mecmp.ini [debug] verbose) starts on in developer builds (a Debug build, or with the developer
+# hotkeys) and off in release builds. Once mecmp.ini has a verbose= line, that line decides.
+if(CMAKE_BUILD_TYPE STREQUAL "Debug" OR MECMP_DEBUG_KEYS)
+  target_compile_definitions(mecmp PRIVATE MECMP_VERBOSE_DEFAULT=1)
+else()
+  target_compile_definitions(mecmp PRIVATE MECMP_VERBOSE_DEFAULT=0)
+endif()
 if(MECMP_DEBUG_KEYS)
   target_compile_definitions(mecmp PRIVATE MECMP_DEBUG_KEYS=1)
 endif()

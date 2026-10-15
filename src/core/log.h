@@ -1,4 +1,8 @@
 #pragma once
+// The verbose log's default (mecmp.ini [debug] verbose): the build sets it (CMakeLists.txt), developer builds on.
+#ifndef MECMP_VERBOSE_DEFAULT
+#define MECMP_VERBOSE_DEFAULT 0
+#endif
 // Minimal thread-safe logger: writes mecmp.log (see open() for where) and to the
 // debugger output (view with Sysinternals DebugView).
 

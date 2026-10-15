@@ -254,12 +254,23 @@ void sendAll(const char* buf, size_t len) {
         std::lock_guard<std::mutex> lock(g_m);
         to = g_sendTo;
     }
-    for (const auto& a : to)
+    static DWORD lastFailNote = 0;
+    static uint64_t failures = 0;
+    for (const auto& a : to) {
         if (sendto(g_sock, buf, static_cast<int>(len), 0, reinterpret_cast<const sockaddr*>(&a), sizeof(a)) ==
             static_cast<int>(len)) {
             ++g_sent;
             g_bytesSent += len;
+            continue;
         }
+        // A failed send is an error the beta needs to see: at most one note per 10 s, with the count.
+        ++failures;
+        if (GetTickCount() - lastFailNote > 10000) {
+            lastFailNote = GetTickCount();
+            MLOG("net: sending to %s failed (error %d; %llu failure(s) so far)", addrToString(a).c_str(), WSAGetLastError(),
+                 static_cast<unsigned long long>(failures));
+        }
+    }
 }
 
 proto::Header header(uint16_t type) {
@@ -667,6 +678,7 @@ bool validCookie(const sockaddr_in& a, uint64_t cookie) {
 // proves its address. Nothing is kept for it.
 void sendChallenge(const sockaddr_in& to) {
     char out[proto::kMaxPacket];
+    VLOG("admission: challenged %s", addrToString(to).c_str());
     const size_t n = proto::writeCookie(out, header(proto::kTypeChallenge), cookieFor(to, cookieMinute()));
     sendto(g_sock, out, static_cast<int>(n), 0, reinterpret_cast<const sockaddr*>(&to), sizeof(to));
 }
@@ -688,6 +700,8 @@ void handleAdmission(const proto::Header& h, const char* buf, int n, const socka
     }
     std::lock_guard<std::mutex> lock(g_m);
     if (g_role != Role::Host || h.session == g_session || memberFrom(from) || !validCookie(from, cookie)) {
+        VLOG("admission: answer from %s refused (%s)", addrToString(from).c_str(),
+             g_role != Role::Host ? "not a host" : !validCookie(from, cookie) ? "wrong or old cookie" : "not a new player");
         ++g_dropped;
         return;
     }

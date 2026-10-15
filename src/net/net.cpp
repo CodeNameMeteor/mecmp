@@ -284,7 +284,9 @@ void sendState() {
     PlayerState s;
     {
         std::lock_guard<std::mutex> lock(g_m);
-        if (!g_haveLocal || g_sendTo.empty()) return;
+        // Nothing captured for a second (main menu, loading): send nothing, so the others hide our ghost
+        // instead of keeping a frozen copy of where we were "live".
+        if (!g_haveLocal || g_sendTo.empty() || GetTickCount() - g_localAt > 1000) return;
         s = g_local;
     }
     if (g_typing.load()) s.flags |= kStateTyping;
@@ -1169,10 +1171,24 @@ void threadMain() {
         }
     }
 }
-} // namespace
+// Starting, stopping and switching sessions are serialised: start() can now run on a helper thread
+// (startAsync), while the menu's Leave and the game's exit run on others.
+std::mutex g_startM;
+std::atomic<uint32_t> g_startRequest{0}; // bumped by each startAsync, leave() and shutdown(): only the latest request starts
+std::atomic<bool> g_starting{false};     // a startAsync is still looking up its address
+std::atomic<bool> g_closed{false};       // the game is exiting: no session starts any more
 
-bool start(uint16_t port, const std::string& join, float loopbackOffset, const std::string& name) {
-    if (g_run) stop();
+void stopLocked() { // caller holds g_startM
+    if (!g_run.exchange(false)) return;
+    // The router mapping stays until the next start() (re-hosting reuses it) or shutdown().
+    if (g_thread.joinable()) g_thread.join();
+    if (g_sock != INVALID_SOCKET) closesocket(g_sock);
+    g_sock = INVALID_SOCKET;
+    WSACleanup();
+}
+
+bool startLocked(uint16_t port, const std::string& join, float loopbackOffset, const std::string& name) { // caller holds g_startM
+    if (g_run) stopLocked();
     ++g_generation;
     g_routerWanted = join.empty() ? port : 0;
     std::thread(routerUnmap).detach(); // an old mapping this session does not use (blocks a few seconds)
@@ -1282,25 +1298,73 @@ bool start(uint16_t port, const std::string& join, float loopbackOffset, const s
     return true;
 }
 
+} // namespace
+
+bool start(uint16_t port, const std::string& join, float loopbackOffset, const std::string& name) {
+    std::lock_guard<std::mutex> lock(g_startM);
+    if (g_closed) return false;
+    return startLocked(port, join, loopbackOffset, name);
+}
+
+void startAsync(uint16_t port, const std::string& join, float loopbackOffset, const std::string& name) {
+    const uint32_t request = ++g_startRequest;
+    g_starting = true;
+    std::thread([=] {
+        // A server's name is looked up here, not on the caller's thread: a slow or unreachable DNS server can
+        // take seconds, and the menu runs on the game's render thread. The session then starts with the address.
+        std::string target = join;
+        uint32_t ip = 0;
+        uint16_t p = 0;
+        if (!join.empty() && !joincode::decode(join, ip, p)) {
+            WSADATA wsa;
+            const bool wsaUp = WSAStartup(MAKEWORD(2, 2), &wsa) == 0;
+            sockaddr_in a{};
+            const bool found = wsaUp && parsePeer(join, a);
+            if (wsaUp) WSACleanup();
+            if (!found) {
+                if (request == g_startRequest) {
+                    MLOG("net: '%s' is not a join code or address, or the name could not be looked up", join.c_str());
+                    g_starting = false;
+                }
+                return;
+            }
+            char text[64] = {};
+            inet_ntop(AF_INET, &a.sin_addr, text, sizeof(text));
+            target = std::string(text) + ":" + std::to_string(ntohs(a.sin_port));
+            if (target != join) VLOG("net: %s is %s", join.c_str(), target.c_str());
+        }
+        std::lock_guard<std::mutex> lock(g_startM);
+        if (request != g_startRequest || g_closed) return; // a newer start, a Leave or the game's exit came meanwhile
+        startLocked(port, target, loopbackOffset, name);
+        if (request == g_startRequest) g_starting = false; // not when a newer request began meanwhile
+    }).detach();
+}
+
+bool starting() { return g_starting.load(); }
+
 void stop() {
-    if (!g_run.exchange(false)) return;
-    // The router mapping stays until the next start() (re-hosting reuses it) or shutdown().
-    if (g_thread.joinable()) g_thread.join();
-    if (g_sock != INVALID_SOCKET) closesocket(g_sock);
-    g_sock = INVALID_SOCKET;
-    WSACleanup();
+    std::lock_guard<std::mutex> lock(g_startM);
+    stopLocked();
 }
 
 void leave() {
+    ++g_startRequest; // a session still being looked up does not start after all
+    g_starting = false;
+    std::lock_guard<std::mutex> lock(g_startM);
     if (!g_run) return;
-    stop();
+    stopLocked();
     g_routerWanted = 0;
     std::thread(routerUnmap).detach();
     MLOG("net: left the session; offline");
 }
 
 void shutdown(uint32_t routerWaitMs) {
-    stop();
+    ++g_startRequest;
+    g_closed = true;
+    {
+        std::lock_guard<std::mutex> lock(g_startM);
+        stopLocked();
+    }
     g_routerWanted = 0;
     // Closing the router port needs the network; give it a bounded time, the game is exiting.
     HANDLE t = CreateThread(nullptr, 0, [](LPVOID) -> DWORD { routerUnmap(); return 0; }, nullptr, 0, nullptr);

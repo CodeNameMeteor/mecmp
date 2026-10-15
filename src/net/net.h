@@ -49,6 +49,10 @@ struct RemoteInfo {
 // join: empty = host; otherwise a join code or ip:port of the host. Calling it again switches
 // session (the old one is stopped first).
 bool start(uint16_t port, const std::string& join, float loopbackOffset, const std::string& name);
+// The same on a helper thread, for the menu (the render thread): a server's name is looked up there, so a slow
+// DNS server never stalls the game. The latest request wins; leave() cancels one still looking up.
+void startAsync(uint16_t port, const std::string& join, float loopbackOffset, const std::string& name);
+bool starting(); // a startAsync has not started its session yet (looking up the address)
 void stop();
 // Menu "Leave": stop and close the router port this session opened (in the background).
 void leave();

@@ -84,14 +84,16 @@ std::string enteredName() { return g_name[0] ? std::string(g_name) : std::string
 void startSession(const std::string& join) {
     const auto cfg = config::get();
     const std::string name = enteredName();
-    net::start(cfg->port, join, cfg->loopbackOffset, name);
+    net::startAsync(cfg->port, join, cfg->loopbackOffset, name);
     config::change([name, join](config::Settings& c) { c.name = name; c.join = join; });
 }
 
 void sessionSection() {
     ImGui::SeparatorText("Session");
     const bool running = net::running();
-    if (!running) {
+    if (net::starting()) {
+        ImGui::TextDisabled("Starting the session...");
+    } else if (!running) {
         ImGui::TextDisabled("Offline");
     } else if (net::hosting()) {
         const std::string code = net::joinCode();

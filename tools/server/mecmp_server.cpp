@@ -556,8 +556,14 @@ int serverMain(int argc, char** argv) {
                 return;
             }
             if (!webhook.config().joins) return;
-            if (e.kind == mecmp::server::Event::Joined) webhook.post(u8"\u27A1\uFE0F " + who + " joined (" + count + ")");
-            else webhook.post(u8"\u2B05\uFE0F " + who + " left (" + count + ")");
+            if (e.kind == mecmp::server::Event::Joined) {
+                webhook.postActivity(u8"\u27A1\uFE0F " + who + " joined (" + count + ")");
+            } else {
+                webhook.postActivity(u8"\u2B05\uFE0F " + who + " left (" + count + ")");
+                // Empty again: this session's join and leave messages are deleted, so the channel keeps only what
+                // is happening now.
+                if (e.players == 0) webhook.endSession();
+            }
         });
 
     std::signal(SIGINT, onSignal);

@@ -19,6 +19,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace mecmp::server::discord {
 
@@ -47,6 +48,18 @@ std::string messageId(const std::string& body);  // the "id" of a posted message
 std::string withPath(const std::string& url, const std::string& more);   // inserted before any ?query
 std::string withQuery(const std::string& url, const std::string& param); // ?param or &param
 
+// The message ids of the player activity (joins and leaves) posted in the current session, so they can be
+// deleted when the server is empty again. Worker thread only.
+class ActivityLog {
+public:
+    static constexpr size_t kMax = 1000; // a session this long keeps only its first kMax messages
+    void add(const std::string& id);       // ignored unless it is a message id
+    std::vector<std::string> take();       // every id so far, in order; forgets them
+    size_t size() const { return ids_.size(); }
+private:
+    std::vector<std::string> ids_;
+};
+
 // --- Poster ------------------------------------------------------------------------------------------
 class Webhook {
 public:
@@ -59,17 +72,35 @@ public:
     bool enabled() const { return running_; }
     const Config& config() const { return cfg_; }
     void post(const std::string& line); // one line; gathered with others queued within ~2 s
+    // A player's join or leave: posted like post(), and its message id is kept for endSession().
+    void postActivity(const std::string& line);
+    // The server is empty again: the activity posted since the last endSession() is deleted. Lines queued
+    // before this call are posted first, so none of them survives.
+    void endSession();
     // The live status message's text (Config::live): the latest text is shown, at most one edit every 5 s.
     void setStatus(const std::string& text);
 
 private:
+    using clock = std::chrono::steady_clock;
+    struct Item {
+        enum Kind { Line, Activity, EndSession } kind;
+        std::string text;
+    };
     void run();
-    bool sendStatus(const std::string& text, std::chrono::steady_clock::time_point& nextPost);
+    bool sendStatus(const std::string& text, clock::time_point& nextPost);
+    // Posts `posts` in order; with `track`, the id of each posted message goes to activity_.
+    void sendPosts(std::deque<std::string> posts, bool track, clock::time_point& nextPost, clock::time_point giveUp);
+    // Deletes the messages in toDelete_ (those left over are kept for the next pass, unless stopping).
+    void deleteMessages(clock::time_point& nextPost, bool stopping);
     Config cfg_;
     Log log_;
     std::mutex m_;
     std::condition_variable cv_;
-    std::deque<std::string> queue_;
+    std::deque<Item> queue_;                // guarded by m_
+    ActivityLog activity_;                  // worker thread only
+    std::deque<std::string> toDelete_;      // worker thread only
+    int failuresLogged_ = 0;                // worker thread only
+    bool playerLogged_ = false;             // worker thread only: the "no id" note was written
     std::string statusText_;
     bool statusDirty_ = false;
     std::string statusId_; // the status message (worker thread only)

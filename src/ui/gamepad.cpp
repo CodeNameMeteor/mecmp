@@ -42,6 +42,7 @@ std::atomic<DWORD> g_fakePacket{1};
 // a press, 3 collecting, 4 done.
 std::atomic<int> g_capture{0};
 std::atomic<uint16_t> g_captured{0};
+std::atomic<int> g_captureOwner{-1}; // the controller whose press started the recording (-1: none yet)
 
 struct Name { const char* name; uint16_t bit; };
 const Name kNames[] = {
@@ -53,15 +54,21 @@ const Name kNames[] = {
     {"LEFT", XINPUT_GAMEPAD_DPAD_LEFT}, {"RIGHT", XINPUT_GAMEPAD_DPAD_RIGHT},
 };
 
-void track(uint16_t now) {
+// The recording belongs to one controller: the first press after everything is let go on every
+// controller is its choice, and the other controllers' buttons are ignored until it is released.
+void track(int user, uint16_t now) {
     switch (g_capture.load()) {
-    case 1:
-        if (!now) g_capture = 2;
+    case 1: {
+        bool anyHeld = false;
+        for (const Pad& p : g_pads) anyHeld = anyHeld || p.held.load() != 0;
+        if (!anyHeld) g_capture = 2;
         break;
+    }
     case 2:
-        if (now) { g_captured = now; g_capture = 3; }
+        if (now) { g_captureOwner = user; g_captured = now; g_capture = 3; }
         break;
     case 3:
+        if (user != g_captureOwner.load()) break;
         if (now) g_captured = static_cast<uint16_t>(g_captured | now);
         else g_capture = 4;
         break;
@@ -74,14 +81,27 @@ void track(uint16_t now) {
 DWORD WINAPI getState(DWORD user, XINPUT_STATE* st) {
     const GetStateFn orig = g_orig.load();
     const DWORD r = orig ? orig(user, st) : ERROR_DEVICE_NOT_CONNECTED;
-    if (r != ERROR_SUCCESS || !st || user >= XUSER_MAX_COUNT) return r;
+    if (r != ERROR_SUCCESS || !st || user >= XUSER_MAX_COUNT) {
+        if (user < XUSER_MAX_COUNT) {
+            // A controller that went away must not keep the marker wheel, nor the buttons it was holding.
+            if (g_wheelPad.load() == static_cast<int>(user)) {
+                g_wheelPad = -1;
+                radial::cancel();
+            }
+            if (r != ERROR_SUCCESS) {
+                g_pads[user].held = 0;
+                g_pads[user].wheelButtons = 0;
+            }
+        }
+        return r;
+    }
     g_seen = true;
     Pad& pad = g_pads[user];
     const uint16_t now = st->Gamepad.wButtons;
     const uint16_t before = pad.held.exchange(now);
     uint16_t hidden = 0; // buttons the game must not see this time
     bool pingPressed = false, reactPressed = false, clearPressed = false;
-    if (g_capture.load() != 0) track(now);
+    if (g_capture.load() != 0) track(static_cast<int>(user), now);
     for (int a = 0; a < kActions; ++a) {
         const uint16_t bind = g_binding[a].load();
         if (g_capture.load() == 0 && bind && (now & bind) == bind && (before & bind) != bind) {
@@ -109,8 +129,10 @@ DWORD WINAPI getState(DWORD user, XINPUT_STATE* st) {
         if (pad.swallow[a]) hidden = static_cast<uint16_t>(hidden | bind);
     }
     // A summon waits (or "Go back?" shows): its buttons are the panel's, not the game's.
-    if (g_hideAccept.load()) hidden = static_cast<uint16_t>(hidden | g_binding[static_cast<int>(Action::SummonAccept)].load());
-    if (g_hideDecline.load()) hidden = static_cast<uint16_t>(hidden | g_binding[static_cast<int>(Action::SummonDecline)].load());
+    // Not while a game menu is open: its buttons are the game's then.
+    const bool summonHides = !game::hooks::gameMenuOpen();
+    if (g_hideAccept.load() && summonHides) hidden = static_cast<uint16_t>(hidden | g_binding[static_cast<int>(Action::SummonAccept)].load());
+    if (g_hideDecline.load() && summonHides) hidden = static_cast<uint16_t>(hidden | g_binding[static_cast<int>(Action::SummonDecline)].load());
     // The marker wheel: this pad's right stick points at a slot and LB/RB switch wheel while it is open.
     bool wheelOpen = false;
     if ((pingPressed || reactPressed) && g_wheelPad.load() < 0) {
@@ -214,6 +236,12 @@ std::string labelCombo(const std::string& combo) {
 void setBinding(uint16_t buttons, Action action) {
     if (action != Action::Count) g_binding[static_cast<int>(action)] = buttons;
 }
+bool bindingFree(uint16_t buttons, Action action) {
+    if (!buttons) return true;
+    for (int a = 0; a < kActions; ++a)
+        if (a != static_cast<int>(action) && g_binding[a].load() == buttons) return false;
+    return true;
+}
 bool held(Action action) {
     if (action == Action::Count || g_capture.load() != 0) return false;
     const uint16_t bind = g_binding[static_cast<int>(action)].load();
@@ -226,7 +254,7 @@ void setSummonHidden(bool accept, bool decline) {
     g_hideAccept = accept;
     g_hideDecline = decline;
 }
-void beginCapture() { g_captured = 0; g_capture = 1; }
+void beginCapture() { g_captured = 0; g_captureOwner = -1; g_capture = 1; }
 bool captureDone(uint16_t& buttons) {
     if (g_capture.load() != 4) return false;
     buttons = g_captured.load();

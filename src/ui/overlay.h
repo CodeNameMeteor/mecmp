@@ -19,7 +19,7 @@ void toggleMenu(); // any thread (keyboard on the window thread, gamepad on the 
 // Keys that can open the menu. `name` as in mecmp.ini (INSERT, F5, ...).
 struct MenuKey { const char* name; int vk; int imguiKey; };
 const MenuKey* menuKeys(int& count);
-void setMenuKey(const std::string& name);  // takes effect at once
+bool setMenuKey(const std::string& name);  // at once; false (nothing changed) if another action uses the key
 // Sets the marker key (as ping_key: a letter, ENTER or a menu key name; empty = none), at once.
 // False, and nothing changed, if it is not such a key or is the menu key or the chat key.
 bool setPingKey(const std::string& name);

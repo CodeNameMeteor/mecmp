@@ -31,7 +31,7 @@ bool engaged(); // the marker key is down and not used up yet: digits pick a slo
 
 // Window thread (the overlay's window procedure):
 void keyDown(int key, Mode mode = Mode::Markers); // the key `key` went down (not a repeat)
-void keyUp();                   // it was released
+void keyUp(int key);           // the key `key` was released: ends the wheel that key opened, no other
 void digit(int n);              // 1..9 was pressed while engaged
 void moved(float dx, float dy); // raw mouse movement while open (pixels)
 void click();                   // left click while open: place what is pointed at and close

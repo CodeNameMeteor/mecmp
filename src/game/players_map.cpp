@@ -1,5 +1,6 @@
 #include "game/players_map.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cstdio>
 #include <cstring>
@@ -50,11 +51,12 @@ bool ownOnlineId(OnlineId& out) {
 }
 
 // Online ids the mod put on the map (client game thread only): only these are ever cleared.
-std::vector<uint64_t> g_placed;
+struct Placed { uintptr_t mgr; uint64_t id; }; // a player's slot on one manager
+std::vector<Placed> g_placed;
 
-bool placed(uint64_t id) {
-    for (uint64_t x : g_placed)
-        if (x == id) return true;
+bool placed(uintptr_t mgr, uint64_t id) {
+    for (const Placed& p : g_placed)
+        if (p.mgr == mgr && p.id == id) return true;
     return false;
 }
 
@@ -111,13 +113,13 @@ void updateManager(uintptr_t mgr, const std::vector<net::RemoteInfo>& players, b
     // Players who left, stopped sharing or the feature was turned off: their slots are cleared and hidden.
     for (size_t i = 0; i < count; ++i) {
         const uint64_t id = slotId(i);
-        if (!id || !placed(id)) continue;
+        if (!id || !placed(mgr, id)) continue;
         bool keep = false;
         for (const auto& w : want) keep = keep || w.oid.id == id;
         if (!keep) {
             hideSlot(range[0] + i * Slot_Size);
             for (size_t k = 0; k < g_placed.size(); ++k)
-                if (g_placed[k] == id) { g_placed.erase(g_placed.begin() + static_cast<long>(k)); break; }
+                if (g_placed[k].mgr == mgr && g_placed[k].id == id) { g_placed.erase(g_placed.begin() + static_cast<long>(k)); break; }
         }
     }
 
@@ -129,13 +131,13 @@ void updateManager(uintptr_t mgr, const std::vector<net::RemoteInfo>& players, b
         for (size_t i = 0; i < count && !slot; ++i)
             if (slotId(i) == w.oid.id) slot = range[0] + i * Slot_Size;
         const float pos[4] = {st.pos[0], st.pos[1], st.pos[2], 0.f};
-        if (!slot || !placed(w.oid.id)) {
+        if (!slot || !placed(mgr, w.oid.id)) {
             // A slot of its own (or the friend slot the game already gave them, raised to our priority): the
             // game spawns the marker prefab for a slot the first time it is used.
             auto assign = reinterpret_cast<AssignSlotFn>(rva(Fn_PresenceInfoManager_assignSlot));
             slot = reinterpret_cast<uintptr_t>(assign(reinterpret_cast<void*>(mgr), &w.oid, pos, kPriority));
             if (!slot) continue; // every slot holds someone of a higher or equal priority
-            g_placed.push_back(w.oid.id);
+            g_placed.push_back({mgr, w.oid.id});
             MLOG("map: player %08x is on the map%s", w.p->id, w.p->loopback ? " (solo test: under your own profile)" : "");
         }
         mem::write(slot + Slot_Pos, pos, sizeof(pos));
@@ -175,15 +177,17 @@ void beforeManagerUpdate(void* pool) {
     }
     const bool enabled = config::get()->playersOnMap && net::running();
     const std::vector<net::RemoteInfo> players = enabled ? net::remotes(kShowAfterMs) : std::vector<net::RemoteInfo>{};
+    // Slots placed on a manager that is no longer in the pool (a new level) are forgotten; the others keep theirs.
+    g_placed.erase(std::remove_if(g_placed.begin(), g_placed.end(), [&](const Placed& p) {
+                       for (size_t i = 0; i < n; ++i)
+                           if (entries[i * 2] == p.mgr) return false;
+                       return true;
+                   }),
+                   g_placed.end());
     for (size_t i = 0; i < n; ++i) {
         const uintptr_t mgr = entries[i * 2];
         uintptr_t vt = 0;
         if (!mgr || !mem::read(mgr, vt) || vt != rva(Vtbl_PamClientPresenceInfoManagerEntity)) continue;
-        static uintptr_t lastMgr = 0;
-        if (mgr != lastMgr) { // a new level: its slots start empty
-            lastMgr = mgr;
-            g_placed.clear();
-        }
         updateManager(mgr, players, enabled);
         g_status = enabled ? "on" : "off";
     }

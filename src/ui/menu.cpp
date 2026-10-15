@@ -42,6 +42,8 @@ bool g_inited = false;
 bool g_keyCapture = false; // waiting for a new menu key
 int g_bindCapture = -1;        // which key of the Controls tab is being recorded (see kKeyBinds; -1 = none)
 std::string g_bindNote[11];    // why the last key was refused (empty = nothing to say)
+std::string g_menuKeyNote;     // the same for the menu key
+std::string g_padNote[static_cast<int>(gamepad::Action::Count)]; // the same for each gamepad combination
 gamepad::Action g_padCapture = gamepad::Action::Count; // which gamepad binding is being recorded (Count = none)
 DWORD g_hintUntil = 0;
 
@@ -598,8 +600,14 @@ void padRow(const char* label, gamepad::Action action, const std::string& curren
     if (gamepad::capturing() && g_padCapture == action) {
         if (gamepad::captureDone(got)) {
             const std::string combo = gamepad::format(got);
-            gamepad::setBinding(got, action);
-            config::change([combo, field](config::Settings& c) { c.*field = combo; });
+            std::string& note = g_padNote[static_cast<int>(action)];
+            if (gamepad::bindingFree(got, action)) {
+                gamepad::setBinding(got, action);
+                note.clear();
+                config::change([combo, field](config::Settings& c) { c.*field = combo; });
+            } else {
+                note = combo + " is already used by another action";
+            }
             g_padCapture = gamepad::Action::Count;
         } else {
             ImGui::TextColored(ImVec4(1.f, 0.85f, 0.3f, 1.f), "hold the buttons together, then let go");
@@ -630,6 +638,11 @@ void padRow(const char* label, gamepad::Action action, const std::string& curren
         if (!gamepad::active()) {
             ImGui::SameLine();
             ImGui::TextDisabled("no gamepad connected");
+        }
+        const std::string& note = g_padNote[static_cast<int>(action)];
+        if (!note.empty()) {
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(1.f, 0.45f, 0.4f, 1.f), "%s", note.c_str());
         }
     }
     ImGui::PopID();
@@ -1273,8 +1286,12 @@ void controlsSection() {
             for (int i = 0; i < count; ++i) {
                 if (!ImGui::IsKeyPressed(static_cast<ImGuiKey>(keys[i].imguiKey), false)) continue;
                 const std::string name = keys[i].name;
-                ui::setMenuKey(name);
-                config::change([name](config::Settings& c) { c.menuKey = name; });
+                if (ui::setMenuKey(name)) {
+                    g_menuKeyNote.clear();
+                    config::change([name](config::Settings& c) { c.menuKey = name; });
+                } else {
+                    g_menuKeyNote = ui::keyLabel(name) + " is already in use";
+                }
                 g_keyCapture = false;
                 break;
             }
@@ -1289,6 +1306,10 @@ void controlsSection() {
             ui::setKeyCapture(true);
         }
         ImGui::EndDisabled();
+        if (!g_menuKeyNote.empty()) {
+            ImGui::SameLine();
+            ImGui::TextColored(ImVec4(1.f, 0.45f, 0.4f, 1.f), "%s", g_menuKeyNote.c_str());
+        }
     }
     // Gamepad buttons that open it.
     padRow("Gamepad:", gamepad::Action::Menu, cfg->menuPad, &config::Settings::menuPad,

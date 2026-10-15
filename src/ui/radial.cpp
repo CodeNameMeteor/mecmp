@@ -263,9 +263,9 @@ void keyDown(int key, Mode mode) {
     if (g_state == State::Idle) begin(Source::Key, key, mode);
 }
 
-void keyUp() {
+void keyUp(int key) {
     std::lock_guard<std::mutex> lock(g_m);
-    if (g_state == State::Idle || g_source != Source::Key) return;
+    if (g_state == State::Idle || g_source != Source::Key || key != g_key) return;
     if (g_state == State::Used) setState(State::Idle);
     else release();
 }

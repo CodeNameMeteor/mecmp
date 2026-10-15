@@ -278,6 +278,8 @@ bool wheelKey(int vk) {
 }
 
 LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
+    // Alt+F4 always reaches the game's window: the menu and the chat would otherwise swallow it.
+    if (msg == WM_SYSKEYDOWN && static_cast<int>(w) == VK_F4) return CallWindowProcW(g_origWndProc, hwnd, msg, w, l);
     const bool keyUp = msg == WM_KEYUP || msg == WM_SYSKEYUP;
     if (keyUp && g_ready) queueImGui(hwnd, msg, w, l);
     if (msg == WM_KILLFOCUS) { g_openingChatKey = 0; g_eatChar = false; }
@@ -293,7 +295,7 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
     if (msg == WM_KILLFOCUS || (msg == WM_ACTIVATEAPP && w == FALSE)) radial::cancel();
     if (msg == WM_KEYUP && ((g_pingKey.load() != 0 && static_cast<int>(w) == g_pingKey.load()) ||
                             (g_reactKey.load() != 0 && static_cast<int>(w) == g_reactKey.load())))
-        radial::keyUp();
+        radial::keyUp(static_cast<int>(w));
     if (radial::engaged() && msg == WM_KEYDOWN && !(l & (1 << 30))) {
         const int key = static_cast<int>(w);
         if (key >= '1' && key <= '9') radial::digit(key - '0');
@@ -323,8 +325,10 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
     // "down" there (as with the wheel's keys).
     if (!g_open.load() && !chat::isOpen() && g_ready) {
         const int accept = g_summonAcceptKey.load(), decline = g_summonDeclineKey.load();
+        // Not while a game menu or the marker wheel uses the keys: those are the game's or the wheel's then.
+        const bool unclaimed = !game::hooks::gameMenuOpen() && !radial::engaged();
         auto taken = [&](int vk) {
-            return vk != 0 && ((vk == accept && summon::takesAcceptKey()) || (vk == decline && summon::takesDeclineKey()));
+            return unclaimed && vk != 0 && ((vk == accept && summon::takesAcceptKey()) || (vk == decline && summon::takesDeclineKey()));
         };
         if (msg == WM_KEYDOWN && taken(static_cast<int>(w))) return 0;
         int vk = 0;
@@ -586,7 +590,6 @@ const MenuKey* menuKeys(int& count) {
     count = static_cast<int>(sizeof(kMenuKeys) / sizeof(kMenuKeys[0]));
     return kMenuKeys;
 }
-void setMenuKey(const std::string& name) { g_toggleKey = keyFromName(name); }
 namespace {
 // Every key the mod listens to besides the menu key. A key does one job.
 std::atomic<int>* const kBound[] = {&g_pingKey, &g_pingClearKey, &g_chatKey, &g_reactKey, &g_altKey,
@@ -600,6 +603,22 @@ int bindFromName(const std::string& n, int mouse) {
     if (mouse >= 1 && _stricmp(n.c_str(), "MOUSE5") == 0) return VK_XBUTTON2;
     if (mouse >= 2 && _stricmp(n.c_str(), "MOUSE3") == 0) return VK_MBUTTON;
     return actionKeyFromName(n);
+}
+
+// A refused key from mecmp.ini: logged, so that a key that does nothing has a reason in the log.
+void noteRefused(bool ok, const char* what, const std::string& name) {
+    if (!ok && !name.empty()) MLOG("config: %s '%s' is already used by another action; it is off", what, name.c_str());
+}
+
+// A gamepad combination from mecmp.ini: refused (and logged) if another action has exactly these buttons.
+void setPadBinding(const std::string& combo, gamepad::Action action, const char* what) {
+    const uint16_t bits = gamepad::parse(combo);
+    if (bits && !gamepad::bindingFree(bits, action)) {
+        MLOG("config: %s '%s' is already used by another action; it is off", what, combo.c_str());
+        gamepad::setBinding(0, action);
+        return;
+    }
+    gamepad::setBinding(bits, action);
 }
 
 bool setBind(std::atomic<int>& slot, const std::string& name, int mouse) {
@@ -616,6 +635,15 @@ bool setBind(std::atomic<int>& slot, const std::string& name, int mouse) {
 }
 } // namespace
 
+// The menu key is one of the keys the mod listens to, so it may not be one of the others either.
+bool setMenuKey(const std::string& name) {
+    const int key = actionKeyFromName(name);
+    if (!key) return false;
+    for (const std::atomic<int>* other : kBound)
+        if (other->load() == key) return false;
+    g_toggleKey = key;
+    return true;
+}
 bool setPingKey(const std::string& name) { return setBind(g_pingKey, name, 1); }
 bool setPingClearKey(const std::string& name) { return setBind(g_pingClearKey, name, 2); }
 bool setChatKey(const std::string& name) { return setBind(g_chatKey, name, 0); }
@@ -662,21 +690,23 @@ bool install() {
     // The marker key must not double as the menu or chat key (those win).
     const int pingKey = actionKeyFromName(config::get()->pingKey);
     g_pingKey = pingKey == g_toggleKey.load() || pingKey == g_chatKey.load() ? 0 : pingKey;
-    setPingClearKey(config::get()->pingClearKey); // refused (so none) if it is one of the keys above
-    setReactKey(config::get()->reactKey);         // likewise
-    setAltKey(config::get()->altKey);
-    setHideKey(config::get()->hideKey);
-    setWheelPrevKey(config::get()->wheelPrevKey);
-    setWheelNextKey(config::get()->wheelNextKey);
-    setSummonKey(config::get()->summonKey);
-    setSummonAcceptKey(config::get()->summonAcceptKey);
-    setSummonDeclineKey(config::get()->summonDeclineKey);
-    gamepad::setBinding(gamepad::parse(config::get()->summonAcceptPad), gamepad::Action::SummonAccept);
-    gamepad::setBinding(gamepad::parse(config::get()->summonDeclinePad), gamepad::Action::SummonDecline);
-    gamepad::setBinding(gamepad::parse(config::get()->menuPad));
-    gamepad::setBinding(gamepad::parse(config::get()->pingPad), gamepad::Action::Ping);
-    gamepad::setBinding(gamepad::parse(config::get()->pingClearPad), gamepad::Action::PingClear);
-    gamepad::setBinding(gamepad::parse(config::get()->reactPad), gamepad::Action::React);
+    // A key another action already has is refused and stays off; the log says so.
+    noteRefused(setPingClearKey(config::get()->pingClearKey), "ping_clear_key", config::get()->pingClearKey);
+    noteRefused(setReactKey(config::get()->reactKey), "react_key", config::get()->reactKey);
+    noteRefused(setAltKey(config::get()->altKey), "ping_alt_key", config::get()->altKey);
+    noteRefused(setHideKey(config::get()->hideKey), "hide_key", config::get()->hideKey);
+    noteRefused(setWheelPrevKey(config::get()->wheelPrevKey), "wheel_prev_key", config::get()->wheelPrevKey);
+    noteRefused(setWheelNextKey(config::get()->wheelNextKey), "wheel_next_key", config::get()->wheelNextKey);
+    noteRefused(setSummonKey(config::get()->summonKey), "summon_key", config::get()->summonKey);
+    noteRefused(setSummonAcceptKey(config::get()->summonAcceptKey), "summon_accept_key", config::get()->summonAcceptKey);
+    noteRefused(setSummonDeclineKey(config::get()->summonDeclineKey), "summon_decline_key", config::get()->summonDeclineKey);
+    // Gamepad combinations: the menu's first, so it wins over an identical one.
+    setPadBinding(config::get()->menuPad, gamepad::Action::Menu, "menu_pad");
+    setPadBinding(config::get()->pingPad, gamepad::Action::Ping, "ping_pad");
+    setPadBinding(config::get()->pingClearPad, gamepad::Action::PingClear, "ping_clear_pad");
+    setPadBinding(config::get()->reactPad, gamepad::Action::React, "react_pad");
+    setPadBinding(config::get()->summonAcceptPad, gamepad::Action::SummonAccept, "summon_accept_pad");
+    setPadBinding(config::get()->summonDeclinePad, gamepad::Action::SummonDecline, "summon_decline_pad");
     // A throwaway device + swap chain on a hidden window, only to find DXGI's swap-chain vtable.
     WNDCLASSEXW wc{};
     wc.cbSize = sizeof(wc);

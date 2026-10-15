@@ -161,10 +161,14 @@ void monitorLoop() {
         // Memory scans (each reads the game's whole heap, about a second) are a fallback, mainly for the
         // level that was already running when the mod loaded; later levels are seen being built by
         // the hooks (spawners, client objects, the look catalogue's time-trial markers), so they get
-        // at most one scan, 60 s in, and only if something is still missing in a level you play in.
+        // a scan 60 s in, and a couple more later (a spawner the game destroys when a district streams out
+        // is made again), only if something is still missing in a level you play in.
         const bool firstWorld = worldsSeen == 1;
         const DWORD inLevel = GetTickCount() - levelSince;
-        const bool lateScanDue = !firstWorld && inLevel > 60000 && game::level::playerCharacter();
+        // Not "and the player character exists": a level whose player spawner was missed has no player
+        // character, which is exactly when the scan is needed (it would never have run: no ghosts, no state
+        // sent, 'the player character is not available' for Go to).
+        const bool lateScanDue = !firstWorld && inLevel > 20000 && !game::level::inFrontEnd();
         // The ghost look list (styles x colours) comes from the level's time-trial markers, noted as they
         // are created: checked every second (cheap). Fallback memory scan 20 s and 60 s into the first
         // level. Ghosts waiting for the list get their look right after.
@@ -182,12 +186,15 @@ void monitorLoop() {
         // made)? Look for them in memory: 15 s into the level, and if something is still missing
         // again after 1, 3 and 7 minutes. A full scan reads the whole private heap, so no more.
         constexpr int kMaxScansPerLevel = 4;
-        if (world && (firstWorld ? scans < kMaxScansPerLevel && inLevel > nextScanAt : scans < 1 && lateScanDue) &&
+        constexpr int kMaxLateScans = 3;
+        if (world &&
+            (firstWorld ? scans < kMaxScansPerLevel && inLevel > nextScanAt
+                        : scans < kMaxLateScans && lateScanDue && inLevel > nextScanAt) &&
             !game::level::complete()) {
             ++scans;
             game::level::scanForMissing();
             nextScanAt = 15000 + 60000u * ((1u << scans) - 1); // 75 s, 195 s, 435 s after the level started
-            if (scans == kMaxScansPerLevel && !game::level::complete())
+            if (scans == (firstWorld ? kMaxScansPerLevel : kMaxLateScans) && !game::level::complete())
                 MLOG("level: still missing spawners after %d scans; not scanning this level again", scans);
         }
         // The list of loaded look pieces, once an outfit or your own look needs it (one scan per level).

@@ -24,12 +24,14 @@ constexpr int kMinSlots = 2;
 constexpr int kWheels = 5;        // at most
 constexpr int kDefaultWheels = 3; // the ready-made ones; these cannot be removed
 // The icons a marker can have (drawn by ui/glyph.cpp). The names are what mecmp.ini says.
-constexpr int kPingGlyphs = 33; // PING can carry 64
+constexpr int kPingGlyphs = 34; // PING can carry 64
 const char* glyphName(uint8_t glyph);                             // "diamond" for anything unknown
 uint8_t glyphFromName(const std::string& name, uint8_t fallback); // `fallback` for an unknown name
 struct WheelSlot {
     std::string label; // at most net::protocol::kMaxPingLabelBytes; empty = a marker without a title
     uint8_t glyph = 0;
+    std::string color;  // RRGGBB of this marker only; empty = Settings::pingColor
+    std::string accent; // the same for its inner detail; empty = Settings::pingAccent
 };
 using Wheel = std::array<WheelSlot, kPingSlots>;
 Wheel defaultWheel(int wheel); // the ready-made wheels; an empty wheel for the others
@@ -47,6 +49,7 @@ struct Bookmark {
     std::string label;
     uint8_t glyph = 0;
     float pos[3] = {0, 0, 0};
+    std::string color, accent; // the marker's own colors, as in WheelSlot; empty = the main ones
 };
 std::array<Wheel, kWheels> defaultWheels();
 
@@ -66,7 +69,7 @@ struct Settings {
     std::string look = "faith";           // how you look to others: faith, or echo:<hash> (a ghost style + colour)
     int outfit = 0;                       // with look = faith: what is changed about her outfit (net::protocol::kWear... bits)
     bool lookSelf = true;                 // you look that way to yourself too, not only to the others
-    std::string pingColor = "ffd23c";     // colour of your markers for everyone, RRGGBB
+    std::string pingColor = "e8322e";    // colour of your markers for everyone, RRGGBB
     std::string pingAccent = "ffffff";    // colour of the detail inside a marker (the diamond's inner diamond)
     std::array<Wheel, kWheels> wheels = defaultWheels();
     int wheelCount = kDefaultWheels;      // how many of them exist: kDefaultWheels..kWheels
@@ -129,6 +132,15 @@ struct Settings {
     bool verbose = false;
     bool ignoreBuildCheck = false;        // run even if the game build check fails (for testing a new build)
 };
+
+// The colors a marker goes out in: its own color / accent where set, else the main ones.
+void markerColors(const Settings& s, const std::string& color, const std::string& accent, uint8_t rgb[3], uint8_t acc[3]);
+inline void markerColors(const Settings& s, const WheelSlot& slot, uint8_t rgb[3], uint8_t acc[3]) {
+    markerColors(s, slot.color, slot.accent, rgb, acc);
+}
+inline void markerColors(const Settings& s, const Bookmark& b, uint8_t rgb[3], uint8_t acc[3]) {
+    markerColors(s, b.color, b.accent, rgb, acc);
+}
 
 // Reads (and creates if missing) mecmp.ini in `dir`. Call once at startup.
 void load(const std::wstring& dir);

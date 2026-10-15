@@ -54,6 +54,7 @@ struct PingCell {
     DWORD arrivedAt = 0; // when this marker appeared: the flash and the notice go by it
     DWORD setAt = 0;     // when it was last placed: its lifetime counts from here
     uint64_t order = 0;  // ours only: grows with every placement
+    std::vector<ReactionMark> reactions; // quick answers to it; cleared when a new marker takes the cell
     bool live(DWORD now) const { return have && now - setAt < proto::pingLifeMs(ping.life); }
 };
 struct Remote {
@@ -403,11 +404,14 @@ void putPing(PingCell& c, const proto::Ping& p, DWORD now, uint64_t order) {
     // The same marker on exactly the same spot is its owner giving it more time (renewPing): not new either.
     const bool again = proto::samePingMarker(pingView(c, now), proto::pingGlyph(p.flags), p.label, p.pos) &&
                        (now - c.arrivedAt < kPingRepeatMs || memcmp(c.ping.pos, p.pos, sizeof(p.pos)) == 0);
+    // The answers under a marker go with the slightest move of it, not only with a new marker.
+    const bool moved = memcmp(c.ping.pos, p.pos, sizeof(p.pos)) != 0;
     c.have = true;
     c.ping = p;
     c.setAt = now;
     c.order = order;
     if (!again) c.arrivedAt = now;
+    if (!again || moved) c.reactions.clear();
 }
 
 uint32_t nextBurstId() { // caller holds g_m
@@ -518,14 +522,47 @@ constexpr int kReactBurst = 6; // at most this many answers from one player per 
 std::deque<ReactionInfo> g_reactions; // answers to our markers, not yet shown; guarded by g_m
 DWORD g_lastReactSent = 0;            // guarded by g_m
 
+constexpr size_t kMaxMarks = 16; // answers kept under one marker (the screen shows the first few)
+
+// The marker cell of the player with session id `owner` (ours or a remote's), or null. Caller holds g_m.
+PingCell* cellOf(uint32_t owner, uint8_t cell) {
+    if (cell >= proto::kPingCells) return nullptr;
+    if (owner == g_session) return &g_myPings[cell];
+    const auto it = g_remotes.find(owner);
+    return it == g_remotes.end() ? nullptr : &it->second.pings[cell];
+}
+
+// Remembers an answer under its marker: the same player answering again moves theirs to the end.
+void addMark(PingCell& c, ReactionMark mark) {
+    for (size_t i = 0; i < c.reactions.size(); ++i)
+        if (c.reactions[i].from == mark.from) {
+            c.reactions.erase(c.reactions.begin() + static_cast<ptrdiff_t>(i));
+            break;
+        }
+    c.reactions.push_back(std::move(mark));
+    if (c.reactions.size() > kMaxMarks) c.reactions.erase(c.reactions.begin());
+}
+
 void receiveReact(Remote& r, bool own, const char* payload, size_t len) { // caller holds g_m
     proto::React re;
     if (!proto::readReact(payload, len, re)) { ++g_dropped; return; }
-    if (own || re.target != g_session) return; // not about us
+    if (own) return;                           // sendReact already put ours under the marker
     if (!r.reactSeen.add(re.id)) return;       // a repeat
     const DWORD now = GetTickCount();
     if (now - r.reactBurstAt > kChatBurstMs) { r.reactBurstAt = now; r.reactBurst = 0; }
     if (++r.reactBurst > kReactBurst) return;
+    // Under the marker, for everyone who has it.
+    if (PingCell* c = cellOf(re.target, re.cell); c && c->live(now)) {
+        ReactionMark mark;
+        mark.from = r.id;
+        mark.name = r.name.empty() ? std::string("Runner") : r.name;
+        mark.text = re.text;
+        mark.glyph = re.glyph;
+        memcpy(mark.rgb, re.rgb, sizeof(mark.rgb));
+        memcpy(mark.accent, re.accent, sizeof(mark.accent));
+        addMark(*c, std::move(mark));
+    }
+    if (re.target != g_session) return; // the notice is for the marker's owner
     ReactionInfo info;
     info.from = r.name.empty() ? std::string("Runner") : r.name;
     info.text = re.text;
@@ -1408,18 +1445,33 @@ void sendPing(const float pos[3], const PingStyle& style, int limit) {
     if (g_run) queuePing(p);
 }
 
-void sendReact(uint32_t target, uint8_t cell, const std::string& markerTitle, const std::string& text) {
+void sendReact(uint32_t target, uint8_t cell, const std::string& markerTitle, const std::string& text, uint8_t glyph,
+               const uint8_t rgb[3], const uint8_t accent[3]) {
     if (cell >= proto::kPingCells) return;
     proto::React re;
     re.target = target;
     re.cell = cell;
     re.title = proto::cleanPingLabel(markerTitle);
     re.text = proto::cleanPingLabel(text);
+    re.glyph = glyph;
+    memcpy(re.rgb, rgb, sizeof(re.rgb));
+    memcpy(re.accent, accent, sizeof(re.accent));
     if (re.text.empty()) return;
     std::lock_guard<std::mutex> lock(g_m);
     const DWORD now = GetTickCount();
     if (now - g_lastReactSent < 300) return; // leaning on the key does not flood the owner
     g_lastReactSent = now;
+    // Under the marker here at once; the others get it with the packet.
+    if (PingCell* c = cellOf(target, cell); c && c->live(now)) {
+        ReactionMark mark;
+        mark.from = g_session;
+        mark.name = g_name.empty() ? std::string("Runner") : g_name;
+        mark.text = re.text;
+        mark.glyph = re.glyph;
+        memcpy(mark.rgb, re.rgb, sizeof(mark.rgb));
+        memcpy(mark.accent, re.accent, sizeof(mark.accent));
+        addMark(*c, std::move(mark));
+    }
     re.id = nextBurstId();
     if (!g_run) return;
     char buf[proto::kMaxPacket];
@@ -1676,6 +1728,7 @@ std::vector<PingInfo> pings() {
             i.lifeMs = proto::pingLifeMs(p.life);
             i.leftMs = i.lifeMs - (now - c.setAt);
             i.own = own;
+            i.reactions = c.reactions;
             v.push_back(i);
         }
     };

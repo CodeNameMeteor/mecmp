@@ -77,12 +77,21 @@ void sendChat(const std::string& text);
 std::vector<ChatLine> chatLines(size_t max = 50); // oldest first
 // World markers ("pings"). Each player has a few at once (see PING in protocol.h); each disappears
 // after the time its owner gave it. sendPing shows ours here at once and sends it to everyone (any thread).
+// A quick answer to a marker, as shown under it: the answering player's icon and colors.
+struct ReactionMark {
+    uint32_t from = 0; // session id of the answering player
+    std::string name;
+    std::string text;
+    uint8_t glyph = 31; // the speech bubble for an answer from a version that sent no icon
+    uint8_t rgb[3] = {255, 255, 255};
+    uint8_t accent[3] = {255, 255, 255};
+};
 struct PingInfo {
     uint32_t owner = 0; // session id of the player who placed it
     uint8_t index = 0;  // which of the owner's cells it is in
     std::string name;
     float pos[3] = {0, 0, 0};
-    uint8_t rgb[3] = {255, 210, 60};
+    uint8_t rgb[3] = {232, 50, 46};
     uint8_t accent[3] = {255, 255, 255}; // the detail inside the glyph
     uint8_t glyph = 0;  // the shape to draw (protocol::pingGlyph)
     std::string label;  // its title, as its owner wrote it; may be empty
@@ -90,10 +99,11 @@ struct PingInfo {
     uint32_t leftMs = 0; // until it disappears
     uint32_t lifeMs = 0; // how long it lasts in all
     bool own = false;
+    std::vector<ReactionMark> reactions; // answers to it, oldest first; gone with the marker
 };
 // What a new marker looks like and how long it stays.
 struct PingStyle {
-    uint8_t rgb[3] = {255, 210, 60};
+    uint8_t rgb[3] = {232, 50, 46};
     uint8_t accent[3] = {255, 255, 255};
     uint8_t glyph = 0;
     std::string label;
@@ -105,7 +115,9 @@ void sendPing(const float pos[3], const PingStyle& style, int limit);
 bool clearPing();          // removes all of ours, here and for everyone; false if there were none
 // A quick answer ("On my way") to the marker in cell `cell` of the player whose session id is `target`
 // (PingInfo::owner / ::index); `markerTitle` is the marker's title as seen here. Any thread.
-void sendReact(uint32_t target, uint8_t cell, const std::string& markerTitle, const std::string& text);
+// `glyph` and the colors are the answer's icon, shown under the marker for everyone.
+void sendReact(uint32_t target, uint8_t cell, const std::string& markerTitle, const std::string& text, uint8_t glyph,
+               const uint8_t rgb[3], const uint8_t accent[3]);
 // Answers other players sent to our markers since the last call, oldest first.
 struct ReactionInfo {
     std::string from;  // the answering player's name

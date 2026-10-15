@@ -79,8 +79,7 @@ void placeAt(const std::shared_ptr<const config::Settings>& cfg, int what, const
     if (slot < 0 || slot >= cfg->wheelSlots[wheel]) slot = 0; // a slot the wheel no longer shows
     const config::WheelSlot& chosen = cfg->wheels[wheel][slot];
     net::PingStyle style;
-    net::protocol::parseRgb(cfg->pingColor, style.rgb);
-    net::protocol::parseRgb(cfg->pingAccent, style.accent);
+    config::markerColors(*cfg, chosen, style.rgb, style.accent);
     style.glyph = chosen.glyph;
     style.label = chosen.label;
     style.seconds = cfg->pingSeconds;

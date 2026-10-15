@@ -739,7 +739,8 @@ bool install() {
     g_toggleKey = keyFromName(config::get()->menuKey);
     g_chatKey = actionKeyFromName(config::get()->chatKey); // empty = no chat key
     // The marker key must not double as the menu or chat key (those win).
-    const int pingKey = actionKeyFromName(config::get()->pingKey);
+    // (bindFromName: the marker key may be a mouse button, so "MOUSE3" in mecmp.ini works from the start.)
+    const int pingKey = bindFromName(config::get()->pingKey, true);
     g_pingKey = pingKey == g_toggleKey.load() || pingKey == g_chatKey.load() ? 0 : pingKey;
     // A key another action already has is refused and stays off; the log says so.
     noteRefused(setPingClearKey(config::get()->pingClearKey), "ping_clear_key", config::get()->pingClearKey);

@@ -1,5 +1,38 @@
 # Changelog
 
+## Unreleased
+
+### Markers
+- **Colors of their own per marker.** Each slot of a marker wheel has two swatches next to its title: the
+  marker's own color and secondary color. A faded swatch follows the main color; right-click a set one to
+  go back to it. The wheel, the menu and the marker everyone sees use them (`wheelN_color_S` /
+  `wheelN_accent_S` in mecmp.ini). A bookmark of such a marker keeps its colors.
+- **Two resets**: *Reset colors* puts main and secondary back to yellow and white and leaves own colors
+  alone; *Reset own colors* sends every marker back to the main ones.
+- **Red is the default color** (main red, secondary white) for new settings; existing mecmp.ini files keep
+  their colors.
+- **Two-tone icons.** Nearly every icon now has a part in the secondary color (a half of the arrows, the
+  exclamation mark, the inner shape of the star, heart and shield, the ends (half a square) of the plus,
+  cross, check, pause and minus, the three dots of the speech bubble, the zipline's anchors, the door's sign ...). The
+  eye's frame is a quarter thicker, the target's center a quarter bigger, the shield's top dips in the
+  middle, the climb icon is a fifth wider. The ring and the dot are no longer offered in the icon list;
+  markers and ini files that have them keep them.
+- **Fixed: a marker key set to the middle button (`ping_key=MOUSE3`) did nothing after the game started**
+  until it was set again in the menu.
+- **A sharper question mark and a new exclamation mark icon** (a bar with the dot in the secondary color,
+  `exclaim` in mecmp.ini). The ready-made wheel 2 now has "What?" (the circle with the question mark) and
+  "Help!" (the exclamation mark); "Nice!" moved to wheel 3. Existing wheels are kept; *Reset this wheel*
+  brings the new ones.
+- **Slots without a title look unset**: in the menu their icon and colors are at half opacity, and in the
+  open wheel the wedge, digit and icon are dimmer (they still place an icon-only marker). The wheel is
+  drawn 15% bigger.
+- **Quick answers show under the marker**, for everyone: the answer's icon in a row of up to three, then
+  "and N more". A new answer comes in on the right and the row stays centered. Answers have colors of
+  their own like markers (`react_color_N` / `react_accent_N`). Old versions ignore the added bytes and
+  show the usual notice; an answer from an old version shows as a white speech bubble.
+- **The Markers tab is sorted** into Markers, Colors, Wheels and On the map now (placed markers,
+  bookmarks, the others' markers and *Clear my markers*).
+
 ## 0.9.0: first public beta
 
 Run through the city of Glass with other players. Each player shows up as a ghost that copies their

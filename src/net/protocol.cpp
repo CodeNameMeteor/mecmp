@@ -268,6 +268,9 @@ size_t writeReact(char* buf, const Header& h, const React& r) {
         memcpy(p, t.data(), t.size());
         p += t.size();
     }
+    put(p, static_cast<uint8_t>(r.glyph & (kPingGlyphs - 1)));
+    for (uint8_t v : r.rgb) put(p, v);
+    for (uint8_t v : r.accent) put(p, v);
     return static_cast<size_t>(p - buf);
 }
 
@@ -284,6 +287,13 @@ bool readReact(const char* payload, size_t n, React& out) {
         p += len;
     }
     if (r.text.empty()) return false;
+    if (end - p >= 7) { // the icon and colors; an older sender stops after the text
+        uint8_t glyph = 0;
+        get(p, end, glyph);
+        r.glyph = static_cast<uint8_t>(glyph & (kPingGlyphs - 1));
+        for (uint8_t& v : r.rgb) get(p, end, v);
+        for (uint8_t& v : r.accent) get(p, end, v);
+    }
     out = r;
     return true;
 }

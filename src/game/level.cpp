@@ -182,18 +182,22 @@ void chooseGhostSpawner(const void* const* ours, size_t oursCount) {
     }
     if (alive.empty()) return;
     void* best = nullptr;
-    int bestScore = -1;
+    int bestScore = -1, currentScore = -1;
     for (const Info& a : alive) {
         size_t shared = 0;
         for (const Info& b : alive) shared += b.data == a.data ? 1 : 0;
         const bool own = shared == 1;
         const int score = own ? (a.holds ? 6 : 3) : (a.holds ? 1 : 0);
-        if (score >= bestScore) { // a tie goes to the newer one
+        if (a.spawner == current) currentScore = score;
+        if (score >= bestScore) { // a tie among the others goes to the newer one
             best = a.spawner;
             bestScore = score;
         }
     }
-    if (best && best != current) {
+    // The current one stays unless another is strictly better (or it is gone). A time trial brings a spawner of
+    // its own that scores the same while the trial runs: switching on a tie flipped between the two every few
+    // seconds, and ghosts made from the trial's spawner go with it when the trial ends.
+    if (best && best != current && bestScore > currentScore) {
         MLOG("level: ghost spawner %p chosen among %llu (score %d; was %p)", best, static_cast<unsigned long long>(alive.size()),
              bestScore, current);
         std::lock_guard<std::mutex> lock(g_m);

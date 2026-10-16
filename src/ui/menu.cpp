@@ -307,6 +307,7 @@ void ghostsRow() {
 void playersSection() {
     ImGui::SeparatorText("Players");
     const auto remotes = net::remotes(5000);
+    bool do_not_disturb = config::get()->doNotDisturb;
     if (remotes.empty()) {
         ImGui::TextDisabled("Nobody else here yet.");
         ghostsRow();
@@ -358,6 +359,12 @@ void playersSection() {
     }
     ImGui::SeparatorText("Summon");
     summonControls(remotes);
+    ImGui::SeparatorText("Do Not Disturb");
+    if(ImGui::Checkbox("Do Not Disturb", &do_not_disturb)) {
+        config::change([do_not_disturb](config::Settings& c) {
+            c.doNotDisturb = do_not_disturb;
+        });
+    }
     ghostsRow();
 }
 

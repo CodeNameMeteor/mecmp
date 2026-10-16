@@ -325,7 +325,7 @@ void sendHello() {
         flags = proto::kHelloHost;
         if (config::get()->membersMayHardSummon) flags = static_cast<uint8_t>(flags | proto::kHelloMembersHard);
     }
-    if (config::get()->askBeforeVisit) flags = static_cast<uint8_t>(flags | proto::kHelloAskVisit);
+    if (config::get()->askBeforeVisit || config::get()->doNotDisturb) flags = static_cast<uint8_t>(flags | proto::kHelloAskVisit);
     proto::OnlineProfile profile;
     {
         std::lock_guard<std::mutex> lock(g_m);

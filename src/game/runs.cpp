@@ -75,6 +75,29 @@ void track(std::vector<uintptr_t>& list, uintptr_t e, uintptr_t vtblVa) { // cal
 }
 
 // The name of the time trial with this content id (empty: its marker is not loaded or has no name).
+// What kind of player-made challenge a content id is, from its marker's data (PamChallengeMarkerEntityData:
+// +0x68 CheckpointOrder, +0x6c Time). A time trial has checkpoints (in order or any order); a "ReachThis" /
+// Beat L.E. (I was here: reach this place) has none and is not a run against the clock. -1: no marker found.
+constexpr size_t Ent_Data = 0x28, MarkerData_CheckpointOrder = 0x68, MarkerData_Time = 0x6c;
+int checkpointOrder(const uint8_t* contentId) {
+    std::lock_guard<std::mutex> lock(g_m);
+    for (uintptr_t e : g_markers) {
+        uint8_t head[Marker_ContentId + kContentIdSize] = {};
+        if (!mem::read(e, head, sizeof(head))) continue;
+        uintptr_t vt = 0, data = 0;
+        memcpy(&vt, head, sizeof(vt));
+        memcpy(&data, head + Ent_Data, sizeof(data));
+        if (vt != rva(Vtbl_PamServerChallengeMarkerEntity) || memcmp(head + Marker_ContentId, contentId, kContentIdSize) != 0)
+            continue;
+        int32_t order = -1;
+        if (!data || !mem::read(data + MarkerData_CheckpointOrder, order)) return -1;
+        VLOG("runs: challenge marker %p: checkpoint order %d, time %.1f", reinterpret_cast<void*>(e), order,
+             mem::readOr<float>(data + MarkerData_Time));
+        return order;
+    }
+    return -1;
+}
+
 std::string timeTrialName(const uint8_t* contentId) {
     std::lock_guard<std::mutex> lock(g_m);
     for (uintptr_t e : g_markers) {
@@ -249,6 +272,10 @@ void onFinished(const uint8_t* m) {
 // them). Each type is dumped the first few times it is seen.
 void onTimeTrialFinished(const uint8_t* m) {
     endActivity("time trial finished");
+    if (checkpointOrder(m + Tt_Guid) == 0) { // a ReachThis reached: no time to announce
+        MLOG("runs: reached a ReachThis (not a timed run)");
+        return;
+    }
     uint32_t cs = 0;
     memcpy(&cs, m + Tt_Time, 4);
     uint32_t guidHead = 0;
@@ -270,12 +297,60 @@ void onTimeTrialFinished(const uint8_t* m) {
     net::sendResult(r);
 }
 
+// Every PamSocialPlay*Message class in the game (strings in the image), by type id (djb2-xor of the class name),
+// so the verbose log names what it sees: which messages opening, closing, starting and leaving a run send.
+struct MessageName { uint32_t type; const char* name; };
+constexpr MessageName kMessageNames[] = {
+    {0xa390e6be, "RunnerKitOpened"},
+    {0x85ebbf13, "EchoCustomizationChanged"},
+    {0x9a0dfb2b, "RemoveSharedContent"},
+    {0xaa327a65, "InventoryChanged"},
+    {0xd71d027f, "NamedChallengeFinished"},
+    {0x855bb873, "OnShowMap"},
+    {0x5b61f030, "OnHideMap"},
+    {0xfc61a69a, "PinSharedContent"},
+    {0xa3118cf7, "PermissionRequest"},
+    {0x5a464701, "UnpinSharedContent"},
+    {0x36154959, "FireEvent"},
+    {0xf1c3cee5, "PermissionResponse"},
+    {0x33d42557, "SocialTeleport"},
+    {0xe7d40012, "BlockedListUpdated"},
+    {0x606b598c, "NamedChallengeTeleport"},
+    {0xfc74c3ca, "Control"},
+    {0x052d5907, "BlockedUsers"},
+    {0xa64f89ee, "NamedChallengeStatsUploaded"},
+    {0xa78a38f4, "NamedChallengeBookmarkStatusRequest"},
+    {0x1846085d, "UgcFilterOptionChanged"},
+    {0x9b35497c, "ChallengeFinished"},
+    {0xe6fd16cc, "NamedChallengeBookmarkStatusResult"},
+    {0x68f236ee, "FriendsList"},
+    {0x924d6bd9, "DownloadSharedContent"},
+    {0x1cca484e, "StartChallenge"},
+    {0xb7633230, "NamedChallengeActivated"},
+    {0x72f865f9, "RestartChallenge"},
+    {0x57d92a5d, "RequestHackableBillboardLeader"},
+    {0x320071b1, "MapMarkerUpdates"},
+    {0x82ad8c5d, "RefreshHackableBillboardLeaderCache"},
+    {0xc164590c, "NamedChallengeStarted"},
+    {0xf33d51ff, "HackableBillboardsLeader"},
+    {0x9a9a27c6, "NamedChallengeCancelled"},
+    {0xd089d3e2, "FetchSharedContents"},
+    {0x955f5cbd, "NamedChallengeUploadReplay"}
+};
+const char* messageName(uint32_t type) {
+    for (const MessageName& n : kMessageNames)
+        if (n.type == type) return n.name;
+    return "?";
+}
+
 void dumpMessage(const uint8_t* m, uint32_t type) {
     static uint32_t types[32] = {};
     static int counts[32] = {};
     int slot = -1;
     for (int i = 0; i < 32 && slot < 0; ++i)
         if (types[i] == type || types[i] == 0) { types[i] = type; slot = i; }
+    // Every one by name (cheap); the first few of each type with their bytes (research).
+    VLOG("runs: social-play %s (%08x)", messageName(type), type);
     if (slot < 0 || counts[slot]++ >= 4) return;
     uint8_t raw[0x60] = {};
     if (!mem::read(reinterpret_cast<uintptr_t>(m) + 0x30, raw, sizeof(raw))) return;
@@ -283,7 +358,7 @@ void dumpMessage(const uint8_t* m, uint32_t type) {
     for (size_t i = 0; i < sizeof(raw); ++i) snprintf(hex + i * 3, 4, "%02x ", raw[i]);
     uintptr_t vt = 0;
     memcpy(&vt, m, sizeof(vt));
-    VLOG("runs: social-play message type %08x (vtable %p), bytes from +0x30: %s", type, reinterpret_cast<void*>(vt), hex);
+    VLOG("runs: social-play message %s (%08x, vtable %p), bytes from +0x30: %s", messageName(type), type, reinterpret_cast<void*>(vt), hex);
 }
 
 void onMessage(Listener* self, const void* message) {
@@ -308,6 +383,13 @@ void onMessage(Listener* self, const void* message) {
         if (type == kTypeStartChallenge && head == lastHead && now - lastAt < 1000) return;
         lastHead = head;
         lastAt = now;
+        // A ReachThis (Beat L.E.) is opened with the same message as a time trial, but it is not a run:
+        // counting it kept the player "in a time trial" (no teleports, the run shown above their head) after
+        // they closed it, until the next run or 30 minutes.
+        if (checkpointOrder(m + Tt_Guid) == 0) {
+            VLOG("runs: a ReachThis was opened (not a run)");
+            return;
+        }
         beginActivity(proto::kRunTimeTrial, timeTrialName(m + Tt_Guid));
     }
 }

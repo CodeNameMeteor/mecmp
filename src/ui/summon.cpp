@@ -275,6 +275,10 @@ bool takesDeclineKey() { return g_takeDecline.load(); }
 
 bool send(const std::vector<uint32_t>& targets, bool hard, const std::string& name) {
     static net::PlayerState st; // large; render thread only
+    if (net::inRun()) { // they would come to you mid-run
+        notices::push("You are in a run: finish or quit it first");
+        return false;
+    }
     if (!net::localState(st)) {
         notices::push("Can't summon anyone from here");
         return false;
@@ -363,6 +367,10 @@ void takeVisits(DWORD now) {
 } // namespace
 
 bool askVisit(uint32_t target, const std::string& name) {
+    if (net::inRun() && g_asking.target != target) {
+        notices::push("You are in a run: finish or quit it first");
+        return false;
+    }
     if (g_asking.target == target) { // the same player again: give up asking
         net::sendVisit(target, net::protocol::kVisitWithdraw, g_asking.id);
         notices::push("Stopped asking " + name);
@@ -453,7 +461,7 @@ void update(const Input& in) {
         g_accept.reset();
         g_decline.reset();
     }
-    const uint32_t returnLeft = game::teleport::returnLeftMs();
+    const uint32_t returnLeft = running ? 0 : game::teleport::returnLeftMs(); // no "Go back?" in a run
     g_takeAccept = pendingShown || returnLeft > 0;
     g_takeDecline = pendingShown || returnLeft > 0;
     g_acceptProgress = g_declineProgress = g_returnProgress = g_dismissProgress = 0.f;
@@ -537,7 +545,7 @@ void draw() {
                     keyHint(cfg->summonDeclineKey, cfg->summonDeclinePad));
         return;
     }
-    if (const uint32_t left = game::teleport::returnLeftMs(); left > 0 && !game::teleport::busy())
+    if (const uint32_t left = game::teleport::returnLeftMs(); left > 0 && !game::teleport::busy() && !net::inRun())
         drawReturn(pn, left, keyHint(cfg->summonAcceptKey, cfg->summonAcceptPad),
                    keyHint(cfg->summonDeclineKey, cfg->summonDeclinePad));
 }

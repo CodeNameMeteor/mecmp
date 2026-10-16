@@ -112,6 +112,17 @@ constexpr const char* kDefaultIni =
 // The wheel lines (written from the defaults) go between the two halves.
 constexpr const char* kDefaultIniTail =
     "\r\n"
+    "[protection]\r\n"
+    "; host: maximum limb translation in metres (0.5..2); every receiver also enforces 2 m\r\n"
+    "; the trajectory bone follows the player's world position; replay body scale is fixed\r\n"
+    "bone_reach=1\r\n"
+    "\r\n"
+    "[audio]\r\n"
+    "; hear other players' native movement, breathing, effort vocals and combat sounds\r\n"
+    "player_sounds=1\r\n"
+    "; sounds beyond this distance are stopped (5..200 metres)\r\n"
+    "distance=80\r\n"
+    "\r\n"
     "[ghost]\r\n"
     "; spawn other players' ghosts automatically when their packets arrive\r\n"
     "auto_spawn=1\r\n"
@@ -455,6 +466,11 @@ void load(const std::wstring& dir) {
     s.menuKey = readString(ini, L"ui", L"menu_key", "INSERT");
     s.menuPad = readString(ini, L"ui", L"menu_pad", "LS+RS");
     s.showNames = readInt(ini, L"ui", L"show_names", 1) != 0;
+    s.playerAudio = readInt(ini, L"audio", L"player_sounds", 1) != 0;
+    const float audioDistance = static_cast<float>(atof(readString(ini, L"audio", L"distance", "80").c_str()));
+    s.playerAudioDistance = std::isfinite(audioDistance) ? std::clamp(audioDistance, 5.f, 200.f) : 80.f;
+    const float reach = static_cast<float>(atof(readString(ini, L"protection", L"bone_reach", "1").c_str()));
+    s.boneReach = std::isfinite(reach) ? std::clamp(reach, .5f, 2.f) : 1.f;
     s.mumbleLink = readInt(ini, L"voice", L"mumble_link", 1) != 0;
     s.showNotices = readInt(ini, L"ui", L"show_notices", 1) != 0;
     s.showChat = readInt(ini, L"ui", L"show_chat", 1) != 0;
@@ -647,6 +663,9 @@ void applyPending() {
     put(L"ui", L"menu_key", snapshot->menuKey);
     put(L"ui", L"menu_pad", snapshot->menuPad);
     put(L"ui", L"show_names", snapshot->showNames ? "1" : "0");
+    put(L"audio", L"player_sounds", snapshot->playerAudio ? "1" : "0");
+    put(L"audio", L"distance", std::to_string(snapshot->playerAudioDistance));
+    put(L"protection", L"bone_reach", std::to_string(snapshot->boneReach));
     put(L"voice", L"mumble_link", snapshot->mumbleLink ? "1" : "0");
     put(L"ui", L"show_notices", snapshot->showNotices ? "1" : "0");
     put(L"ui", L"show_chat", snapshot->showChat ? "1" : "0");

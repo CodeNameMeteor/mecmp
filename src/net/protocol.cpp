@@ -1,4 +1,5 @@
 #include "net/protocol.h"
+#include "net/pose_limits.h"
 
 #include <cmath>
 #include <cctype>
@@ -66,6 +67,24 @@ bool sanePosition(const float pos[3]) {
     for (int i = 0; i < 3; ++i)
         if (!std::isfinite(pos[i]) || std::fabs(pos[i]) > kMaxCoord) return false;
     return true;
+}
+
+size_t writeAudio(char* buf, const Header& h, const PlayerAudio& a) {
+    if (!validAudio(a)) return 0;
+    char* p = buf;
+    put(p, h); put(p, a.id); put(p, a.timeMs); put(p, a.event); put(p, a.source); put(p, a.count);
+    for (uint8_t i = 0; i < a.count; ++i) { put(p, a.params[i].key); put(p, a.params[i].value); }
+    return static_cast<size_t>(p - buf);
+}
+bool readAudio(const char* payload, size_t size, PlayerAudio& out) {
+    const char* p = payload; const char* end = payload + size;
+    PlayerAudio a;
+    if (!get(p, end, a.id) || !get(p, end, a.timeMs) || !get(p, end, a.event) ||
+        !get(p, end, a.source) || !get(p, end, a.count) || a.count > kMaxAudioParams) return false;
+    for (uint8_t i = 0; i < a.count; ++i)
+        if (!get(p, end, a.params[i].key) || !get(p, end, a.params[i].value)) return false;
+    if (p != end || !validAudio(a)) return false;
+    out = a; return true;
 }
 
 size_t writePing(char* buf, const Header& h, const Ping& pg) {
@@ -168,7 +187,9 @@ std::string formatRgb(const uint8_t rgb[3]) {
     return s;
 }
 
-size_t writeState(char* buf, const Header& h, const PlayerState& s, Encoder& enc) {
+size_t writeState(char* buf, const Header& h, const PlayerState& input, Encoder& enc) {
+    PlayerState s = input;
+    if (!limitPose(s)) return 0;
     char* p = buf;
     put(p, h);
     put(p, s.pos);
@@ -481,9 +502,12 @@ bool readState(const char* payload, size_t n, const Decoder& dec, PlayerState& o
     if (!sanePlacement(out)) return false;
     full = (fl & 1) != 0;
     out.boneCount = 0;
-    if (nb == 0) return true;
+    if (res || (fl & ~1) || (out.flags & ~(kStateInLevel | kStateTyping))) return false;
+    const uint32_t validMask = nb == 32 ? UINT32_MAX : nb < 32 ? ((1u << nb) - 1) : 0;
+    if ((mask & ~validMask) || (nb && full && mask != validMask)) return false;
+    if (nb == 0) return p == end && limitPose(out);
     if (nb > kMaxPoseBones) return false;
-    if (!full && dec.baseCount != nb) return true; // no base yet: position only until a full packet
+    const bool haveBase = full || dec.baseCount == nb;
     // The rotations (4 bytes each) come first, the translations (6 bytes each, one per mask bit) after them.
     if (end - p < static_cast<ptrdiff_t>(nb) * 4) return false;
     const char* t = p + nb * 4;
@@ -502,8 +526,10 @@ bool readState(const char* payload, size_t n, const Decoder& dec, PlayerState& o
         }
         out.bones[i][3] = 1.f;
     }
-    out.boneCount = nb;
-    return true;
+    // Validate the complete packet even without a delta base; only publish its
+    // placement until a full pose arrives. This also bounds yaw on that path.
+    out.boneCount = haveBase ? nb : 0;
+    return t == end && limitPose(out);
 }
 
 void commitBase(Decoder& dec, const PlayerState& s) {

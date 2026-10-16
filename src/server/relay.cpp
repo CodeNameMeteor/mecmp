@@ -1,4 +1,5 @@
 #include "server/relay.h"
+#include "net/pose_limits.h"
 
 #include <cstdio>
 #include <cstring>
@@ -149,6 +150,7 @@ void Relay::onPacket(const Addr& from, const char* buf, size_t n, uint32_t nowMs
         if (h.type != proto::kTypeHello || sessionTaken(h.session, from)) { ++stats_.dropped; ++m->dropped; return; }
         log_("player " + hex(m->session) + " '" + m->name + "' is now " + hex(h.session) + " (restarted)");
         m->session = h.session;
+        m->poseDecoder = {};
     }
     // Rate limit (token bucket).
     m->tokens += (nowMs - m->refillAt) * cfg_.ratePerSec / 1000.0;
@@ -164,7 +166,19 @@ void Relay::onPacket(const Addr& from, const char* buf, size_t n, uint32_t nowMs
     const size_t len = n - sizeof(h);
     char copy[proto::kMaxPacket];
     const char* out = buf;
-    if (h.type == proto::kTypeHello) {
+    if (h.type == proto::kTypeState) {
+        net::PlayerState state; bool full = false;
+        if (!proto::readState(payload, len, m->poseDecoder, state, full)) { ++stats_.dropped; return; }
+        if (full) proto::commitBase(m->poseDecoder, state);
+        if (!net::limitPose(state, cfg_.boneReach)) { ++stats_.dropped; return; }
+        proto::Encoder encoder;
+        n = proto::writeState(copy, h, state, encoder);
+        if (!n) { ++stats_.dropped; return; }
+        out = copy;
+    } else if (h.type == proto::kTypeAudio) {
+        net::PlayerAudio sample;
+        if (!proto::readAudio(payload, len, sample)) { ++stats_.dropped; return; }
+    } else if (h.type == proto::kTypeHello) {
         std::string raw;
         uint32_t look = 0;
         uint8_t flags = 0;

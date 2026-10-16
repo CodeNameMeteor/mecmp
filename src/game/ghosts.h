@@ -47,5 +47,7 @@ void lookListArrived();
 std::string status();
 // Players whose ghost is in the level and shown now (for name tags). Any thread.
 std::vector<uint32_t> shownPeers();
+// A currently shown native client character, for positional vocal sources.
+uintptr_t clientCharacter(uint32_t peer);
 
 } // namespace mecmp::game::ghosts

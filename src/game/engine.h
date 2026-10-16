@@ -60,6 +60,34 @@ constexpr uintptr_t TI_PamReplayPlayerComponentData = 0x14286b890;
 constexpr uintptr_t TI_PamServerReplayPlayerComponent = 0x142858f00;
 constexpr uintptr_t TI_ServerCharacterCustomizationComponent = 0x1427fe0f0;
 constexpr uintptr_t TI_PamClientReplayRecordingComponent = 0x1428567b0;
+// Health (game/combat.cpp): every server character's health component is found by this ancestor class; the
+// player's is a PamServerHumanHealthComponent (hp +0x20, max +0x24 as floats; vtbl +0xf0 = setHealth(this,
+// float), which calls die() at <= 0). Seen live on Faith: 6/7, 4/7.
+constexpr uintptr_t TI_ServerCharacterHealthComponent = 0x1427fe0a0;
+constexpr uintptr_t Vtbl_PamServerHumanHealthComponent = 0x141c40700;
+constexpr size_t Health_Current = 0x20, Health_Max = 0x24;
+constexpr size_t Vtbl_Health_SetHealth = 0xf0;
+// The game's own way to hurt a character (what its AI coordinator calls): (health component, Result* of 0x28+
+// bytes, PamServerDamageInfo*) -> vtable +0xd8 -> applyDamage (+0x100) and a damage message. Fall death seen live
+// 2026-10-16: applyDamage(hc, result, dmg) with the DamageInfo below, then setHealth(hp - dmg), die(), respawn.
+// applyDamage (0x143923ea0) turns the int at +0xe8 into the float at +0x88 (the amount taken off).
+constexpr uintptr_t Fn_DamageCharacter = 0x1434d94e0;
+constexpr uintptr_t Vtbl_PamServerDamageInfo = 0x141c401c8;
+constexpr size_t DamageInfo_Size = 0x180, DamageInfo_AmountInt = 0xe8, DamageInfo_Source = 0xb0;
+// The damage source the DamageInfo points at (+0xb0): 0x60 bytes, constructor / destructor below; the damage type
+// at +0x58 is what die() reads (0x14339c060) to pick the death (strings Melee / Bullet / Fall / Field / Unknown).
+constexpr uintptr_t Fn_DamageSource_ctor = 0x143395430, Fn_DamageSource_dtor = 0x143396010;
+// NOT SAFE with a ghost (crashed the game 2026-10-16, +0x14b8 of a ghost is no handle). 0x1433a5930(source, attacker): what the AI calls to fill the source in (+0x08 a handle singleton, +0x40 the
+// attacker's handle from character+0x14b8, +0x50 its entity); die() and applyDamage use the attacker through it.
+constexpr uintptr_t Fn_DamageSource_setAttacker = 0x1433a5930;
+constexpr size_t Character_AttackerHandle = 0x14b8;
+constexpr size_t DamageSource_Size = 0x60, DamageSource_Type = 0x58;
+constexpr int32_t DamageType_Melee = 0x66, DamageType_Bullet = 0x67, DamageType_Fall = 0x68;
+// After a hit the human health component ignores further damage for about a second: applyDamage (0x143923ea0)
+// reads a bool property inline at +0x128 (value getter 0x142a424b0 with the bool type 0x1427b0dd8, the one
+// player_audio.cpp uses for floats) and returns an empty result while it is set. Our hits clear it first.
+constexpr size_t Health_HitWindowProp = 0x128;
+constexpr uintptr_t Fn_PropertyValue = 0x142a424b0, TI_BoolType = 0x1427b0dd8;
 
 // --- Hook points (creator vtable slots and the functions they normally hold) ---------------------
 constexpr uintptr_t Slot_ServerCharacterSpawnFactory = 0x141b4f720;

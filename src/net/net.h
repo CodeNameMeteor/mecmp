@@ -46,6 +46,7 @@ struct RemoteInfo {
     uint32_t runMs = 0;     // how long that run has been going, counted on to now
     std::string runTitle;   // its name
     bool asksVisit = false; // they want to be asked before anyone goes to them (VISIT, protocol.h)
+    bool allowsHits = false; // their strikes-may-hurt-me flag (HELLO kHelloAllowHits)
 };
 
 // join: empty = host; otherwise a join code or ip:port of the host. Calling it again switches
@@ -180,6 +181,17 @@ struct VisitInfo {
 };
 uint32_t sendVisit(uint32_t target, uint8_t kind, uint32_t id = 0);
 std::vector<VisitInfo> takeVisits();
+// DAMAGE (protocol.h): a strike of another player that landed on us. sendDamage sends one to `target` (a
+// protocol::DamageKind) and returns its id (0 = not sent); takeDamages = the ones addressed to us, oldest
+// first (unchecked: game/damage.cpp decides). Any thread.
+struct DamageInfo {
+    uint32_t id = 0;
+    uint32_t from = 0; // the sender's session id
+    std::string name;
+    uint8_t kind = 0;
+};
+uint32_t sendDamage(uint32_t target, uint8_t kind);
+std::vector<DamageInfo> takeDamages();
 // What happened to our summon, as sentences for the notices: one line once everyone called answered
 // or the time ran out.
 std::vector<std::string> takeSummonReports();

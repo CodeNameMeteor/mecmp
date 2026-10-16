@@ -664,6 +664,45 @@ static void testVisit() {
     CHECK((protocol::kHelloAskVisit & (protocol::kHelloHost | protocol::kHelloServer | protocol::kHelloMembersHard)) == 0);
 }
 
+// A strike that landed, and the flag that says it may.
+static void testDamage() {
+    char buf[protocol::kMaxPacket];
+    const protocol::Header h{protocol::kMagic, protocol::kProtocol, protocol::kTypeDamage, 7, 1};
+    CHECK(protocol::knownType(protocol::kTypeDamage));
+    for (uint8_t kind : {protocol::kDamagePunch, protocol::kDamageKick}) {
+        protocol::Damage in, out;
+        in.id = 77;
+        in.target = 0x12345678u;
+        in.kind = kind;
+        in.amount = 1;
+        const size_t n = protocol::writeDamage(buf, h, in);
+        CHECK(n == sizeof(h) + 10);
+        CHECK(protocol::readDamage(buf + sizeof(h), n - sizeof(h), out));
+        CHECK(out.id == 77 && out.target == 0x12345678u && out.kind == kind && out.amount == 1);
+        for (size_t cut = 0; cut < n - sizeof(h); ++cut) CHECK(!protocol::readDamage(buf + sizeof(h), cut, out));
+        buf[n - 2] = 2; // a kind nobody knows
+        CHECK(!protocol::readDamage(buf + sizeof(h), n - sizeof(h), out));
+        buf[n - 2] = static_cast<char>(kind);
+        buf[n - 1] = 0; // no damage
+        CHECK(!protocol::readDamage(buf + sizeof(h), n - sizeof(h), out));
+        buf[n - 1] = static_cast<char>(protocol::kMaxDamageAmount + 1);
+        CHECK(!protocol::readDamage(buf + sizeof(h), n - sizeof(h), out));
+        buf[n - 1] = static_cast<char>(protocol::kMaxDamageAmount);
+        CHECK(protocol::readDamage(buf + sizeof(h), n - sizeof(h), out) && out.amount == protocol::kMaxDamageAmount);
+    }
+    // The HELLO flag is its own bit: no relay clears or reuses it.
+    const uint8_t others = protocol::kHelloHost | protocol::kHelloServer | protocol::kHelloMembersHard | protocol::kHelloAskVisit;
+    CHECK((protocol::kHelloAllowHits & others) == 0);
+    // It survives a HELLO round trip.
+    protocol::OnlineProfile profile;
+    const size_t hn = protocol::writeHello(buf, h, "Foie", 0, protocol::kHelloAllowHits, 0, &profile);
+    std::string name;
+    uint32_t look = 0;
+    uint8_t flags = 0;
+    CHECK(protocol::readHello(buf + sizeof(h), hn - sizeof(h), name, look, &flags));
+    CHECK((flags & protocol::kHelloAllowHits) != 0 && name == "Foie");
+}
+
 static void testPingTail() {
     char buf[protocol::kMaxPacket];
     protocol::Header h{protocol::kMagic, protocol::kProtocol, protocol::kTypePing, 7, 1};
@@ -927,6 +966,7 @@ int main() {
     testSummonHostPolicy();
     testSummonReply();
     testVisit();
+    testDamage();
     testSummonDecide();
     testSummonReport();
     testPingTail();

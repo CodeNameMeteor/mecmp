@@ -117,6 +117,14 @@ constexpr const char* kDefaultIniTail =
     "; the trajectory bone follows the player's world position; replay body scale is fixed\r\n"
     "bone_reach=1\r\n"
     "\r\n"
+    "[combat]\r\n"
+    "; 1 = your punches and kicks that land on another player take a hit point from them (only from players\r\n"
+    ";     who allow it below). 0 = they do nothing to other players\r\n"
+    "deal_hits=0\r\n"
+    "; what other players' strikes do to you: off = nothing (the default), one_hp = a hit point per strike but\r\n"
+    ";     never below 1, lethal = a hit point per strike, and the one that reaches 0 kills you\r\n"
+    "hits_taken=off\r\n"
+    "\r\n"
     "[audio]\r\n"
     "; hear other players' native movement, breathing, effort vocals and combat sounds\r\n"
     "player_sounds=0\r\n"
@@ -229,6 +237,14 @@ constexpr const char* kDefaultIniTail =
 // The profile API cuts a value that does not fit its buffer, without saying so. Values are read into a
 // buffer that grows until the whole value fits, up to kMaxProfileChars; a longer value is still cut.
 constexpr size_t kMaxProfileChars = 32767;
+
+int parseHitsTaken(const std::string& v) {
+    if (_stricmp(v.c_str(), "one_hp") == 0) return kHitsOneHp;
+    if (_stricmp(v.c_str(), "lethal") == 0) return kHitsLethal;
+    return kHitsOff;
+}
+
+const char* hitsTakenName(int v) { return v == kHitsOneHp ? "one_hp" : v == kHitsLethal ? "lethal" : "off"; }
 
 std::string readString(const std::wstring& ini, const wchar_t* sec, const wchar_t* key, const char* def) {
     std::vector<wchar_t> w(2048);
@@ -556,6 +572,8 @@ void load(const std::wstring& dir) {
     s.allowForcedSummon = readInt(ini, L"player", L"allow_forced_summon", 0) != 0;
     s.askBeforeVisit = readInt(ini, L"player", L"ask_before_go_to", 0) != 0;
     s.shareProfile = readInt(ini, L"player", L"share_profile", 0) != 0;
+    s.dealHits = readInt(ini, L"combat", L"deal_hits", 0) != 0;
+    s.hitsTaken = parseHitsTaken(readString(ini, L"combat", L"hits_taken", "off"));
     s.membersMayHardSummon = readInt(ini, L"net", L"members_may_hard_summon", 0) != 0;
     s.padPlayStation = _stricmp(readString(ini, L"ui", L"pad_labels", "xbox").c_str(), "playstation") == 0;
     s.pingClearKey = readString(ini, L"ui", L"ping_clear_key", "X");
@@ -735,6 +753,8 @@ void applyPending() {
     put(L"player", L"allow_forced_summon", snapshot->allowForcedSummon ? "1" : "0");
     put(L"player", L"ask_before_go_to", snapshot->askBeforeVisit ? "1" : "0");
     put(L"player", L"share_profile", snapshot->shareProfile ? "1" : "0");
+    put(L"combat", L"deal_hits", snapshot->dealHits ? "1" : "0");
+    put(L"combat", L"hits_taken", hitsTakenName(snapshot->hitsTaken));
     put(L"net", L"members_may_hard_summon", snapshot->membersMayHardSummon ? "1" : "0");
     put(L"ui", L"pad_labels", snapshot->padPlayStation ? "playstation" : "xbox");
     put(L"ui", L"ping_wheel", std::to_string(snapshot->pingWheel + 1));

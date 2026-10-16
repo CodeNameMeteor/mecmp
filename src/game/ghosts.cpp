@@ -1002,4 +1002,11 @@ std::string status() {
     return s;
 }
 
+void* serverCharacter(uint32_t peer) {
+    std::lock_guard<std::mutex> lock(g_m);
+    for (const auto& g : g_ghosts)
+        if (g.peer == peer && g.character) return g.character;
+    return nullptr;
+}
+
 } // namespace mecmp::game::ghosts

@@ -53,6 +53,11 @@ struct Bookmark {
 };
 std::array<Wheel, kWheels> defaultWheels();
 
+// Settings::hitsTaken: what other players' strikes do to you.
+constexpr int kHitsOff = 0;    // nothing
+constexpr int kHitsOneHp = 1;  // a hit point per strike, never below 1
+constexpr int kHitsLethal = 2; // a hit point per strike; the one that reaches 0 kills
+
 struct Settings {
     // [net]
     bool netEnabled = true;
@@ -70,6 +75,9 @@ struct Settings {
     bool shareProfile = false;            // send your EA online id and profile name, so others' maps show your Runner Tag
     bool allowForcedSummon = false;       // a hard summon from the host (or a member it allows) takes you after a countdown
     bool askBeforeVisit = false;          // Go to on you waits for your yes (VISIT, net/protocol.h)
+    // [combat]
+    bool dealHits = false;                // your strikes that land on another player hurt them (DAMAGE, net/protocol.h)
+    int hitsTaken = 0;                    // what others' strikes do to you: kHitsOff, kHitsOneHp or kHitsLethal
     std::string name = "Runner";
     std::string look = "faith";           // how you look to others: faith, or echo:<hash> (a ghost style + colour)
     int outfit = 0;                       // with look = faith: what is changed about her outfit (net::protocol::kWear... bits)

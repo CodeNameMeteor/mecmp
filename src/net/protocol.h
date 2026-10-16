@@ -40,6 +40,7 @@ constexpr uint16_t kTypeResult = 9; // a finished dash or other run, with its ti
 constexpr uint16_t kTypeActivity = 10; // the run the sender is in now, with its clock (see ACTIVITY below)
 constexpr uint16_t kTypeVisit = 13; // "may I come to you?" and its answer (see VISIT below)
 constexpr uint16_t kTypeAudio = 15; // native movement event + scalar inputs (player_audio.h)
+constexpr uint16_t kTypeDamage = 16; // a strike that landed on another player (see DAMAGE below)
 // 14 is RENDEZVOUS (below): not a session packet, so it is not in knownType.
 // type 5 INFO: a server list's question "who are you?" and a dedicated server's answer. Not a session
 // packet: it is not in knownType (never stored or forwarded), and a server answers it whatever the
@@ -65,7 +66,7 @@ constexpr uint16_t kTypeRendezvous = 14;
 constexpr bool knownType(uint16_t type) {
     return type == kTypeState || type == kTypeHello || type == kTypeChat || type == kTypePing || type == kTypeReact ||
            type == kTypeSummon || type == kTypeSummonReply || type == kTypeResult || type == kTypeActivity ||
-           type == kTypeVisit || type == kTypeAudio;
+           type == kTypeVisit || type == kTypeAudio || type == kTypeDamage;
 }
 constexpr size_t kMaxChatBytes = 120; // UTF-8, after cleaning
 constexpr size_t kNameLen = 24;
@@ -364,6 +365,26 @@ size_t writeVisit(char* buf, const Header& h, const Visit& v);
 // False for a short packet or a kind nobody knows.
 bool readVisit(const char* payload, size_t n, Visit& out);
 
+// type 16 DAMAGE: u32 id | u32 target | u8 kind | u8 amount.
+// The sender's strike landed on the player whose session id is `target`. Everyone receives it (the host and
+// servers forward it like any packet); only `target` acts, and only when they allow hits (their HELLO has
+// kHelloAllowHits), the sender's last known position fits the strike (strike_math.h) and the cooldowns allow.
+// `amount` is the sender's idea of the damage (1..kMaxDamageAmount); the receiver always applies one hit point.
+// Sent a few times like PING, `id` makes the repeats one event. Older versions drop the type and never set
+// kHelloAllowHits, so nobody sends them one.
+enum DamageKind : uint8_t { kDamagePunch = 0, kDamageKick = 1 };
+constexpr uint8_t kMaxDamageAmount = 5;
+struct Damage {
+    uint32_t id = 0;
+    uint32_t target = 0;
+    uint8_t kind = kDamagePunch;
+    uint8_t amount = 1;
+};
+size_t writeDamage(char* buf, const Header& h, const Damage& d);
+// False for a short packet, a kind nobody knows, or an amount of 0 or above kMaxDamageAmount.
+bool readDamage(const char* payload, size_t n, Damage& out);
+
+
 // type 14 RENDEZVOUS: u8 op | u8 0 | u16 port | u32 ip | u64 cookie (16 bytes; ip and port in host byte order).
 // Hole punching without a relay: a dedicated server only introduces a host and a joiner to each other; their game
 // traffic goes directly between them.
@@ -420,6 +441,8 @@ constexpr uint8_t kHelloServer = 2;
 constexpr uint8_t kHelloMembersHard = 4;
 // bit 3: the sender wants to be asked before anyone goes to them (VISIT). Passed on as it is.
 constexpr uint8_t kHelloAskVisit = 8;
+// bit 4: the sender lets other players' strikes hurt them (DAMAGE). Passed on as it is; strikes go only to players who set it.
+constexpr uint8_t kHelloAllowHits = 16;
 // `wear`: what a player whose look is 0 (Faith) changed about her outfit; 0 = nothing, each viewer
 // shows her as in their own game. The bits are game::models::Wear. Hosts and servers pass the byte on
 // with the rest of the packet; older versions do not send it and ignore it.

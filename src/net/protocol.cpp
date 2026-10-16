@@ -406,6 +406,27 @@ bool readVisit(const char* payload, size_t n, Visit& out) {
     return true;
 }
 
+size_t writeDamage(char* buf, const Header& h, const Damage& d) {
+    char* p = buf;
+    put(p, h);
+    put(p, d.id);
+    put(p, d.target);
+    put(p, d.kind);
+    put(p, d.amount);
+    return static_cast<size_t>(p - buf);
+}
+
+bool readDamage(const char* payload, size_t n, Damage& out) {
+    const char* p = payload;
+    const char* end = payload + n;
+    Damage d;
+    if (!get(p, end, d.id) || !get(p, end, d.target) || !get(p, end, d.kind) || !get(p, end, d.amount) ||
+        d.kind > kDamageKick || d.amount == 0 || d.amount > kMaxDamageAmount)
+        return false;
+    out = d;
+    return true;
+}
+
 size_t writeInfoRequest(char* buf, const Header& h) {
     memset(buf, 0, kInfoRequestSize);
     memcpy(buf, &h, sizeof(h));

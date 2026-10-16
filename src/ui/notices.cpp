@@ -10,6 +10,7 @@
 
 #include "core/config.h"
 #include "imgui.h"
+#include "game/combat.h"
 #include "net/net.h"
 #include "ui/overlay.h"
 
@@ -32,6 +33,7 @@ void push(std::string text) {
 }
 
 void draw() {
+    { const std::string hit = game::combat::takeNotice(); if (!hit.empty()) push(hit); } // hits taken (always shown)
     // Track arrivals and departures even while notices are off, so turning them on does not
     // announce everyone at once.
     std::unordered_map<uint32_t, std::string> now;

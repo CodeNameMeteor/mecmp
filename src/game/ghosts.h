@@ -49,5 +49,7 @@ std::string status();
 std::vector<uint32_t> shownPeers();
 // A currently shown native client character, for positional vocal sources.
 uintptr_t clientCharacter(uint32_t peer);
+// The server character of the ghost that shows `peer` (null when none): the "attacker" of a hit that came from them.
+void* serverCharacter(uint32_t peer);
 
 } // namespace mecmp::game::ghosts

@@ -43,6 +43,11 @@ jobs:
           g++ -std=c++17 -Wall -Wextra -Isrc -fsanitize=address,undefined -fno-sanitize-recover=undefined -g \
             tests/pose_test.cpp -o pose_test
           ./pose_test
+      - name: Strike maths test (Linux, sanitizers)
+        run: |
+          g++ -std=c++17 -Wall -Wextra -Isrc -fsanitize=address,undefined -fno-sanitize-recover=undefined -g \
+            tests/strike_test.cpp -o strike_test
+          ./strike_test
 
   windows-build:
     runs-on: ubuntu-24.04

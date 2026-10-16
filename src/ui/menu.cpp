@@ -563,6 +563,27 @@ void privacySection() {
         ImGui::SetTooltip("Off: anyone can use Go to on you.\n"
                           "On: a player who picks Go to on you waits until you say yes (hold the summon accept key,\n"
                           "or the decline key for no). Older versions of the mod still go to you without asking.");
+    static const char* const kHitLabels[] = {"Off", "Hurt me, but never below 1 HP", "Hurt me, even knock me out"};
+    int taken = cfg->hitsTaken < 0 || cfg->hitsTaken > config::kHitsLethal ? 0 : cfg->hitsTaken;
+    ImGui::SetNextItemWidth(280.f);
+    if (ImGui::BeginCombo("Other players can hit me", kHitLabels[taken])) {
+        for (int i = 0; i <= config::kHitsLethal; ++i)
+            if (ImGui::Selectable(kHitLabels[i], i == taken) && i != taken)
+                config::change([i](config::Settings& c) { c.hitsTaken = i; });
+        ImGui::EndCombo();
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("A punch or kick from another player that lands on you takes away one hit point.\n"
+                          "Off: nothing happens (the default).\n"
+                          "Hurt me, but never below 1 HP: you lose health, but a hit can never knock you out.\n"
+                          "Hurt me, even knock me out: the hit that takes your last hit point knocks you out.\n"
+                          "Only players who turned on \"My punches and kicks hurt other players\" can hit you.");
+    bool deal = cfg->dealHits;
+    if (ImGui::Checkbox("My punches and kicks hurt other players", &deal))
+        config::change([deal](config::Settings& c) { c.dealHits = deal; });
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("A punch or kick of yours that lands on another player takes away one of their hit points.\n"
+                          "It only works on players who allowed it in their own settings.");
 }
 
 // Display tab: sizes, what is drawn in the game, voice.

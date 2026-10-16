@@ -68,6 +68,8 @@ constexpr const char* kDefaultIni =
     "allow_forced_summon=0\r\n"
     "; 1 = players who use Go to on you wait until you say yes (the summon accept / decline keys); 0 = anyone may\r\n"
     "ask_before_go_to=0\r\n"
+    "; 1 = see the host's time of day (sky and light) while you join a player's session; 0 = keep your own\r\n"
+    "sync_time_of_day=1\r\n"
     "; 1 = share your EA online id and profile name with the session, so the game's map shows your Runner Tag\r\n"
     ";     where you are (on the others' maps; needs online services such as Beat Revival). 0 = don't share\r\n"
     "share_profile=0\r\n"
@@ -570,6 +572,7 @@ void load(const std::wstring& dir) {
     s.playersPad = readString(ini, L"ui", L"players_pad", "DOWN+RB");
     s.hardSummonGraceMs = clampInt(readInt(ini, L"ui", L"hard_summon_grace_ms", 5000), 0, 15000);
     s.allowForcedSummon = readInt(ini, L"player", L"allow_forced_summon", 0) != 0;
+    s.syncTimeOfDay = readInt(ini, L"player", L"sync_time_of_day", 1) != 0;
     s.askBeforeVisit = readInt(ini, L"player", L"ask_before_go_to", 0) != 0;
     s.shareProfile = readInt(ini, L"player", L"share_profile", 0) != 0;
     s.dealHits = readInt(ini, L"combat", L"deal_hits", 0) != 0;
@@ -751,6 +754,7 @@ void applyPending() {
     put(L"ui", L"players_pad", snapshot->playersPad);
     put(L"ui", L"hard_summon_grace_ms", std::to_string(snapshot->hardSummonGraceMs));
     put(L"player", L"allow_forced_summon", snapshot->allowForcedSummon ? "1" : "0");
+    put(L"player", L"sync_time_of_day", snapshot->syncTimeOfDay ? "1" : "0");
     put(L"player", L"ask_before_go_to", snapshot->askBeforeVisit ? "1" : "0");
     put(L"player", L"share_profile", snapshot->shareProfile ? "1" : "0");
     put(L"combat", L"deal_hits", snapshot->dealHits ? "1" : "0");

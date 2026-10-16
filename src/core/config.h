@@ -74,6 +74,7 @@ struct Settings {
     // [player]
     bool shareProfile = false;            // send your EA online id and profile name, so others' maps show your Runner Tag
     bool allowForcedSummon = false;       // a hard summon from the host (or a member it allows) takes you after a countdown
+    bool syncTimeOfDay = true;            // joining a player host: use its time of day (game/time_of_day.h)
     bool askBeforeVisit = false;          // Go to on you waits for your yes (VISIT, net/protocol.h)
     // [combat]
     bool dealHits = false;                // your strikes that land on another player hurt them (DAMAGE, net/protocol.h)

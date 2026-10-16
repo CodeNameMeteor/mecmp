@@ -20,6 +20,16 @@
 - **Known limit:** a player knocked out by another player gets no death animation (they stand, then respawn); one
   knocked out by an enemy does. Not found yet (the damage data matches an enemy's melee hit).
 
+### Time of day
+- **Everyone sees the host's sky.** When you join a player's session, your time of day (sky, sun, light) follows
+  the host's. The host's clock goes with its HELLO once a second, and your clock is set to it when they are more
+  than a few seconds apart. *You* tab: *Use the host's time of day* (`[player] sync_time_of_day`, on by default)
+  turns it off. A dedicated server has no time of day of its own, so there everyone keeps theirs. Older versions
+  ignore it.
+- **Missions keep their own time.** A mission sets the clock itself. When the clock is held, or jumps without the
+  mod having set it, that player's time is left alone (and a host in that state sends none) for 5 minutes after the
+  last jump, so the mod and the mission do not fight over the sky.
+
 ### Runs
 - **No teleports in or out of a run, from anywhere.** The players panel already refused while you are in a
   time trial or dash; now the menu's *Go to* / *Ask to go*, *Summon* buttons, the "Go back?" hold after a summon

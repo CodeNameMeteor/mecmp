@@ -951,6 +951,43 @@ static void testRendezvous() {
     CHECK(!protocol::readRendezvous(buf + sizeof(h), n - sizeof(h), out));
 }
 
+static void testHelloTimeOfDay() {
+    protocol::Header h{protocol::kMagic, protocol::kProtocol, protocol::kTypeHello, 1, 1};
+    char buf[protocol::kMaxPacket];
+    std::string name;
+    uint32_t look = 0;
+    uint8_t flags = 0, wear = 0;
+    protocol::OnlineProfile prof;
+    float t = 0.f;
+    // Without a profile: the time right after wear.
+    size_t n = protocol::writeHello(buf, h, "a", 0, 1, 0, nullptr, 18817.5f);
+    CHECK(protocol::readHello(buf + sizeof(h), n - sizeof(h), name, look, &flags, &wear, &prof, &t));
+    CHECK(t == 18817.5f && prof.id == 0);
+    // With a profile: after it.
+    protocol::OnlineProfile mine;
+    mine.id = 42;
+    std::strcpy(mine.name, "Runner");
+    n = protocol::writeHello(buf, h, "a", 0, 1, 0, &mine, 43200.f);
+    CHECK(protocol::readHello(buf + sizeof(h), n - sizeof(h), name, look, &flags, &wear, &prof, &t));
+    CHECK(t == 43200.f && prof.id == 42);
+    // None (older versions, joiners) and a profile alone: no time.
+    n = protocol::writeHello(buf, h, "a", 0, 1, 0, &mine);
+    CHECK(protocol::readHello(buf + sizeof(h), n - sizeof(h), name, look, &flags, &wear, &prof, &t));
+    CHECK(t < 0.f && prof.id == 42);
+    n = protocol::writeHello(buf, h, "a");
+    CHECK(protocol::readHello(buf + sizeof(h), n - sizeof(h), name, look, &flags, &wear, &prof, &t));
+    CHECK(t < 0.f);
+    // Not a time of day: not written, not read.
+    const size_t plain = protocol::writeHello(buf, h, "a");
+    CHECK(protocol::writeHello(buf, h, "a", 0, 0, 0, nullptr, 90000.f) == plain);
+    CHECK(protocol::writeHello(buf, h, "a", 0, 0, 0, nullptr, NAN) == plain);
+    n = protocol::writeHello(buf, h, "a", 0, 0, 0, nullptr, 100.f);
+    const float bad = 1e9f;
+    memcpy(buf + n - sizeof(float), &bad, sizeof(bad));
+    CHECK(protocol::readHello(buf + sizeof(h), n - sizeof(h), name, look, &flags, &wear, &prof, &t));
+    CHECK(t < 0.f);
+}
+
 int main() {
     testRendezvous();
     testResult();
@@ -981,6 +1018,7 @@ int main() {
     testJoinCodes();
     testUtf8Prefix();
     testHelloName();
+    testHelloTimeOfDay();
     testReadState();
     testAudioPacket();
     testLimitPose();

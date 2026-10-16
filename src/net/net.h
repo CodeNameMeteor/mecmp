@@ -140,6 +140,11 @@ std::vector<std::string> takeResults();
 // started; kind protocol::kActivityNone = none (sent a few times so the others' name tags clear). Any thread.
 void setActivity(uint8_t kind, uint32_t startedTick, const std::string& title);
 bool inRun(); // we are in a run now (setActivity's kind is not kActivityNone). Any thread.
+// Time of day, seconds since midnight (game/time_of_day.h). setTimeOfDay: our clock, sent with our HELLO while we
+// host (below 0 = none). hostTimeOfDay: the host's, while we join a player host and its HELLO carried one in the
+// last 5 s. Any thread.
+void setTimeOfDay(float seconds);
+bool hostTimeOfDay(float& seconds);
 // Our chat box is open: a flag in our STATE packets, shown by the others' name tags. Any thread.
 void setTyping(bool typing);
 

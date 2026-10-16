@@ -16,6 +16,7 @@
 #include "game/players_map.h"
 #include "game/runs.h"
 #include "game/combat.h"
+#include "game/time_of_day.h"
 #include "game/teleport.h"
 #include "game/hooks.h"
 #include "game/level.h"
@@ -65,6 +66,7 @@ void onTick(void* world, float dt) {
     { prof::Scope s(prof::Ping); game::ping::tick(); }
     { prof::Scope s(prof::Models); game::models::tick(); }
     if (n % 30 == 0) game::runs::serverTick(); // registers our run listener once the server context exists
+    game::time_of_day::tick();                 // about once a second: send our clock, or follow the host's
     if (n % 60 == 0) game::players_map::publishOwnProfile(); // every ~2 s: online id (Beat Revival) and the setting
 }
 

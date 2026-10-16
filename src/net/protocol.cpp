@@ -678,6 +678,29 @@ uint64_t admissionCookie(const uint8_t key[16], uint32_t ip, uint16_t port, uint
     return siphash24(key, msg, sizeof(msg));
 }
 
+size_t writeRendezvous(char* buf, const Header& h, const Rendezvous& r) {
+    char* p = buf;
+    put(p, h);
+    put(p, r.op);
+    put(p, static_cast<uint8_t>(0));
+    put(p, r.port);
+    put(p, r.ip);
+    put(p, r.cookie);
+    return static_cast<size_t>(p - buf);
+}
+
+bool readRendezvous(const char* payload, size_t n, Rendezvous& out) {
+    const char* p = payload;
+    const char* end = payload + n;
+    Rendezvous r;
+    uint8_t pad = 0;
+    if (!get(p, end, r.op) || !get(p, end, pad) || !get(p, end, r.port) || !get(p, end, r.ip) || !get(p, end, r.cookie) ||
+        r.op > kRvUnknown)
+        return false;
+    out = r;
+    return true;
+}
+
 size_t writeCookie(char* buf, const Header& h, uint64_t cookie) {
     char* p = buf;
     put(p, h);

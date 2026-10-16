@@ -55,6 +55,9 @@ constexpr size_t kInfoRequestSize = 80;
 constexpr uint16_t kTypeChallenge = 11;
 constexpr uint16_t kTypeAnswer = 12;
 constexpr size_t kCookieLen = 8;
+// type 14 RENDEZVOUS (hole punching; see Rendezvous below): between a player and a dedicated server acting as
+// the go-between. Not a session packet: never stored or forwarded, and older versions drop it.
+constexpr uint16_t kTypeRendezvous = 14;
 // The packet types this version understands. Anything else is dropped before it can create state or
 // be forwarded, so a new type needs no protocol bump: older versions simply ignore it.
 constexpr bool knownType(uint16_t type) {
@@ -356,6 +359,28 @@ struct Visit {
 size_t writeVisit(char* buf, const Header& h, const Visit& v);
 // False for a short packet or a kind nobody knows.
 bool readVisit(const char* payload, size_t n, Visit& out);
+
+// type 14 RENDEZVOUS: u8 op | u8 0 | u16 port | u32 ip | u64 cookie (16 bytes; ip and port in host byte order).
+// Hole punching without a relay: a dedicated server only introduces a host and a joiner to each other; their game
+// traffic goes directly between them.
+//   kRvRegister   host -> server, every ~20 s while hosting (keeps the host's router mapping open as well)
+//   kRvIntroduce  joiner -> server: ip:port = the host it is joining (its join code)
+//   kRvChallenge  server -> sender: cookie to repeat (proves the sender's address, as admission does)
+//   kRvPeer       server -> host: ip:port = a joiner; server -> joiner: ip:port = the host, as the server sees it
+//   kRvUnknown    server -> joiner: no host with that address is registered here
+// Both sides then send to each other at once: the host a CHALLENGE (admission), the joiner its HELLO, and most
+// home routers let both through. A host registers and a joiner asks only with the right cookie, so nobody can
+// make the server (or a host) send to an address that did not ask.
+enum RendezvousOp : uint8_t { kRvRegister = 0, kRvIntroduce = 1, kRvChallenge = 2, kRvPeer = 3, kRvUnknown = 4 };
+constexpr size_t kRendezvousLen = 16;
+struct Rendezvous {
+    uint8_t op = kRvRegister;
+    uint32_t ip = 0;
+    uint16_t port = 0;
+    uint64_t cookie = 0;
+};
+size_t writeRendezvous(char* buf, const Header& h, const Rendezvous& r);
+bool readRendezvous(const char* payload, size_t n, Rendezvous& out); // false: short, or an op nobody knows
 
 // "ffd23c" or "#ffd23c" -> r, g, b. False (rgb untouched) for anything else.
 bool parseRgb(const std::string& hex, uint8_t rgb[3]);

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Player sounds (by ReGlitched)
+- **Hear other players.** Their footsteps, hand contacts, landings, breathing, effort grunts and combat sounds
+  play through the game's own audio, from where they are. *Players* tab: *Other players' game sounds* and a
+  distance (80 m by default). **Off by default** until it has been play-tested; turn it on to try it. Everyone
+  needs this version, and a dedicated server must be updated too. See `docs/PLAYER_AUDIO.md`.
+- **Stretched bodies are cut short.** Hosts and dedicated servers shorten limbs longer than `bone_reach`
+  (1 m by default, 0.5 to 2) before forwarding a pose, and every player also caps them at 2 m.
+
 ### Discord
 - **Finished runs are cleaned up with the session.** When the server empties, its dash and time-trial posts are
   deleted along with the joins and leaves (they used to stay). `webhook_keep_results=1` keeps them.

@@ -124,6 +124,7 @@ struct Member {
     DWORD lastSeen = 0;
     uint32_t session = 0;     // the session id this joiner speaks with (see handlePacket)
     proto::Decoder poseDecoder;
+    proto::Encoder poseEncoder; // re-encodes its checked poses: deltas stay deltas
     guard::Bucket bucket;     // how fast it may send (net/host_guard.h)
 };
 
@@ -819,6 +820,7 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
             if (peerLogAllowed()) MLOG("net: %s is now session %08x (restarted)", addrToString(from).c_str(), h.session);
             m->session = h.session;
             m->poseDecoder = {};
+            m->poseEncoder = {};
         }
         if (!m->bucket.take(GetTickCount())) { ++g_dropped; return; } // flooding: not forwarded, not processed
         // A joiner's HELLO goes on without the "I host" flag: only the host's own HELLO may set it.
@@ -830,10 +832,8 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
             }
             if (full) proto::commitBase(m->poseDecoder, state);
             if (!limitPose(state, config::get()->boneReach)) { ++g_dropped; return; }
-            // A sanitized full pose does not depend on the sender's original
-            // delta base, including for a player who joined midway through it.
-            proto::Encoder encoder;
-            n = static_cast<int>(proto::writeState(relay, h, state, encoder));
+            // Re-encoded with this joiner's own encoder: full every kFullEvery packets, deltas between.
+            n = static_cast<int>(proto::writeState(relay, h, state, m->poseEncoder));
             if (!n) { ++g_dropped; return; }
             out = relay;
         } else if (h.type == proto::kTypeAudio) {

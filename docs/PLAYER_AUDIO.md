@@ -7,11 +7,12 @@ and the updated server binary when using a dedicated server.
 ## Player sounds
 
 The Players tab has **Other players' game sounds**, a distance setting, and
-capture/playback counters. Defaults in `mecmp.ini`:
+capture/playback counters. It is off by default until playback has been play-tested;
+capture and sending still run, so a player who turns it on hears the others. Defaults in `mecmp.ini`:
 
 ```ini
 [audio]
-player_sounds=1
+player_sounds=0
 distance=80
 ```
 

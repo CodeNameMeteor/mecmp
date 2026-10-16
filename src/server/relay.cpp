@@ -146,6 +146,7 @@ void Relay::onPacket(const Addr& from, const char* buf, size_t n, uint32_t nowMs
         log_("player " + hex(m->session) + " '" + m->name + "' is now " + hex(h.session) + " (restarted)");
         m->session = h.session;
         m->poseDecoder = {};
+        m->poseEncoder = {};
     }
     // Rate limit (token bucket).
     m->tokens += (nowMs - m->refillAt) * cfg_.ratePerSec / 1000.0;
@@ -166,8 +167,9 @@ void Relay::onPacket(const Addr& from, const char* buf, size_t n, uint32_t nowMs
         if (!proto::readState(payload, len, m->poseDecoder, state, full)) { ++stats_.dropped; return; }
         if (full) proto::commitBase(m->poseDecoder, state);
         if (!net::limitPose(state, cfg_.boneReach)) { ++stats_.dropped; return; }
-        proto::Encoder encoder;
-        n = proto::writeState(copy, h, state, encoder);
+        // This player's own encoder: a full pose goes out every kFullEvery packets, as the sender's would,
+        // and deltas in between (a fresh encoder each time made every forwarded pose a full one).
+        n = proto::writeState(copy, h, state, m->poseEncoder);
         if (!n) { ++stats_.dropped; return; }
         out = copy;
     } else if (h.type == proto::kTypeAudio) {

@@ -36,11 +36,13 @@ log=mecmp_server.log
 log_chat=1
 motd=Welcome! Be nice.
 max_per_ip=4
+bone_reach=1
 bans=bans.txt
 ```
 
 `motd` is a chat line each player gets when they join. `max_per_ip` limits players from one IP address
-(a household can share one; more than a few is usually someone filling the server).
+(a household can share one; more than a few is usually someone filling the server). `bone_reach` is the
+longest a limb's bone may be, in metres (0.5 to 2): poses are shortened to it before they are forwarded.
 
 ## Discord
 
@@ -202,6 +204,9 @@ changes can come back. There are no accounts to ban instead.
 - Only the server may say it hosts: the host, server and members-may-pull-in flags are cleared from
   forwarded HELLOs. Summons are forwarded as they are, and players do not trust a summon's "vouched"
   flag from a server, so there a hard summon only asks.
+- Poses are decoded and checked before they are forwarded: finite values, unit rotations, limbs no longer
+  than `bone_reach`. Player sounds (packet type 14) must be well formed. An older server drops those, so
+  players need an updated server to hear each other's footsteps through it.
 - A player silent for 10 s is dropped.
 - At most `max_per_ip` players from one IP address; banned addresses get nothing but the notice.
 

@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "net/joincode.h"
+#include "net/pose_limits.h"
 #include "net/protocol.h"
 #include "net/summon_policy.h"
 
@@ -827,6 +828,72 @@ static void testActivity() {
     CHECK(protocol::knownType(protocol::kTypeActivity));
 }
 
+static void testAudioPacket() {
+    protocol::Header h{protocol::kMagic, protocol::kProtocol, protocol::kTypeAudio, 1, 1};
+    PlayerAudio a;
+    a.id = 7; a.timeMs = 1000; a.event = 0x1234; a.source = 2; a.count = 2;
+    a.params[0] = {0x11, 1.5f};
+    a.params[1] = {0x22, -3.f};
+    char buf[protocol::kMaxPacket];
+    const size_t n = protocol::writeAudio(buf, h, a);
+    CHECK(n == sizeof(h) + 4 + 4 + 4 + 1 + 1 + 2 * 8);
+    PlayerAudio out;
+    CHECK(protocol::readAudio(buf + sizeof(h), n - sizeof(h), out));
+    CHECK(out.id == 7 && out.source == 2 && out.count == 2 && out.params[1].key == 0x22 && out.params[1].value == -3.f);
+    // Truncated or padded packets are refused.
+    for (size_t cut = 0; cut < n - sizeof(h); ++cut) CHECK(!protocol::readAudio(buf + sizeof(h), cut, out));
+    char longer[protocol::kMaxPacket];
+    memcpy(longer, buf, n);
+    longer[n] = 0;
+    CHECK(!protocol::readAudio(longer + sizeof(h), n + 1 - sizeof(h), out));
+    // Not written or accepted: no id, a source out of range, a repeated key, a non-finite value,
+    // parameters on a vocal, or a vocal event other than trigger/cancel.
+    auto refused = [&](PlayerAudio b) { char t[protocol::kMaxPacket]; return protocol::writeAudio(t, h, b) == 0 && !validAudio(b); };
+    PlayerAudio b = a; b.id = 0; CHECK(refused(b));
+    b = a; b.source = static_cast<uint8_t>(kPlayerAudioSourceCount); CHECK(refused(b));
+    b = a; b.params[1].key = 0x11; CHECK(refused(b));
+    b = a; b.params[0].value = NAN; CHECK(refused(b));
+    b = a; b.source = static_cast<uint8_t>(kPlayerSoundCount); b.event = kVocalTrigger; CHECK(refused(b)); // has params
+    b.count = 0; CHECK(validAudio(b));
+    b.event = 0x1234; CHECK(refused(b));
+}
+
+static void testLimitPose() {
+    PlayerState s{};
+    s.pos[0] = 100; s.pos[1] = 5; s.pos[2] = -40; s.yaw = 50.f; s.flags = kStateInLevel | 0x80;
+    s.boneCount = 4;
+    for (int i = 0; i < 4; ++i) { s.bones[i][3] = 3.f; s.bones[i][7] = 2.f; }
+    s.bones[2][1] = 5.f; // the hips: up to 2 m
+    s.bones[3][0] = 3.f; // a limb: up to the reach
+    CHECK(limitPose(s, 1.f));
+    CHECK(s.flags == kStateInLevel);                          // unknown flags cleared
+    CHECK(std::fabs(s.yaw) <= 3.1416f);                        // yaw wrapped
+    CHECK(s.bones[0][3] == 1.f && std::fabs(s.bones[0][7] - 1.f) < 1e-6f); // weight 1, unit rotation
+    CHECK(s.bones[1][0] == 100.f && s.bones[1][2] == -40.f);   // the trajectory bone follows the position
+    CHECK(std::fabs(s.bones[2][1] - 2.f) < 1e-5f);
+    CHECK(std::fabs(s.bones[3][0] - 1.f) < 1e-5f);
+    CHECK(limitPose(s, 50.f) && std::fabs(s.bones[3][0] - 1.f) < 1e-5f); // the reach is capped at 2 m
+    PlayerState bad = s; bad.bones[3][5] = NAN; CHECK(!limitPose(bad));
+    bad = s; for (int j = 4; j < 8; ++j) bad.bones[0][j] = 0; CHECK(!limitPose(bad)); // no rotation
+    bad = s; bad.boneCount = kMaxPoseBones + 1; CHECK(!limitPose(bad));
+
+    // A STATE with a flag this version does not know is still read (the flag is cleared).
+    protocol::Header h{protocol::kMagic, protocol::kProtocol, protocol::kTypeState, 1, 1};
+    PlayerState f{};
+    f.pos[0] = 1; f.flags = kStateInLevel | 0x40;
+    char buf[protocol::kMaxPacket];
+    protocol::Encoder enc;
+    const size_t n = protocol::writeState(buf, h, f, enc);
+    // writeState clears it too, so set it on the wire by hand (flags follow pos and yaw).
+    const uint32_t wire = kStateInLevel | 0x40;
+    memcpy(buf + sizeof(h) + 16, &wire, 4);
+    protocol::Decoder dec;
+    PlayerState out;
+    bool full = false;
+    CHECK(protocol::readState(buf + sizeof(h), n - sizeof(h), dec, out, full));
+    CHECK(out.flags == kStateInLevel);
+}
+
 int main() {
     testResult();
     testActivity();
@@ -856,6 +923,8 @@ int main() {
     testUtf8Prefix();
     testHelloName();
     testReadState();
+    testAudioPacket();
+    testLimitPose();
     if (g_failures == 0) std::printf("net tests: all passed\n");
     return g_failures == 0 ? 0 : 1;
 }

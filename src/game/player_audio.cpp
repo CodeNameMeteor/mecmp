@@ -290,6 +290,11 @@ bool install() {
 }
 void tick() {
     if (!g_installed) return;
+    // Both client replay updaters call this. One caller at a time, once per tick: the playing
+    // sounds below are not locked.
+    static std::mutex tickMutex;
+    std::unique_lock<std::mutex> tickLock(tickMutex, std::try_to_lock);
+    if (!tickLock) return;
     const DWORD now = GetTickCount();
     if (now == g_tickAt) return; // two replay updater passes share this frame
     g_tickAt = now;

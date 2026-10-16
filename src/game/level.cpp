@@ -6,6 +6,7 @@
 #include <map>
 #include <mutex>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "core/log.h"
@@ -18,6 +19,15 @@ void* g_playerSpawner = nullptr;
 void* g_ghostSpawner = nullptr;
 std::vector<void*> g_clientComps; // other ghosts' client replay components (reference setup source)
 std::vector<void*> g_ghostCands;  // every ghost-blueprint spawner seen (hooks and scans), for chooseGhostSpawner
+// chooseGhostSpawner has picked g_ghostSpawner. A spawner the game creates later is only a candidate then:
+// made current at once (as before), it was what the "keep the current one on a tie" rule compared against,
+// so a tie went to another spawner than the one our ghosts came from.
+bool g_ghostChosen = false;
+// Spawners that gave no character several times in a row are not chosen again (until the level changes).
+std::map<void*, int> g_spawnFails;
+// By address and data: the game reuses memory, and a later spawner at the same address is another one.
+std::vector<std::pair<void*, uintptr_t>> g_badSpawners;
+constexpr int kMaxSpawnFails = 3;
 
 bool clientCompAlive(uintptr_t c) {
     uintptr_t vt = 0;
@@ -59,8 +69,11 @@ void considerSpawner(void* entity, uintptr_t data, bool fromScan) {
         if (!fromScan || !g_playerSpawner || !spawnerAliveUnlocked(g_playerSpawner)) g_playerSpawner = entity;
         VLOG("level: player spawner %p%s", entity, fromScan ? " (found by scan)" : "");
     } else if (name == kGhostBlueprint) {
-        // live capture: the newest one, until chooseGhostSpawner has looked at all of them
-        if (!fromScan || !g_ghostSpawner || !spawnerAliveUnlocked(g_ghostSpawner)) g_ghostSpawner = entity;
+        // live capture: the newest one, until chooseGhostSpawner has looked at all of them (after that, only
+        // when the chosen one is gone; otherwise the next choice decides)
+        const bool gone = !g_ghostSpawner || !spawnerAliveUnlocked(g_ghostSpawner);
+        if (gone) g_ghostChosen = false;
+        if ((!fromScan && !g_ghostChosen) || gone) g_ghostSpawner = entity;
         if (g_ghostCands.size() < 64 && std::find(g_ghostCands.begin(), g_ghostCands.end(), entity) == g_ghostCands.end())
             g_ghostCands.push_back(entity);
         VLOG("level: ghost spawner %p%s", entity, fromScan ? " (found by scan)" : "");
@@ -157,6 +170,9 @@ void chooseGhostSpawner(const void* const* ours, size_t oursCount) {
         std::lock_guard<std::mutex> lock(g_m);
         cands = g_ghostCands;
         current = g_ghostSpawner;
+        for (const auto& bad : g_badSpawners)
+            if (mem::readOr<uintptr_t>(reinterpret_cast<uintptr_t>(bad.first) + Spawner_Data) == bad.second)
+                cands.erase(std::remove(cands.begin(), cands.end(), bad.first), cands.end());
     }
     struct Info { void* spawner; uintptr_t data; size_t holds; };
     std::vector<Info> alive;
@@ -197,11 +213,30 @@ void chooseGhostSpawner(const void* const* ours, size_t oursCount) {
     // The current one stays unless another is strictly better (or it is gone). A time trial brings a spawner of
     // its own that scores the same while the trial runs: switching on a tie flipped between the two every few
     // seconds, and ghosts made from the trial's spawner go with it when the trial ends.
+    std::lock_guard<std::mutex> lock(g_m);
     if (best && best != current && bestScore > currentScore) {
         MLOG("level: ghost spawner %p chosen among %llu (score %d; was %p)", best, static_cast<unsigned long long>(alive.size()),
              bestScore, current);
-        std::lock_guard<std::mutex> lock(g_m);
         g_ghostSpawner = best;
+    }
+    g_ghostChosen = g_ghostSpawner != nullptr;
+}
+
+void spawnResult(void* spawner, bool gotCharacter) {
+    std::lock_guard<std::mutex> lock(g_m);
+    if (gotCharacter) {
+        g_spawnFails.erase(spawner);
+        return;
+    }
+    if (++g_spawnFails[spawner] < kMaxSpawnFails) return;
+    g_spawnFails.erase(spawner);
+    const std::pair<void*, uintptr_t> bad{spawner, mem::readOr<uintptr_t>(reinterpret_cast<uintptr_t>(spawner) + Spawner_Data)};
+    if (std::find(g_badSpawners.begin(), g_badSpawners.end(), bad) == g_badSpawners.end() && g_badSpawners.size() < 64)
+        g_badSpawners.push_back(bad);
+    MLOG("level: ghost spawner %p gave no character %d times in a row; another one is chosen", spawner, kMaxSpawnFails);
+    if (g_ghostSpawner == spawner) {
+        g_ghostSpawner = nullptr; // the next choice (before the next spawn) takes the best of the others
+        g_ghostChosen = false;
     }
 }
 
@@ -212,6 +247,9 @@ void reset() {
         g_ghostSpawner = nullptr;
         g_clientComps.clear();
         g_ghostCands.clear();
+        g_ghostChosen = false;
+        g_spawnFails.clear();
+        g_badSpawners.clear();
     }
     models::reset();
 }

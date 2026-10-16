@@ -40,6 +40,9 @@ void* ghostSpawner();                 // the level's city-ghost spawner (always 
 // before every spawn: a hook that sees a newer spawner, or a scan that replaces a dead one, can change
 // the choice at any time.
 void chooseGhostSpawner(const void* const* ours, size_t oursCount);
+// Whether a spawn from `spawner` gave a character. After a few failures in a row the spawner is not
+// chosen again until the level changes (some spawners refuse, e.g. one that already holds its maximum).
+void spawnResult(void* spawner, bool gotCharacter);
 void* playerCharacter();              // local player's ServerCharacterEntity (game thread)
 bool spawnerAlive(void* spawner);
 bool characterAlive(void* character, void* spawner); // still in its spawner's spawned list

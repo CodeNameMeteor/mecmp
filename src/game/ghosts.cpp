@@ -46,6 +46,7 @@ struct Ghost {
     uint32_t peer = 0;          // player driving it (a free ghost keeps its last player's id)
     std::string name;           // that player's name: a reconnecting player gets their old ghost back
     void* character = nullptr;  // server PamServerCharacterEntity
+    uintptr_t charData = 0;     // its PamCharacterEntityData when spawned: how it is recognised later
     void* spawner = nullptr;
     void* clientChar = nullptr; // client PamClientCharacterEntity
     void* clientComp = nullptr; // client PamClientReplayPlayerComponent
@@ -89,7 +90,26 @@ std::mutex g_m;               // guards g_ghosts (client hooks read/write the cl
 std::vector<Ghost> g_ghosts;
 std::atomic<uint32_t> g_pendingPeer{0};
 std::atomic<DWORD> g_pendingAt{0};
-std::atomic<uintptr_t> g_ghostCharData{0}; // the ghost blueprint's PamCharacterEntityData
+std::atomic<uintptr_t> g_ghostCharData{0}; // the ghost blueprint's PamCharacterEntityData (of the current spawner)
+// Every ghost character data seen this level. Two spawners can hold different data objects: our ghosts from
+// the one before keep theirs, and their client characters must still count as ghosts.
+std::atomic<uintptr_t> g_knownCharData[4] = {};
+bool knownCharData(uintptr_t d) {
+    if (!d) return false;
+    if (d == g_ghostCharData.load()) return true;
+    for (const auto& k : g_knownCharData)
+        if (k.load() == d) return true;
+    return false;
+}
+void rememberCharData(uintptr_t d) {
+    if (!d || knownCharData(d)) return;
+    for (auto& k : g_knownCharData) {
+        uintptr_t empty = 0;
+        if (k.compare_exchange_strong(empty, d)) return;
+    }
+    for (size_t i = 0; i + 1 < 4; ++i) g_knownCharData[i] = g_knownCharData[i + 1].load(); // full: drop the oldest
+    g_knownCharData[3] = d;
+}
 std::atomic<uintptr_t> g_tiCharData{0};    // runtime TypeInfo of PamCharacterEntityData (set at startup)
 // Tick cost (P-2/P-4), shown by F9: sum and max over the current 10 s window, in microseconds.
 double g_costSum = 0, g_costMax = 0;    // game thread
@@ -116,9 +136,8 @@ bool claimWindowOpen() {
 bool clientCharIsGhost(void* ent) {
     const uintptr_t e = reinterpret_cast<uintptr_t>(ent);
     uintptr_t vt = 0, data = 0;
-    const uintptr_t want = g_ghostCharData.load();
     return e && mem::read(e, vt) && vt == rva(Vtbl_PamClientCharacterEntity) && mem::read(e + Character_Data, data) &&
-           (!want || data == want);
+           (!g_ghostCharData.load() || knownCharData(data));
 }
 
 // The entity a component belongs to: Component +0x08 = the owner's component collection, whose
@@ -301,7 +320,7 @@ void setGhostShader(Ghost& ghost, bool enabled) {
     memcpy(&vt, head, sizeof(vt));
     memcpy(&data, head + Character_Data, sizeof(data));
     const uint8_t current = head[ClientChar_GhostShader];
-    if (vt != rva(Vtbl_PamClientCharacterEntity) || data != g_ghostCharData.load() || current == static_cast<uint8_t>(enabled))
+    if (vt != rva(Vtbl_PamClientCharacterEntity) || !knownCharData(data) || current == static_cast<uint8_t>(enabled))
         return;
     // Character creation caches the definition's shader flag in each client entity.
     poke<uint8_t>(client + ClientChar_GhostShader, enabled ? 1 : 0);
@@ -394,6 +413,9 @@ void* spawnGhost(uint32_t peer, const std::string& name, uint32_t look, uint8_t 
         MLOG("ghost: no ghost spawner to spawn %08x from (not in a level, or not found yet)", peer);
         return nullptr;
     }
+    // The data the ghosts are recognised by; put back if this spawner gives no character (a failed spawn from
+    // another spawner made every ghost look destroyed: they froze where they were).
+    const uintptr_t dataBefore = g_ghostCharData.load();
     const uintptr_t sd = mem::readOr<uintptr_t>(reinterpret_cast<uintptr_t>(spawner) + Spawner_Data);
     const uintptr_t sbp = sd ? mem::readOr<uintptr_t>(sd + ReferenceObjectData_Blueprint) : 0;
     if (const uintptr_t d = sbp ? blueprintCharacterData(sbp) : 0) {
@@ -431,7 +453,9 @@ void* spawnGhost(uint32_t peer, const std::string& name, uint32_t look, uint8_t 
                 break;
             }
     }
+    level::spawnResult(spawner, ch != nullptr);
     if (!ch) {
+        g_ghostCharData = dataBefore;
         MLOG("ghost: the spawner returned no character for %08x", peer);
         return nullptr;
     }
@@ -441,6 +465,10 @@ void* spawnGhost(uint32_t peer, const std::string& name, uint32_t look, uint8_t 
             MLOG("ghost: ghost character data is %p, not %p as expected from the blueprint", reinterpret_cast<void*>(d),
                  reinterpret_cast<void*>(g_ghostCharData.load()));
         g_ghostCharData = d;
+        rememberCharData(d);
+        std::lock_guard<std::mutex> lock(g_m);
+        for (auto& g : g_ghosts)
+            if (g.character == ch) g.charData = d;
     }
     setTransform(ch, info.transform);
     keepGameCharacterLast(spawner);
@@ -701,8 +729,10 @@ void tick(uint64_t tick, uint64_t ticksInLevel) {
         std::lock_guard<std::mutex> lock(g_m);
         const uintptr_t data = g_ghostCharData.load();
         for (size_t i = 0; i < g_ghosts.size();) {
-            if (!g_ghosts[i].character || level::characterExists(g_ghosts[i].character, data)) { ++i; continue; }
-            logLostGhost(g_ghosts[i], data);
+            // Each ghost by its own data: a later spawn from another spawner may have changed the current one.
+            const uintptr_t own = g_ghosts[i].charData ? g_ghosts[i].charData : data;
+            if (!g_ghosts[i].character || level::characterExists(g_ghosts[i].character, own)) { ++i; continue; }
+            logLostGhost(g_ghosts[i], own);
             g_ghosts.erase(g_ghosts.begin() + static_cast<long>(i));
         }
     }
@@ -873,6 +903,7 @@ void levelChanged() {
     g_pendingAt = 0;
     g_lastSpawnAt = 0;
     g_ghostCharData = 0; // level data: the next level's ghost blueprint may use another object
+    for (auto& k : g_knownCharData) k = 0;
 }
 
 void requestSpawnOrRefresh() { g_reqSpawn = true; }

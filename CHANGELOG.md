@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Your look
+- **"Ghost" remembers your last ghost.** Switching to Faith and back to Ghost in the menu used to fall back to the default
+  RunVis ghost; now it returns to the style and color you had (saved as `[player] last_ghost`).
+
 ### Runs
 - **No teleports in or out of a run, from anywhere.** The players panel already refused while you are in a
   time trial or dash; now the menu's *Go to* / *Ask to go*, *Summon* buttons, the "Go back?" hold after a summon

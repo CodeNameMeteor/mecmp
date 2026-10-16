@@ -151,3 +151,7 @@ Push a tag `v<version>` matching `kVersion` in `src/app/mod.h` (e.g. `v0.9.0`). 
 builds the Windows package (mod, injector and server, without the developer keys) and the Linux server,
 and opens a **draft** GitHub release with them and that version's CHANGELOG section. Check it and
 publish it by hand.
+
+## Ai Disclosure 
+
+AI was used for a large portion of the code for this project, however it is thoroughly reviewed by humans and corrected before any changes reach the codebase

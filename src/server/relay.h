@@ -82,6 +82,7 @@ struct Event {
 
 struct Stats {
     uint64_t received = 0, relayed = 0, dropped = 0, infoAnswered = 0;
+    uint64_t introductions = 0; // hole punching: joiners introduced to a registered host
 };
 
 class Relay {
@@ -128,6 +129,9 @@ private:
     bool cookieValid(const Addr& from, uint64_t cookie, uint32_t nowMs) const;
     void onAnswer(const Addr& from, uint32_t session, const char* payload, size_t len, uint32_t nowMs);
     void admit(const Addr& from, uint32_t session, uint32_t nowMs);
+    // Hole punching (protocol.h, RENDEZVOUS): hosts register, joiners are introduced; nothing is relayed.
+    void onRendezvous(const Addr& from, uint32_t session, const char* payload, size_t len, uint32_t nowMs);
+    void sendRendezvous(const Addr& to, uint8_t op, const Addr& about, uint64_t cookie);
     bool blocked(const Addr& a, uint32_t nowMs);
     // A player's lines in the log: a few per window, so one player cannot fill the log.
     bool logAllowed(Member& m, uint32_t nowMs);
@@ -154,6 +158,18 @@ private:
     // Session ids of players who timed out: no other address may take them for sessionGraceMs.
     struct Reserved { uint32_t session; Addr addr; uint32_t until; };
     std::vector<Reserved> reserved_;
+public:
+    // A host registered for hole punching: its address as this server sees it.
+    struct Registered { Addr addr; uint32_t session; uint32_t lastSeen; uint32_t burstAt; int burst; };
+    const std::vector<Registered>& registered() const { return registered_; }
+    static constexpr uint32_t kRegisterTimeoutMs = 60000; // a host that stopped registering is forgotten
+    static constexpr size_t kMaxRegistered = 512;
+    static constexpr int kIntroBurst = 10;                // introductions to one host per kIntroWindowMs
+    static constexpr uint32_t kIntroWindowMs = 10000;
+private:
+    std::vector<Registered> registered_;
+    uint32_t rvLogAt_ = 0;
+    int rvLogBurst_ = 0;
     struct OutChat { uint32_t id; std::string text; int left; bool targeted; Addr to; };
     std::deque<OutChat> chat_;
     uint32_t chatId_;

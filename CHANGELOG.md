@@ -10,6 +10,18 @@
 - **Stretched bodies are cut short.** Hosts and dedicated servers shorten limbs longer than `bone_reach`
   (1 m by default, 0.5 to 2) before forwarding a pose, and every player also caps them at 2 m.
 
+### Hosting without port forwarding
+- **Hole punching.** A host registers with a dedicated server ([net] `rendezvous` in mecmp.ini, the community
+  server by default); when someone joins with the host's code, the server tells each of them the other's address
+  and both send at once, which most home routers let through. Only that introduction goes through the server:
+  the game's traffic goes straight between the players, as before. When it does not work (some mobile and
+  carrier networks), joining is exactly as it was: the host needs UDP 47800 forwarded (or UPnP), or everyone
+  joins a dedicated server, and the log now says so. Host, joiner and the rendezvous server all need this
+  version (new packet type 14; older ones ignore it). `rendezvous=` (empty) turns it off.
+- The server's `status` command counts the hosts registered for hole punching and the introductions made.
+- **`[net] upnp=0`** stops the mod from asking the router to open the port (to test hole punching on its own,
+  or if you would rather it did not).
+
 ### Discord
 - **Finished runs are cleaned up with the session.** When the server empties, its dash and time-trial posts are
   deleted along with the joins and leaves (they used to stay). `webhook_keep_results=1` keeps them.

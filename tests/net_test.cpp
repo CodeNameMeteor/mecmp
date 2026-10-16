@@ -894,7 +894,26 @@ static void testLimitPose() {
     CHECK(out.flags == kStateInLevel);
 }
 
+static void testRendezvous() {
+    char buf[protocol::kMaxPacket];
+    const protocol::Header h{protocol::kMagic, protocol::kProtocol, protocol::kTypeRendezvous, 9, 1};
+    CHECK(!protocol::knownType(protocol::kTypeRendezvous)); // never a session packet
+    protocol::Rendezvous in, out;
+    in.op = protocol::kRvPeer;
+    in.ip = 0x0a000001u;
+    in.port = 47800;
+    in.cookie = 0x1122334455667788ull;
+    const size_t n = protocol::writeRendezvous(buf, h, in);
+    CHECK(n == sizeof(h) + protocol::kRendezvousLen);
+    CHECK(protocol::readRendezvous(buf + sizeof(h), n - sizeof(h), out));
+    CHECK(out.op == protocol::kRvPeer && out.ip == 0x0a000001u && out.port == 47800 && out.cookie == 0x1122334455667788ull);
+    for (size_t cut = 0; cut < protocol::kRendezvousLen; ++cut) CHECK(!protocol::readRendezvous(buf + sizeof(h), cut, out));
+    buf[sizeof(h)] = 5; // an op nobody knows
+    CHECK(!protocol::readRendezvous(buf + sizeof(h), n - sizeof(h), out));
+}
+
 int main() {
+    testRendezvous();
     testResult();
     testActivity();
     testKnownTypes();

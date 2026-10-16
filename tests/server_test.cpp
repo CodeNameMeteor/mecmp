@@ -333,6 +333,27 @@ static void testPosesStayDeltas() {
     }
 }
 
+// Player sounds (type 15) are checked and forwarded like other session packets; 14 is the rendezvous.
+static void testAudioForwarded() {
+    CHECK(proto::kTypeAudio != proto::kTypeRendezvous && proto::knownType(proto::kTypeAudio));
+    Harness t;
+    auto hA = hello(1, "alice"), hB = hello(2, "bob");
+    t.deliver(A, hA, 0);
+    t.deliver(B, hB, 0);
+    t.sent.clear();
+    mecmp::net::PlayerAudio a;
+    a.id = 1; a.timeMs = 5; a.event = 0x99; a.source = 0;
+    char buf[proto::kMaxPacket];
+    const proto::Header h{proto::kMagic, proto::kProtocol, proto::kTypeAudio, 1, 30};
+    const size_t n = proto::writeAudio(buf, h, a);
+    t.deliver(A, std::vector<char>(buf, buf + n), 50);
+    CHECK(t.sentTo(B) == 1 && t.sentTo(A) == 0);
+    t.sent.clear();
+    buf[sizeof(h) + 12] = static_cast<char>(0xff); // the source: out of range
+    t.deliver(A, std::vector<char>(buf, buf + n), 60);
+    CHECK(t.sentTo(B) == 0);
+}
+
 static void testKickAndSay() {
     Harness t;
     auto hA = hello(1, "alice"), hB = hello(2, "bob");
@@ -542,6 +563,91 @@ static void testCookieAddressAndAge() {
     auto late = answerPacket(1, oldCookie);
     old.relay.onPacket(A, late.data(), late.size(), 130000); // minute 2: the minute-0 cookie is too old
     CHECK(old.relay.members().empty());
+}
+
+// Hole punching: a RENDEZVOUS packet from `from` (op, ip:port), answered with a challenge first and then
+// repeated with the cookie, as the game does. Returns the server's answers to `from` after the cookie.
+static std::vector<proto::Rendezvous> rendezvous(Harness& t, const Addr& from, uint8_t op, const Addr& about, uint32_t now) {
+    char buf[proto::kMaxPacket];
+    const proto::Header h{proto::kMagic, proto::kProtocol, proto::kTypeRendezvous, from.port, 1};
+    proto::Rendezvous r;
+    r.op = op;
+    r.ip = about.ip;
+    r.port = about.port;
+    auto answers = [&](size_t from_i) {
+        std::vector<proto::Rendezvous> out;
+        for (size_t i = from_i; i < t.sent.size(); ++i) {
+            if (!(t.sent[i].to == from)) continue;
+            proto::Header sh;
+            memcpy(&sh, t.sent[i].data.data(), sizeof(sh));
+            proto::Rendezvous a;
+            if (sh.type == proto::kTypeRendezvous &&
+                proto::readRendezvous(t.sent[i].data.data() + sizeof(sh), t.sent[i].data.size() - sizeof(sh), a))
+                out.push_back(a);
+        }
+        return out;
+    };
+    size_t before = t.sent.size();
+    t.relay.onPacket(from, buf, proto::writeRendezvous(buf, h, r), now);
+    auto first = answers(before);
+    if (first.size() == 1 && first[0].op == proto::kRvChallenge) { // no cookie yet: the challenge, then again with it
+        r.cookie = first[0].cookie;
+        before = t.sent.size();
+        t.relay.onPacket(from, buf, proto::writeRendezvous(buf, h, r), now);
+        return answers(before);
+    }
+    return first;
+}
+
+static void testRendezvous() {
+    const Addr host{0x05060708, 47800}, joiner{0x0a0b0c0d, 51234}, other{0x0a0b0c0e, 40000};
+    Harness t;
+    // A host registers (after the cookie); nothing comes back but it is now known.
+    CHECK(rendezvous(t, host, proto::kRvRegister, Addr{}, 1000).empty());
+    CHECK(t.relay.registered().size() == 1 && t.relay.registered()[0].addr == host);
+    // A joiner naming that host: both are told about the other.
+    t.sent.clear();
+    auto got = rendezvous(t, joiner, proto::kRvIntroduce, host, 2000);
+    CHECK(got.size() == 1 && got[0].op == proto::kRvPeer && got[0].ip == host.ip && got[0].port == host.port);
+    bool hostTold = false;
+    for (const auto& s : t.sent) {
+        if (!(s.to == host)) continue;
+        proto::Header sh;
+        memcpy(&sh, s.data.data(), sizeof(sh));
+        proto::Rendezvous a;
+        hostTold = hostTold || (proto::readRendezvous(s.data.data() + sizeof(sh), s.data.size() - sizeof(sh), a) &&
+                                a.op == proto::kRvPeer && a.ip == joiner.ip && a.port == joiner.port);
+    }
+    CHECK(hostTold);
+    CHECK(t.relay.stats().introductions == 1);
+    // The join code's port can differ from the one the server sees: the only host at that IP is used.
+    got = rendezvous(t, other, proto::kRvIntroduce, Addr{host.ip, 47801}, 3000);
+    CHECK(got.size() == 1 && got[0].op == proto::kRvPeer && got[0].port == host.port);
+    // Nobody registered at that address: unknown.
+    got = rendezvous(t, joiner, proto::kRvIntroduce, Addr{0x01020304, 47800}, 4000);
+    CHECK(got.size() == 1 && got[0].op == proto::kRvUnknown);
+    // Without the right cookie nothing is introduced (only a challenge goes back to the sender).
+    {
+        char buf[proto::kMaxPacket];
+        const proto::Header h{proto::kMagic, proto::kProtocol, proto::kTypeRendezvous, 5, 1};
+        proto::Rendezvous r;
+        r.op = proto::kRvIntroduce;
+        r.ip = host.ip;
+        r.port = host.port;
+        r.cookie = 12345;
+        t.sent.clear();
+        t.relay.onPacket(Addr{0x0c0c0c0c, 1}, buf, proto::writeRendezvous(buf, h, r), 5000);
+        CHECK(t.sentTo(host) == 0 && t.sent.size() == 1);
+    }
+    // At most kIntroBurst introductions to one host per window.
+    t.sent.clear();
+    for (int i = 0; i < 20; ++i) rendezvous(t, Addr{0x0d000000u + static_cast<uint32_t>(i), 1000}, proto::kRvIntroduce, host, 6000);
+    CHECK(t.sentTo(host) <= static_cast<size_t>(server::Relay::kIntroBurst));
+    // A host that stops registering is forgotten.
+    t.relay.tick(1000 + server::Relay::kRegisterTimeoutMs + 1);
+    CHECK(t.relay.registered().empty());
+    // Not a session packet: nobody became a player.
+    CHECK(t.relay.members().empty());
 }
 
 static void testActivityLog() {
@@ -825,12 +931,14 @@ int main() {
     testKickBlocksWholeAddress();
     testSessionGrace();
     testActivityLog();
+    testRendezvous();
     testLogBudget();
     testFullNoticeAndPerIp();
     testMotd();
     testMirror();
     testForwardsToOthers();
     testPosesStayDeltas();
+    testAudioForwarded();
     testReactForwarded();
     testSummonForwarded();
     testHelloFlagsCleared();

@@ -534,7 +534,9 @@ void runCommand(const std::string& cmd, mecmp::server::Relay& relay, mecmp::serv
         logLine("'" + relay.config().name + "': " +
                 std::to_string(relay.members().size()) + " players, " + std::to_string(s.received) + " received, " +
                 std::to_string(s.relayed) + " relayed, " + std::to_string(s.dropped) + " dropped, " +
-                std::to_string(s.infoAnswered) + " server-list queries answered");
+                std::to_string(s.infoAnswered) + " server-list queries answered, " +
+                std::to_string(relay.registered().size()) + " host(s) registered for hole punching, " +
+                std::to_string(s.introductions) + " introduction(s)");
     } else if (verb == "reset") {
         resetServer(relay, webhook);
     } else if (verb == "help") {

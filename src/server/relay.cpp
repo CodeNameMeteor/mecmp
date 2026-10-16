@@ -122,6 +122,11 @@ void Relay::onPacket(const Addr& from, const char* buf, size_t n, uint32_t nowMs
         }
         return;
     }
+    if (h.magic == proto::kMagic && h.protocol == proto::kProtocol && h.type == proto::kTypeRendezvous) {
+        if (bans_.count(from.ip)) { ++stats_.dropped; return; }
+        onRendezvous(from, h.session, buf + sizeof(h), n - sizeof(h), nowMs);
+        return;
+    }
     if (h.magic != proto::kMagic || h.protocol != proto::kProtocol || !(proto::knownType(h.type) || h.type == proto::kTypeAnswer)) {
         ++stats_.dropped;
         return;
@@ -301,6 +306,65 @@ void Relay::admit(const Addr& from, uint32_t session, uint32_t nowMs) {
     haveHello_ = false; // greet the newcomer right away (it learns the session and our name)
 }
 
+void Relay::sendRendezvous(const Addr& to, uint8_t op, const Addr& about, uint64_t cookie) {
+    char buf[proto::kMaxPacket];
+    const proto::Header h{proto::kMagic, proto::kProtocol, proto::kTypeRendezvous, session_, ++seq_};
+    proto::Rendezvous r;
+    r.op = op;
+    r.ip = about.ip;
+    r.port = about.port;
+    r.cookie = cookie;
+    send_(to, buf, proto::writeRendezvous(buf, h, r));
+}
+
+// A host registers (and keeps registering) so joiners can be introduced to it; a joiner asks to be introduced.
+// Both need the cookie for their address first (as admission): the server only ever sends to an address that
+// asked, and introduces a joiner only to a host that registered from the address the joiner names.
+void Relay::onRendezvous(const Addr& from, uint32_t session, const char* payload, size_t len, uint32_t nowMs) {
+    proto::Rendezvous r;
+    if (!proto::readRendezvous(payload, len, r) || (r.op != proto::kRvRegister && r.op != proto::kRvIntroduce)) {
+        ++stats_.dropped;
+        return;
+    }
+    if (!cookieValid(from, r.cookie, nowMs)) {
+        sendRendezvous(from, proto::kRvChallenge, Addr{}, proto::admissionCookie(cookieKey_, from.ip, from.port, nowMs / 60000));
+        return;
+    }
+    auto note = [&](const std::string& line) { // a few lines a minute at most
+        if (nowMs - rvLogAt_ > 60000) { rvLogAt_ = nowMs; rvLogBurst_ = 0; }
+        if (++rvLogBurst_ <= 20) log_(line);
+    };
+    if (r.op == proto::kRvRegister) {
+        for (auto& g : registered_)
+            if (g.addr == from) { g.lastSeen = nowMs; g.session = session; return; }
+        if (registered_.size() >= kMaxRegistered) { ++stats_.dropped; return; }
+        registered_.push_back({from, session, nowMs, nowMs, 0});
+        note("rendezvous: a host at " + toString(from) + " registered for hole punching");
+        return;
+    }
+    // Introduce: the host the joiner names (its join code), else the only registered host at that IP (the port a
+    // router shows us can differ from the one in the code).
+    const Addr target{r.ip, r.port};
+    Registered* host = nullptr;
+    size_t sameIp = 0;
+    Registered* byIp = nullptr;
+    for (auto& g : registered_) {
+        if (g.addr == target) host = &g;
+        if (g.addr.ip == target.ip) { ++sameIp; byIp = &g; }
+    }
+    if (!host && sameIp == 1) host = byIp;
+    if (!host || host->addr == from) {
+        sendRendezvous(from, proto::kRvUnknown, target, 0);
+        return;
+    }
+    if (nowMs - host->burstAt > kIntroWindowMs) { host->burstAt = nowMs; host->burst = 0; }
+    if (++host->burst > kIntroBurst) { ++stats_.dropped; return; }
+    sendRendezvous(host->addr, proto::kRvPeer, from, 0);
+    sendRendezvous(from, proto::kRvPeer, host->addr, 0);
+    ++stats_.introductions;
+    if (host->burst == 1) note("rendezvous: " + toString(from) + " introduced to the host at " + toString(host->addr));
+}
+
 void Relay::sendHello() {
     char buf[proto::kMaxPacket];
     const proto::Header h{proto::kMagic, proto::kProtocol, proto::kTypeHello, session_, ++seq_};
@@ -339,6 +403,10 @@ void Relay::queueChat(const std::string& raw, const Addr* only) {
 }
 
 void Relay::tick(uint32_t nowMs) {
+    for (size_t i = 0; i < registered_.size();) {
+        if (nowMs - registered_[i].lastSeen > kRegisterTimeoutMs) registered_.erase(registered_.begin() + static_cast<long>(i));
+        else ++i;
+    }
     for (size_t i = 0; i < reserved_.size();) {
         if (static_cast<int32_t>(nowMs - reserved_[i].until) >= 0) reserved_.erase(reserved_.begin() + static_cast<long>(i));
         else ++i;

@@ -64,6 +64,7 @@ add_library(mecmp SHARED
   src/game/ping_point.cpp
   src/game/players_map.cpp
   src/game/runs.cpp
+  src/game/time_of_day.cpp
   src/game/raycast.cpp
   src/net/net.cpp
   src/net/protocol.cpp

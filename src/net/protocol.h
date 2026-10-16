@@ -13,6 +13,9 @@
 // type 2 HELLO (about once a second): char name[24] (UTF-8, at most 23 bytes, NUL padded)
 //   | u32 look (0 = Faith, else the game's echo CustomizationHash; absent from older versions = 0)
 //   | u8 flags (kHelloHost, kHelloServer) | u8 wear (Faith's outfit changes, kWear...; absent = 0)
+//   [| u64 online id | char[32] profile name] [| f32 time of day: a player host's clock, seconds since
+//   midnight 0..86400; only a host sends it, joiners use it (game/time_of_day.h)]. Each part is optional; the
+//   length says which are there (40 or 4 or 44 bytes after wear).
 //   | u64 online id | char profile[32] (the player's EA online id and profile name, NUL padded; only when
 //     the player shares them, for the game's map markers; absent = not shared)
 // type 3 CHAT, type 4 PING, type 6 REACT, type 7 SUMMON and type 8 SUMMON_REPLY: see below.
@@ -435,12 +438,15 @@ struct OnlineProfile {
     uint64_t id = 0;            // 0 = not shared
     char name[kProfileLen] = {}; // NUL terminated
 };
+constexpr float kDaySeconds = 86400.f;
+// `timeOfDay`: seconds since midnight (0..86400), or below 0 for none.
 size_t writeHello(char* buf, const Header& h, const char* name, uint32_t look = 0, uint8_t flags = 0, uint8_t wear = 0,
-                  const OnlineProfile* profile = nullptr);
+                  const OnlineProfile* profile = nullptr, float timeOfDay = -1.f);
 // HELLO payload (after the header). `name` = the raw field (cleaned by the caller); `look`, `flags` and
 // `wear` = 0 if absent.
+// `timeOfDay` = -1 if absent (or not a time).
 bool readHello(const char* payload, size_t n, std::string& name, uint32_t& look, uint8_t* flags = nullptr,
-               uint8_t* wear = nullptr, OnlineProfile* profile = nullptr);
+               uint8_t* wear = nullptr, OnlineProfile* profile = nullptr, float* timeOfDay = nullptr);
 // Decodes a STATE payload (after the header). `full` tells whether to commit it as the new base.
 bool readState(const char* payload, size_t n, const Decoder& dec, PlayerState& out, bool& full);
 void commitBase(Decoder& dec, const PlayerState& s);

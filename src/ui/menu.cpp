@@ -20,6 +20,7 @@
 #include "game/ghosts.h"
 #include "game/ping_point.h"
 #include "game/raycast.h"
+#include "game/time_of_day.h"
 #include "game/teleport.h"
 #include "game/models.h"
 #include "imgui.h"
@@ -556,6 +557,13 @@ void privacySection() {
         ImGui::SetTooltip("Off: every summon only asks you.\n"
                           "On: when the host (or a member the host allows) pulls you in, you are taken to them after a\n"
                           "countdown. You can cancel it in that time. Never from anyone else.");
+    bool tod = cfg->syncTimeOfDay;
+    if (ImGui::Checkbox("Use the host's time of day", &tod))
+        config::change([tod](config::Settings& c) { c.syncTimeOfDay = tod; });
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("On: when you join a player's session, your sky and light follow the host's time of day.\n"
+                          "Off: you keep your own. (A dedicated server has no time of day of its own.)\n%s",
+                          game::time_of_day::status());
     bool ask = cfg->askBeforeVisit;
     if (ImGui::Checkbox("Ask me before others go to me", &ask))
         config::change([ask](config::Settings& c) { c.askBeforeVisit = ask; });

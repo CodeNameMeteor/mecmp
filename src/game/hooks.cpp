@@ -154,12 +154,9 @@ void undoPatches(const std::vector<Patch>& undo) {
 using PostUpdateFn = void (*)(void* world, void* updateInfo);
 PostUpdateFn g_origPostUpdate = nullptr;
 TickFn g_onTick = nullptr;
-// Game menus keep the simulation running while a multiplayer session is on (everyone else keeps
-// running too). PamUISystem's per-frame update ends with the call that pauses or resumes the client
-// from its pause controller's request counts (+0x08 requests, +0x0c full requests). Those counts are
-// plain counters (UIPauseController_request, 0x143b16210: +1 / -1, no clamping), so during the update
-// they are set to 0 and afterwards put back plus whatever changed meanwhile: the pause call sees no
-// request, every menu opening or closing is kept, and with no session the menus pause as usual.
+// PamUISystem's per-frame update: only noted (gameMenuOpen reads its pause controller). Game menus pause the
+// game as they normally do, in a session too. (Earlier versions kept the world running under the pause menu
+// and the map while in a session; players wanted the pause back.)
 using UISystemUpdateFn = void (*)(void* uiSystem);
 UISystemUpdateFn g_origUISystemUpdate = nullptr;
 
@@ -167,45 +164,24 @@ std::atomic<uintptr_t> g_uiSystem{0};
 
 void uiSystemUpdate(void* uiSystem) {
     g_uiSystem = reinterpret_cast<uintptr_t>(uiSystem);
-    uintptr_t controller = 0;
-    int32_t saved[2] = {};
-    bool session;
-    {
-        prof::Scope scope(prof::UIPause); // our check only, not the game's own UI update
-        // Only while you are in a level, as a player: the main menu (which may have no server level at all
-        // after leaving one) keeps its own pause, which its screens ("Your Echo") need; nobody sees you there.
-        session = net::running() && (net::hosting() || net::connectedToHost()) && level::serverWorld() &&
-                  !level::inFrontEnd() && level::playerCharacter() &&
-                  mem::read(reinterpret_cast<uintptr_t>(uiSystem) + UISystem_PauseController, controller) && controller &&
-                  mem::read(controller + 8, saved, sizeof(saved));
-    }
-    if (!session) {
-        g_origUISystemUpdate(uiSystem);
-        return;
-    }
-    int32_t* counts = reinterpret_cast<int32_t*>(controller + 8);
-    counts[0] = 0;
-    counts[1] = 0;
     g_origUISystemUpdate(uiSystem);
-    counts[0] += saved[0]; // what changed during the update stays
-    counts[1] += saved[1];
 }
 
 void installUIPauseHook(std::vector<Patch>& undo) {
     const uintptr_t slot = rva(Slot_PamUISystemUpdate);
     uintptr_t current = 0;
     if (!mem::read(slot, current) || current != rva(Fn_PamUISystemUpdate)) {
-        MLOG("hook UI pause: slot holds %p, expected %p; menus pause the game as usual", reinterpret_cast<void*>(current),
+        MLOG("hook UI system: slot holds %p, expected %p; the mod cannot tell when a game menu is open", reinterpret_cast<void*>(current),
              reinterpret_cast<void*>(rva(Fn_PamUISystemUpdate)));
         return;
     }
     g_origUISystemUpdate = reinterpret_cast<UISystemUpdateFn>(current); // before the patch, as above
     if (!mem::patchPointer(slot, reinterpret_cast<uintptr_t>(&uiSystemUpdate), nullptr)) {
-        MLOG("hook UI pause: VirtualProtect failed (%lu)", GetLastError());
+        MLOG("hook UI system: VirtualProtect failed (%lu)", GetLastError());
         return;
     }
     undo.push_back({slot, current});
-    VLOG("hook UI pause: installed");
+    VLOG("hook UI system: installed");
 }
 
 // The friend markers' manager pool: our players get slots just before the game copies the slots into the

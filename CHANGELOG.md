@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Pause
+- **The pause menu and the map pause the game again**, in a session too. (Since 0.9.0 they kept the world
+  running while you were in a session; players wanted the pause back.)
+
 ### Fixes
 - **Ghosts no longer freeze when someone joins.** A new ghost spawner the game creates (moving around the
   city) could take over from the one the ghosts came from. The next spawn, from that spawner, failed, and the

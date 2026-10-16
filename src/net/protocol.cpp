@@ -441,7 +441,7 @@ bool readInfoAnswer(const char* payload, size_t n, ServerInfo& out) {
 }
 
 size_t writeHello(char* buf, const Header& h, const char* name, uint32_t look, uint8_t flags, uint8_t wear,
-                  const OnlineProfile* profile) {
+                  const OnlineProfile* profile, float timeOfDay) {
     char* p = buf;
     put(p, h);
     const std::string full = name ? name : "";
@@ -459,11 +459,12 @@ size_t writeHello(char* buf, const Header& h, const char* name, uint32_t look, u
         memcpy(p, pn, kProfileLen);
         p += kProfileLen;
     }
+    if (std::isfinite(timeOfDay) && timeOfDay >= 0.f && timeOfDay < kDaySeconds) put(p, timeOfDay);
     return static_cast<size_t>(p - buf);
 }
 
 bool readHello(const char* payload, size_t n, std::string& name, uint32_t& look, uint8_t* flags, uint8_t* wear,
-               OnlineProfile* profile) {
+               OnlineProfile* profile, float* timeOfDay) {
     if (n == 0) return false;
     const size_t nameBytes = n < kNameLen ? n : kNameLen;
     size_t len = 0;
@@ -486,6 +487,15 @@ bool readHello(const char* payload, size_t n, std::string& name, uint32_t& look,
             }
             if (!profile->name[0]) profile->id = 0;
         }
+    }
+    if (timeOfDay) {
+        // After the profile when there is one (40 bytes), else right after wear: the length tells.
+        *timeOfDay = -1.f;
+        const size_t at = kNameLen + sizeof(uint32_t) + 2, block = sizeof(uint64_t) + kProfileLen;
+        const size_t tod = n == at + sizeof(float) ? at : n == at + block + sizeof(float) ? at + block : 0;
+        float t = -1.f;
+        if (tod) memcpy(&t, payload + tod, sizeof(t));
+        if (std::isfinite(t) && t >= 0.f && t < kDaySeconds) *timeOfDay = t;
     }
     return true;
 }

@@ -79,6 +79,8 @@ constexpr const char* kDefaultIni =
     "name=Runner\r\n"
     "; how the other players see you: faith, or a ghost style and color (pick it in the in-game menu)\r\n"
     "look=faith\r\n"
+    "; the last ghost style and color you picked: \"Ghost\" in the menu goes back to it after Faith\r\n"
+    "last_ghost=\r\n"
     "; with look=faith, Faith's outfit: default (as in your game) or prologue; her arm tattoo: default,\r\n"
     "; on or off; 0 = without the MagRope / the tool bag; 1 = with the GridLink\r\n"
     "outfit=default\r\n"
@@ -456,6 +458,9 @@ void load(const std::wstring& dir) {
     s.name.resize(net::protocol::utf8PrefixLength(s.name, net::protocol::kMaxNameBytes)); // what goes on the wire
     s.autoSpawn = readInt(ini, L"ghost", L"auto_spawn", 1) != 0;
     s.look = readString(ini, L"player", L"look", "faith");
+    s.lastGhost = readString(ini, L"player", L"last_ghost", "");
+    if (lookHash(s.lastGhost) == 0) s.lastGhost.clear();
+    if (s.lastGhost.empty() && lookHash(s.look)) s.lastGhost = s.look; // first start with this setting
     {
         namespace proto = net::protocol;
         const std::string tattoo = readString(ini, L"player", L"outfit_tattoo", "default");
@@ -659,6 +664,7 @@ void applyPending() {
     put(L"net", L"rendezvous", snapshot->rendezvous);
     put(L"net", L"upnp", snapshot->upnp ? "1" : "0");
     put(L"player", L"look", snapshot->look);
+    put(L"player", L"last_ghost", snapshot->lastGhost);
     {
         namespace proto = net::protocol;
         const int o = snapshot->outfit;

@@ -1,6 +1,7 @@
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
 #endif
+#include <algorithm>
 #include <windows.h>
 
 #include "ui/menu.h"
@@ -393,7 +394,10 @@ void setMyLook(uint32_t hash) {
     const auto cfg = config::get();
     publishMyLook(hash, cfg->outfit, cfg->lookSelf);
     const std::string look = config::lookName(hash);
-    config::change([look](config::Settings& c) { c.look = look; });
+    config::change([look, hash](config::Settings& c) {
+        c.look = look;
+        if (hash && hash != 0xffffffffu) c.lastGhost = look; // "Ghost" returns to it after Faith
+    });
 }
 
 // Under "Your look": Faith's outfit, and whether the look is yours in your own game as well.
@@ -464,7 +468,12 @@ void myLookSection() {
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("How the other players see you");
     ImGui::SameLine();
     if (ImGui::RadioButton("Ghost", mine != 0)) {
-        if (!mine && !echoes.empty()) setMyLook(game::models::defaultEcho());
+        if (!mine && !echoes.empty()) {
+            uint32_t back = config::lookHash(cfg->lastGhost); // the ghost you had before Faith, if it is still in the list
+            if (std::none_of(echoes.begin(), echoes.end(), [back](const game::models::Echo& e) { return e.hash == back; }))
+                back = game::models::defaultEcho();
+            setMyLook(back);
+        }
         else if (!mine) setMyLook(0xffffffffu); // chosen before the list is known: pick once it is
     }
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("How the other players see you");

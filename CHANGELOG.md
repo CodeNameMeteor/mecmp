@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Your look
+- **"Ghost" remembers your last ghost.** Switching to Faith and back to Ghost in the menu used to fall back to the default
+  RunVis ghost; now it returns to the style and color you had (saved as `[player] last_ghost`).
 ### Time of day
 - **Everyone sees the host's sky.** When you join a player's session, your time of day (sky, sun, light) follows
   the host's. The host's clock goes with its HELLO once a second, and your clock is set to it when they are more

@@ -74,6 +74,7 @@ struct Settings {
     bool askBeforeVisit = false;          // Go to on you waits for your yes (VISIT, net/protocol.h)
     std::string name = "Runner";
     std::string look = "faith";           // how you look to others: faith, or echo:<hash> (a ghost style + colour)
+    std::string lastGhost;                // the last ghost style + colour you picked (echo:<hash>): "Ghost" goes back to it after Faith
     int outfit = 0;                       // with look = faith: what is changed about her outfit (net::protocol::kWear... bits)
     bool lookSelf = true;                 // you look that way to yourself too, not only to the others
     std::string pingColor = "e8322e";    // colour of your markers for everyone, RRGGBB

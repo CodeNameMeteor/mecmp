@@ -66,6 +66,8 @@ constexpr const char* kDefaultIni =
     "; 1 = a hard summon (from the host, or a member the host allows) takes you to its sender after a\r\n"
     "; countdown you can cancel; 0 = you are only asked, as with any summon\r\n"
     "allow_forced_summon=0\r\n"
+    "; 1 = automatically decline incoming go to requests and summons\r\n"
+    "do_not_disturb=0\r\n"
     "; 1 = players who use Go to on you wait until you say yes (the summon accept / decline keys); 0 = anyone may\r\n"
     "ask_before_go_to=0\r\n"
     "; 1 = see the host's time of day (sky and light) while you join a player's session; 0 = keep your own\r\n"
@@ -556,6 +558,7 @@ void load(const std::wstring& dir) {
     s.playersPad = readString(ini, L"ui", L"players_pad", "DOWN+RB");
     s.hardSummonGraceMs = clampInt(readInt(ini, L"ui", L"hard_summon_grace_ms", 5000), 0, 15000);
     s.allowForcedSummon = readInt(ini, L"player", L"allow_forced_summon", 0) != 0;
+    s.doNotDisturb = readInt(ini, L"player", L"do_not_disturb", 0) != 0;
     s.syncTimeOfDay = readInt(ini, L"player", L"sync_time_of_day", 1) != 0;
     s.askBeforeVisit = readInt(ini, L"player", L"ask_before_go_to", 0) != 0;
     s.shareProfile = readInt(ini, L"player", L"share_profile", 0) != 0;
@@ -736,6 +739,7 @@ void applyPending() {
     put(L"ui", L"players_pad", snapshot->playersPad);
     put(L"ui", L"hard_summon_grace_ms", std::to_string(snapshot->hardSummonGraceMs));
     put(L"player", L"allow_forced_summon", snapshot->allowForcedSummon ? "1" : "0");
+    put(L"player", L"do_not_disturb", snapshot->doNotDisturb ? "1" : "0");
     put(L"player", L"sync_time_of_day", snapshot->syncTimeOfDay ? "1" : "0");
     put(L"player", L"ask_before_go_to", snapshot->askBeforeVisit ? "1" : "0");
     put(L"player", L"share_profile", snapshot->shareProfile ? "1" : "0");

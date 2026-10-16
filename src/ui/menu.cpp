@@ -550,13 +550,6 @@ void privacySection() {
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Sends your EA online id and profile name to the players in your session, so their map\n"
                           "shows your Runner Tag where you are. Off: you are not on their maps.");
-    bool forced = cfg->allowForcedSummon;
-    if (ImGui::Checkbox("Allow being pulled in (hard summon)", &forced))
-        config::change([forced](config::Settings& c) { c.allowForcedSummon = forced; });
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Off: every summon only asks you.\n"
-                          "On: when the host (or a member the host allows) pulls you in, you are taken to them after a\n"
-                          "countdown. You can cancel it in that time. Never from anyone else.");
     bool tod = cfg->syncTimeOfDay;
     if (ImGui::Checkbox("Use the host's time of day", &tod))
         config::change([tod](config::Settings& c) { c.syncTimeOfDay = tod; });
@@ -564,13 +557,32 @@ void privacySection() {
         ImGui::SetTooltip("On: when you join a player's session, your sky and light follow the host's time of day.\n"
                           "Off: you keep your own. (A dedicated server has no time of day of its own.)\n%s",
                           game::time_of_day::status());
+    ImGui::BeginDisabled(config::get()->doNotDisturb);
     bool ask = cfg->askBeforeVisit;
+
     if (ImGui::Checkbox("Ask me before others go to me", &ask))
         config::change([ask](config::Settings& c) { c.askBeforeVisit = ask; });
-    if (ImGui::IsItemHovered())
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
         ImGui::SetTooltip("Off: anyone can use Go to on you.\n"
                           "On: a player who picks Go to on you waits until you say yes (hold the summon accept key,\n"
                           "or the decline key for no). Older versions of the mod still go to you without asking.");
+    bool forced = cfg->allowForcedSummon;
+    if (ImGui::Checkbox("Allow being pulled in (hard summon)", &forced))
+        config::change([forced](config::Settings& c) { c.allowForcedSummon = forced; });
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip("Off: every summon only asks you.\n"
+                          "On: when the host (or a member the host allows) pulls you in, you are taken to them after a\n"
+                          "countdown. You can cancel it in that time. Never from anyone else.");
+    ImGui::EndDisabled();
+    bool doNotDisturb = config::get()->doNotDisturb;
+    if (ImGui::Checkbox("Do Not Disturb", &doNotDisturb)) {
+        config::change([doNotDisturb](config::Settings& c) {
+            c.doNotDisturb = doNotDisturb;
+        });
+    }
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Automatically declines incoming summons and go to on you");
+    }
 }
 
 // Display tab: sizes, what is drawn in the game, voice.
@@ -1706,6 +1718,7 @@ void draw(bool open) {
         }
         if (ImGui::BeginTabItem("You")) {
             myLookSection();
+
             privacySection();
             ImGui::EndTabItem();
         }

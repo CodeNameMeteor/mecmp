@@ -317,6 +317,10 @@ void takeVisits(DWORD now) {
     for (const net::VisitInfo& v : net::takeVisits()) {
         switch (v.kind) {
         case net::protocol::kVisitAsk: {
+            if (config::get()->doNotDisturb) {
+                net::sendVisit(v.from, net::protocol::kVisitNo, v.id);
+                break;
+            }
             // Switched off since our HELLO said so: just say yes (not in a run: then it waits like any ask).
             if (!config::get()->askBeforeVisit && !net::inRun()) {
                 net::sendVisit(v.from, net::protocol::kVisitYes, v.id);
@@ -403,6 +407,18 @@ void update(const Input& in) {
         g_takeDecline = false;
     }
 
+    if (config::get()->doNotDisturb) {
+        for (const Pending& p : g_pending) {
+            if (p.visit) {
+                net::sendVisit(p.from, net::protocol::kVisitNo, p.id);
+            }
+            else {
+                net::sendSummonReply(p.id, p.from, net::protocol::kSummonDeclined);
+            }
+        }
+        g_pending.clear();
+    }
+
     // What other players sent: new summons, withdrawals.
     for (const net::SummonInfo& s : net::takeSummons()) {
         VLOG("summon: %s from %08x", s.cancel ? "withdrawn" : "received", s.from);
@@ -410,6 +426,11 @@ void update(const Input& in) {
             removePending(s.id, s.from);
             continue;
         }
+        if (config::get()->doNotDisturb) {
+            net::sendSummonReply(s.id, s.from, net::protocol::kSummonDeclined);
+            continue;
+        }
+
         g_pending.erase(std::remove_if(g_pending.begin(), g_pending.end(),
                                        [&](const Pending& p) { return p.from == s.from && !p.visit; }),
                         g_pending.end()); // a new call from the same player replaces its old one

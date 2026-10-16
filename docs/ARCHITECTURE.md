@@ -191,15 +191,16 @@ then go to ImGui, while key releases, raw key releases and the mouse still reach
 when the chat opened is released). Escape cancels, Enter sends. The last 8 lines show bottom-left
 for 12 s, then fade (`[ui] show_chat`). The solo test does not echo your own message twice.
 
-## Menus do not pause a session (`game/hooks.cpp`)
+## Game menus (`game/hooks.cpp`)
 
 The game pauses through a counter object at `PamUISystem` +0x8c8: ints at +0x08 (pause requests) and
 +0x0c (full pause requests), changed by +1/-1 in `UIPauseController_request` (`0x143b16210`) from the
 UI pause entities. `PamUISystem`'s update (`0x143b16c50`) is the only caller of
 `UIPauseController_applyToClient` (`0x143b16ae0`), which pauses or resumes the client from those counts.
-In a session (hosting or connected) the hook sets both counts to 0 for the call to the original update and
-afterwards adds the saved counts back, so requests made during the update are kept and the counts stay
-right when the session ends: the game then pauses as normal.
+The mod's hook on that update only notes the UI system, so `gameMenuOpen()` can read the counts (chat,
+markers and the summon keys stay out of the game's menus). Menus pause the game as usual, in a session
+too. Until 0.9.1 the hook zeroed the counts during the update in a session, so the pause menu and map did
+not stop the world; that was taken out because players wanted the pause back.
 
 ## Go to a player (`game/teleport.cpp`)
 

@@ -26,7 +26,7 @@ enum Section : int {
     RenderState, //   the blended network state (net::remoteState)
     RenderRead,  //   reading the ghost's client component
     RenderWrite, //   writing the pose
-    UIPause,     // the UI system hook (menus do not pause the session)
+    UIPause,     // the UI system hook (unused since menus pause again)
     Overlay,     // the overlay (ImGui) on Present
     kSections
 };

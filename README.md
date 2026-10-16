@@ -63,9 +63,6 @@ Versions: everyone in a session needs the same wire protocol (this version uses 
 from a different protocol are ignored and the log says which version the other side runs. Protocol 7
 also lets a host or server admit only players who answer a challenge, so older versions cannot join.
 
-While you are in a session, the game's own menus (pause menu, map) no longer pause the game: the
-other players keep moving and you keep sending your position.
-
 Solo test (developer builds only): *Solo test* in the menu, or `join=127.0.0.1:47800`. Your own packets come back and a
 ghost copies your moves 3 m away along the world X axis (`loopback_offset`); it stays put while you
 turn, so you can walk around it.

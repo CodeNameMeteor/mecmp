@@ -10,6 +10,8 @@
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <cstdio>
+#include <cstdlib>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -34,6 +36,10 @@
 #include "ui/notices.h"
 #include "ui/radial.h"
 #include "ui/summon.h"
+
+#ifndef MAPVK_VK_TO_VSC_EX
+#define MAPVK_VK_TO_VSC_EX 4 // Windows Vista and later; not in every SDK's headers
+#endif
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND, UINT, WPARAM, LPARAM);
 
@@ -69,14 +75,40 @@ std::atomic<int> g_pingClearKey{0}; // a key, or VK_MBUTTON / VK_XBUTTON1 / VK_X
 bool g_eatChar = false; // the character typed by the key that opened the chat (window thread)
 int g_openingChatKey = 0;
 
-const MenuKey kMenuKeys[] = {
-    {"INSERT", VK_INSERT, ImGuiKey_Insert}, {"HOME", VK_HOME, ImGuiKey_Home}, {"END", VK_END, ImGuiKey_End},
-    {"DELETE", VK_DELETE, ImGuiKey_Delete}, {"PAGEUP", VK_PRIOR, ImGuiKey_PageUp}, {"PAGEDOWN", VK_NEXT, ImGuiKey_PageDown},
-    {"PAUSE", VK_PAUSE, ImGuiKey_Pause}, {"F1", VK_F1, ImGuiKey_F1}, {"F2", VK_F2, ImGuiKey_F2}, {"F3", VK_F3, ImGuiKey_F3},
-    {"F4", VK_F4, ImGuiKey_F4}, {"F5", VK_F5, ImGuiKey_F5}, {"F6", VK_F6, ImGuiKey_F6}, {"F7", VK_F7, ImGuiKey_F7},
-    {"F8", VK_F8, ImGuiKey_F8}, {"F9", VK_F9, ImGuiKey_F9}, {"F10", VK_F10, ImGuiKey_F10}, {"F11", VK_F11, ImGuiKey_F11},
-    {"F12", VK_F12, ImGuiKey_F12},
+// Key names in mecmp.ini. Letters and the number row are their character (A, 7); any other key
+// without a name here is written as VK_ and its virtual-key code in hex (VK_DF), so every key Windows
+// reports can be bound. The punctuation names are the key's place on a US keyboard; what is shown
+// to the player is the key's own label on their layout (keyLabel).
+struct KeyName { const char* name; int vk; };
+const KeyName kKeyNames[] = {
+    {"INSERT", VK_INSERT}, {"HOME", VK_HOME}, {"END", VK_END}, {"DELETE", VK_DELETE}, {"PAGEUP", VK_PRIOR},
+    {"PAGEDOWN", VK_NEXT}, {"PAUSE", VK_PAUSE}, {"ENTER", VK_RETURN}, {"TAB", VK_TAB}, {"SPACE", VK_SPACE},
+    {"BACKSPACE", VK_BACK}, {"CAPSLOCK", VK_CAPITAL}, {"SCROLLLOCK", VK_SCROLL}, {"NUMLOCK", VK_NUMLOCK},
+    {"UP", VK_UP}, {"DOWN", VK_DOWN}, {"LEFT", VK_LEFT}, {"RIGHT", VK_RIGHT},
+    {"SHIFT", VK_SHIFT}, {"CTRL", VK_CONTROL}, {"ALT", VK_MENU}, {"APPS", VK_APPS},
+    {"F1", VK_F1}, {"F2", VK_F2}, {"F3", VK_F3}, {"F4", VK_F4}, {"F5", VK_F5}, {"F6", VK_F6}, {"F7", VK_F7},
+    {"F8", VK_F8}, {"F9", VK_F9}, {"F10", VK_F10}, {"F11", VK_F11}, {"F12", VK_F12}, {"F13", VK_F13},
+    {"F14", VK_F14}, {"F15", VK_F15}, {"F16", VK_F16}, {"F17", VK_F17}, {"F18", VK_F18}, {"F19", VK_F19},
+    {"F20", VK_F20}, {"F21", VK_F21}, {"F22", VK_F22}, {"F23", VK_F23}, {"F24", VK_F24},
+    {"NUM0", VK_NUMPAD0}, {"NUM1", VK_NUMPAD1}, {"NUM2", VK_NUMPAD2}, {"NUM3", VK_NUMPAD3}, {"NUM4", VK_NUMPAD4},
+    {"NUM5", VK_NUMPAD5}, {"NUM6", VK_NUMPAD6}, {"NUM7", VK_NUMPAD7}, {"NUM8", VK_NUMPAD8}, {"NUM9", VK_NUMPAD9},
+    {"NUMMULTIPLY", VK_MULTIPLY}, {"NUMADD", VK_ADD}, {"NUMSUBTRACT", VK_SUBTRACT}, {"NUMDECIMAL", VK_DECIMAL},
+    {"NUMDIVIDE", VK_DIVIDE}, {"SEMICOLON", VK_OEM_1}, {"EQUALS", VK_OEM_PLUS}, {"COMMA", VK_OEM_COMMA},
+    {"MINUS", VK_OEM_MINUS}, {"PERIOD", VK_OEM_PERIOD}, {"SLASH", VK_OEM_2}, {"BACKTICK", VK_OEM_3},
+    {"LBRACKET", VK_OEM_4}, {"BACKSLASH", VK_OEM_5}, {"RBRACKET", VK_OEM_6}, {"APOSTROPHE", VK_OEM_7},
+    {"OEM8", VK_OEM_8}, {"OEM102", VK_OEM_102},
 };
+// Keys that are never a bind: Escape cancels and closes things, the Windows keys and Print Screen
+// belong to Windows (Print Screen sends no key-down at all), and 1..6 are mouse buttons (MOUSE3..5).
+bool bindableKey(int vk) {
+    return vk > 6 && vk < 0xFF && vk != VK_ESCAPE && vk != VK_LWIN && vk != VK_RWIN && vk != VK_SNAPSHOT;
+}
+// A key pressed while a binding is being recorded (window thread; 0 = none yet). See takeCapturedKey.
+std::atomic<int> g_capturedKey{0};
+// A text box of the menu has the keyboard (render thread sets it every frame, the window thread reads it).
+std::atomic<bool> g_typing{false};
+// A key that types a character (letters, digits, punctuation, Space).
+bool typesCharacter(int vk) { return MapVirtualKeyW(static_cast<UINT>(vk), MAPVK_VK_TO_CHAR) != 0; }
 
 void createRtv() {
     ID3D11Texture2D* back = nullptr;
@@ -244,6 +276,16 @@ bool radialRawMouse(LPARAM l) {
 // for every frame (render thread). The marker and answer keys start the wheel as a key would; its
 // release is noticed by the wheel itself. The hide key is not here: pollHideKey asks for it, any key.
 void pollMouseBinds() {
+    // The menu key on a mouse button: opens and closes the menu (not while a binding is being recorded).
+    {
+        static bool wasMenu = false;
+        const int vk = g_toggleKey.load();
+        const bool mouse = vk == VK_MBUTTON || vk == VK_XBUTTON1 || vk == VK_XBUTTON2;
+        const bool now = mouse && gameFocused() && g_ready && !g_keyCapture.load() && !gamepad::capturing() &&
+                         !chat::isOpen() && (GetAsyncKeyState(vk) & 0x8000) != 0;
+        if (now && !wasMenu) toggleMenu();
+        wasMenu = now;
+    }
     static bool was[7] = {};
     std::atomic<int>* const binds[7] = {&g_pingKey, &g_reactKey, &g_altKey, &g_hideKey, &g_prevKey, &g_nextKey, &g_playersKey};
     const bool canAct = gameFocused() && !g_open.load() && !chat::isOpen() && g_ready && !game::hooks::gameMenuOpen();
@@ -346,6 +388,12 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
     if (msg == WM_SYSKEYDOWN && static_cast<int>(w) == VK_F4) return CallWindowProcW(g_origWndProc, hwnd, msg, w, l);
     const bool keyUp = msg == WM_KEYUP || msg == WM_SYSKEYUP;
     if (keyUp && g_ready) queueImGui(hwnd, msg, w, l);
+    // F10 and Alt come as system keys; both may be binds. (Other keys held with Alt are left alone, so
+    // Alt+Tab does not press a bound Tab.)
+    const bool keyDown = msg == WM_KEYDOWN || (msg == WM_SYSKEYDOWN && (w == VK_F10 || w == VK_MENU));
+    // Recording a binding (the menu's Change buttons): the next key pressed, whatever key it is.
+    if (keyDown && g_keyCapture.load() && !(l & (1 << 30)) && bindableKey(static_cast<int>(w)))
+        g_capturedKey = static_cast<int>(w);
     if (msg == WM_KILLFOCUS) { g_openingChatKey = 0; g_eatChar = false; }
     const int openingChar = g_openingChatKey >= 'A' && g_openingChatKey <= 'Z' ? g_openingChatKey + ('a' - 'A') : g_openingChatKey;
     if (g_openingChatKey && ((msg == WM_KEYDOWN && static_cast<int>(w) == g_openingChatKey) ||
@@ -357,7 +405,7 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
     // The marker wheel (ui/radial.h). The keyboard still reaches the game, so keys are only noted here
     // and passed on; while the wheel is open it owns the mouse (the camera stays still).
     if (msg == WM_KILLFOCUS || (msg == WM_ACTIVATEAPP && w == FALSE)) radial::cancel();
-    if (msg == WM_KEYUP && ((g_pingKey.load() != 0 && static_cast<int>(w) == g_pingKey.load()) ||
+    if (keyUp && ((g_pingKey.load() != 0 && static_cast<int>(w) == g_pingKey.load()) ||
                             (g_reactKey.load() != 0 && static_cast<int>(w) == g_reactKey.load()) ||
                             (g_playersKey.load() != 0 && static_cast<int>(w) == g_playersKey.load())))
         radial::keyUp(static_cast<int>(w));
@@ -402,18 +450,20 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
     }
     // Only the menu key toggles the menu, never Escape: Escape reaches ImGui below (it cancels a key
     // capture and closes combo boxes) and nothing else. The menu has no close button by design.
-    if (msg == WM_KEYDOWN && static_cast<int>(w) != VK_ESCAPE && static_cast<int>(w) == g_toggleKey.load() &&
-        !(l & (1 << 30)) && !g_keyCapture.load()) {
+    // A menu key that types (a letter, say) types in the chat line or a text box of the menu instead.
+    if (keyDown && static_cast<int>(w) != VK_ESCAPE && static_cast<int>(w) == g_toggleKey.load() &&
+        !(l & (1 << 30)) && !g_keyCapture.load() &&
+        !((chat::isOpen() || (g_open.load() && g_typing.load())) && typesCharacter(static_cast<int>(w)))) {
         toggleMenu();
         return 0;
     }
     // Chat: its key opens the input line (not while the menu is open). While it is open the keyboard
     // and raw input go to it, not to the game; Escape cancels.
     // Not while one of the game's own menus is up (pause menu, map): Enter there picks a menu item.
-    if (msg == WM_KEYDOWN && !g_open && !chat::isOpen() && g_ready && static_cast<int>(w) == g_chatKey.load() &&
+    if (keyDown && !g_open && !chat::isOpen() && g_ready && static_cast<int>(w) == g_chatKey.load() &&
         !(l & (1 << 30)) && game::hooks::gameMenuOpen())
         MLOG("chat: not opened (a game menu is up)");
-    else if (msg == WM_KEYDOWN && !g_open && !chat::isOpen() && g_ready && static_cast<int>(w) == g_chatKey.load() &&
+    else if (keyDown && !g_open && !chat::isOpen() && g_ready && static_cast<int>(w) == g_chatKey.load() &&
              !(l & (1 << 30))) {
         radial::cancel(); // the chat takes the keyboard
         chat::open();
@@ -424,19 +474,19 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
     }
     // Marker key: only noted here; the game still gets the key. A short press places a marker when
     // the key is released, holding it opens the marker wheel. Not over one of the game's own menus.
-    if (msg == WM_KEYDOWN && !g_open && !chat::isOpen() && g_ready && g_pingKey.load() != 0 &&
+    if (keyDown && !g_open && !chat::isOpen() && g_ready && g_pingKey.load() != 0 &&
         static_cast<int>(w) == g_pingKey.load() && !(l & (1 << 30)) && !game::hooks::gameMenuOpen())
         radial::keyDown(g_pingKey.load());
     // The quick answers key: the same, for the answers wheel (it needs a marker under the crosshair).
-    if (msg == WM_KEYDOWN && !g_open && !chat::isOpen() && g_ready && g_reactKey.load() != 0 &&
+    if (keyDown && !g_open && !chat::isOpen() && g_ready && g_reactKey.load() != 0 &&
         static_cast<int>(w) == g_reactKey.load() && !(l & (1 << 30)) && !game::hooks::gameMenuOpen())
         radial::keyDown(g_reactKey.load(), radial::Mode::React);
     // The players key: held, the players panel (go to / summon).
-    if (msg == WM_KEYDOWN && !g_open && !chat::isOpen() && g_ready && g_playersKey.load() != 0 &&
+    if (keyDown && !g_open && !chat::isOpen() && g_ready && g_playersKey.load() != 0 &&
         static_cast<int>(w) == g_playersKey.load() && !(l & (1 << 30)) && !game::hooks::gameMenuOpen())
         radial::keyDown(g_playersKey.load(), radial::Mode::Players);
     // The other-way key: a short press places a marker at the other kind of point.
-    if (msg == WM_KEYDOWN && !g_open && !chat::isOpen() && g_ready && g_altKey.load() != 0 &&
+    if (keyDown && !g_open && !chat::isOpen() && g_ready && g_altKey.load() != 0 &&
         static_cast<int>(w) == g_altKey.load() && !(l & (1 << 30)) && !game::hooks::gameMenuOpen())
         game::ping::requestAlt();
     // (The hide key is polled every frame: pollHideKey.)
@@ -471,11 +521,6 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
     return CallWindowProcW(g_origWndProc, hwnd, msg, w, l);
 }
 
-int keyFromName(const std::string& n) {
-    for (const MenuKey& k : kMenuKeys)
-        if (_stricmp(n.c_str(), k.name) == 0) return k.vk;
-    return VK_INSERT;
-}
 
 // Font size and UI scale. The size follows the game window's height (so a window that starts at
 // 1280x720 and then goes full screen is not left with 720p text) times the user's ui_scale. The atlas
@@ -649,6 +694,7 @@ HRESULT STDMETHODCALLTYPE presentHook(IDXGISwapChain* sc, UINT sync, UINT flags)
         game::mumble::update();
         chat::draw();
         menu::draw(g_open.load());
+        g_typing = ImGui::GetIO().WantTextInput;
         ImGui::Render();
         // The backend restores most of the pipeline state it changes, but not the render targets: the game's
         // are put back after our draw.
@@ -695,9 +741,11 @@ void toggleMenu() {
     g_open = open;
 }
 
-const MenuKey* menuKeys(int& count) {
-    count = static_cast<int>(sizeof(kMenuKeys) / sizeof(kMenuKeys[0]));
-    return kMenuKeys;
+bool takeCapturedKey(std::string& name) {
+    const int vk = g_capturedKey.exchange(0);
+    if (!vk) return false;
+    name = keyName(vk);
+    return true;
 }
 namespace {
 // Every key the mod listens to besides the menu key. A key does one job.
@@ -744,9 +792,10 @@ bool setBind(std::atomic<int>& slot, const std::string& name, bool mouse) {
 }
 } // namespace
 
-// The menu key is one of the keys the mod listens to, so it may not be one of the others either.
+// The menu key is one of the keys the mod listens to, so it may not be one of the others either. It may
+// be any key or MOUSE3 / MOUSE4 / MOUSE5, as the other binds.
 bool setMenuKey(const std::string& name) {
-    const int key = actionKeyFromName(name);
+    const int key = bindFromName(name, true);
     if (!key) return false;
     for (const std::atomic<int>* other : kBound)
         if (other->load() == key) return false;
@@ -766,6 +815,7 @@ bool setSummonDeclineKey(const std::string& name) { return setBind(g_summonDecli
 bool setPlayersKey(const std::string& name) { return setBind(g_playersKey, name, true); }
 
 bool middleButtonIsABind() {
+    if (g_toggleKey.load() == VK_MBUTTON) return true;
     for (const std::atomic<int>* k : kBound)
         if (k != &g_pingClearKey && k->load() == VK_MBUTTON) return true;
     return false;
@@ -784,23 +834,57 @@ std::string keyLabel(const std::string& name) {
     if (_stricmp(name.c_str(), "MOUSE3") == 0) return "Middle click";
     if (_stricmp(name.c_str(), "MOUSE4") == 0) return "Mouse 4";
     if (_stricmp(name.c_str(), "MOUSE5") == 0) return "Mouse 5";
-    return name;
+    const int vk = actionKeyFromName(name);
+    if (!vk || (name.size() == 1 && isalnum(static_cast<unsigned char>(name[0])))) return name;
+    // The key's own name on this keyboard's layout ("Page Up", "Num 0", "#"). The extended flag tells
+    // the arrows and the Insert..Page Down block from the same keys on the number pad.
+    const UINT sc = MapVirtualKeyW(static_cast<UINT>(vk), MAPVK_VK_TO_VSC_EX);
+    if (!sc) return name;
+    LONG lp = static_cast<LONG>((sc & 0xFF) << 16);
+    if ((sc & 0xFF00) == 0xE000) lp |= 1 << 24;
+    wchar_t text[64] = {};
+    const int n = GetKeyNameTextW(lp, text, 64);
+    if (n <= 0) return name;
+    char utf8[192] = {};
+    const int m = WideCharToMultiByte(CP_UTF8, 0, text, n, utf8, sizeof(utf8) - 1, nullptr, nullptr);
+    return m > 0 ? std::string(utf8, static_cast<size_t>(m)) : name;
 }
-void setKeyCapture(bool on) { g_keyCapture = on; }
+void setKeyCapture(bool on) {
+    g_capturedKey = 0;
+    g_keyCapture = on;
+}
 
 bool menuOpen() { return g_open.load(); }
 
 int actionKeyFromName(const std::string& n) {
     if (n.size() == 1 && isalpha(static_cast<unsigned char>(n[0]))) return toupper(static_cast<unsigned char>(n[0]));
     if (n.size() == 1 && n[0] >= '0' && n[0] <= '9') return n[0]; // the number row (VK_0..VK_9 are the characters)
-    if (_stricmp(n.c_str(), "ENTER") == 0) return VK_RETURN;
-    for (const MenuKey& k : kMenuKeys)
+    for (const KeyName& k : kKeyNames)
         if (_stricmp(n.c_str(), k.name) == 0) return k.vk;
+    if (n.size() > 3 && _strnicmp(n.c_str(), "VK_", 3) == 0) { // any other key, by its code: VK_DF
+        char* end = nullptr;
+        const long vk = strtol(n.c_str() + 3, &end, 16);
+        if (end && *end == 0 && bindableKey(static_cast<int>(vk))) return static_cast<int>(vk);
+    }
     return 0;
 }
 
+std::string keyName(int vk) {
+    if ((vk >= 'A' && vk <= 'Z') || (vk >= '0' && vk <= '9')) return std::string(1, static_cast<char>(vk));
+    if (vk == VK_MBUTTON) return "MOUSE3";
+    if (vk == VK_XBUTTON1) return "MOUSE4";
+    if (vk == VK_XBUTTON2) return "MOUSE5";
+    for (const KeyName& k : kKeyNames)
+        if (k.vk == vk) return k.name;
+    char buf[8];
+    snprintf(buf, sizeof(buf), "VK_%02X", vk & 0xFF);
+    return buf;
+}
+
 bool install() {
-    g_toggleKey = keyFromName(config::get()->menuKey);
+    const int menuKey = bindFromName(config::get()->menuKey, true);
+    if (!menuKey) MLOG("config: menu_key '%s' is not a key; INSERT opens the menu", config::get()->menuKey.c_str());
+    g_toggleKey = menuKey ? menuKey : VK_INSERT;
     g_chatKey = actionKeyFromName(config::get()->chatKey); // empty = no chat key
     // The marker key must not double as the menu or chat key (those win).
     // (bindFromName: the marker key may be a mouse button, so "MOUSE3" in mecmp.ini works from the start.)

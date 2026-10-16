@@ -27,7 +27,7 @@ them off), and a short notice shows when someone joins or leaves (*Join/leave no
 list shows each player's connection: *good*, or the share of their updates that did not arrive. *Go to* next to a player
 takes you to them (a short fade, then you are where they are). **Summon**: tap **G** and everyone gets a marker where you stand and a panel to hold **1** (go) or **2** (no); hold G to pull players in who allowed it (see the changelog and the *Controls* tab). Press **Enter** to
 chat (not while the game's own pause menu or map is up): type a line and press Enter (Escape cancels); messages show bottom-left for a while. The menu works with mouse, keyboard or gamepad; while it is open the game does not see the
-gamepad. The *Controls* tab changes the keys and buttons for the menu, chat and markers. Everything can also be set in
+gamepad. The *Controls* tab changes the keys and buttons for the menu, chat and markers: any key, and most of them also the middle or side mouse buttons. No Insert key (a laptop)? Set `menu_key` in mecmp.ini to another key, e.g. `menu_key=F8` or `menu_key=M`. Everything can also be set in
 `mecmp.ini` (the menu saves to it).
 
 The mod starts **offline**: nothing is sent and no router port is opened until you host, join or pick

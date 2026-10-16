@@ -16,10 +16,14 @@ void setOnWindowDestroyed(void (*fn)());
 bool menuOpen();
 void toggleMenu(); // any thread (keyboard on the window thread, gamepad on the game's input thread)
 
-// Keys that can open the menu. `name` as in mecmp.ini (INSERT, F5, ...).
-struct MenuKey { const char* name; int vk; int imguiKey; };
-const MenuKey* menuKeys(int& count);
-bool setMenuKey(const std::string& name);  // at once; false (nothing changed) if another action uses the key
+// The menu key: any key (as the other binds) or MOUSE3 / MOUSE4 / MOUSE5. At once; false (nothing
+// changed) if it is not a key or another action uses it.
+bool setMenuKey(const std::string& name);
+// While a binding is recorded (setKeyCapture(true)): the key pressed since, as its mecmp.ini name. Any
+// keyboard key but Escape, the Windows keys and Print Screen. Taken once.
+bool takeCapturedKey(std::string& name);
+// A virtual key's mecmp.ini name: A, 7, F5, NUM4, SEMICOLON, MOUSE4, or VK_DF for a key without a name.
+std::string keyName(int vk);
 // Sets the marker key (as ping_key: a letter, ENTER or a menu key name; empty = none), at once.
 // False, and nothing changed, if it is not such a key or is the menu key or the chat key.
 bool setPingKey(const std::string& name);
@@ -55,8 +59,8 @@ bool gameFocused(); // the game's window has the keyboard
 // A key name as shown to the player: "Middle click" for MOUSE3, "Mouse 4", "Mouse 5", else the name itself.
 std::string keyLabel(const std::string& name);
 void setKeyCapture(bool on);               // while the menu waits for a new key, the old one does not close it
-// A key from mecmp.ini that is not the menu key (chat_key, ping_key): a letter A..Z, ENTER, or a menu
-// key name. 0 for anything else (including empty = no key).
+// A keyboard key from mecmp.ini (keyName's names; not the mouse buttons). 0 for anything else
+// (including empty = no key).
 int actionKeyFromName(const std::string& name);
 
 } // namespace mecmp::ui

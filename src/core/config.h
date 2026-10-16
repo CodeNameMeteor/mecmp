@@ -95,7 +95,7 @@ struct Settings {
     // [ghost]
     bool autoSpawn = true;
     // [ui]
-    std::string menuKey = "INSERT";       // INSERT, HOME, END, DELETE, PAGEUP, PAGEDOWN, PAUSE or F1..F12
+    std::string menuKey = "INSERT";       // any key (ui::keyName's names) or MOUSE3 / MOUSE4 / MOUSE5
     std::string menuPad = "LS+RS";        // gamepad buttons held together, e.g. LS+RS or BACK+Y; empty = none
     bool showNames = true;                // names above other players' ghosts
     bool showPings = true;                // markers placed by players

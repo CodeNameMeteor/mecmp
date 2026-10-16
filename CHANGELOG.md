@@ -8,6 +8,9 @@
   than a few seconds apart. *You* tab: *Use the host's time of day* (`[player] sync_time_of_day`, on by default)
   turns it off. A dedicated server has no time of day of its own, so there everyone keeps theirs. Older versions
   ignore it.
+- **Missions keep their own time.** A mission sets the clock itself. When the clock is held, or jumps without the
+  mod having set it, that player's time is left alone (and a host in that state sends none) for 5 minutes after the
+  last jump, so the mod and the mission do not fight over the sky.
 
 ### Runs
 - **No teleports in or out of a run, from anywhere.** The players panel already refused while you are in a

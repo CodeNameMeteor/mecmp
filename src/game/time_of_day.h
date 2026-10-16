@@ -11,6 +11,10 @@
 // A host sends its time with its HELLO (net/protocol.h); a joiner whose host is a player writes it into its own
 // clock when the two are more than a few seconds apart ([player] sync_time_of_day). A data write, like the
 // ghosts' poses: no game code is changed. Every write is checked first (the updater's vtable, a sane time).
+//
+// Missions set the clock themselves. So only a running clock is synced (a host whose clock is held sends no
+// time; a joiner's held clock is left alone), and when the clock jumps without the mod having written it (the
+// game set it), that side stops syncing for 5 minutes (each new jump starts the wait again).
 
 namespace mecmp::game::time_of_day {
 

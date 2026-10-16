@@ -273,13 +273,18 @@ void summonControls(const std::vector<net::RemoteInfo>& remotes) {
                                     "Everyone else is just asked."
                                   : "Only the host, or a member the host allows, can pull players in.");
     const bool hard = g_summonHard && canHard;
+    const bool inRun = net::inRun(); // nobody is brought to you mid-run
     ImGui::SameLine();
+    ImGui::BeginDisabled(inRun);
     if (ImGui::Button("Summon everyone")) summon::send({}, hard);
+    ImGui::EndDisabled();
+    if (inRun && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip("Not during a run: finish or quit your time trial or dash first");
     ImGui::SameLine();
     std::vector<uint32_t> picked;
     for (const auto& r : remotes)
         if (!r.loopback && g_summonPick.count(r.id)) picked.push_back(r.id);
-    ImGui::BeginDisabled(picked.empty());
+    ImGui::BeginDisabled(picked.empty() || inRun);
     char label[48];
     snprintf(label, sizeof(label), "Summon selected (%d)", static_cast<int>(picked.size()));
     if (ImGui::Button(label)) summon::send(picked, hard);
@@ -343,7 +348,8 @@ void playersSection() {
             if (ImGui::IsItemHovered()) ImGui::SetTooltip("Share of their updates that did not arrive in the last 5 s.");
             ImGui::TableNextColumn();
             ImGui::PushID(static_cast<int>(r.id));
-            const bool can = game::teleport::available() && !game::teleport::busy() && r.ageMs < 1000;
+            const bool inRun = net::inRun();
+            const bool can = game::teleport::available() && !game::teleport::busy() && r.ageMs < 1000 && !inRun;
             ImGui::BeginDisabled(!can);
             if (ImGui::SmallButton(r.asksVisit ? "Ask to go" : "Go to")) {
                 if (r.asksVisit) summon::askVisit(r.id, r.name.empty() ? std::string("Runner") : r.name);
@@ -351,7 +357,9 @@ void playersSection() {
             }
             ImGui::EndDisabled();
             if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-                ImGui::SetTooltip(game::teleport::available() ? "Travel to this player" : "Not available in this game build");
+                ImGui::SetTooltip(!game::teleport::available() ? "Not available in this game build"
+                                  : inRun                       ? "Not during a run: finish or quit your time trial or dash first"
+                                                                : "Travel to this player");
             ImGui::PopID();
         }
         ImGui::EndTable();

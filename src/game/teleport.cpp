@@ -114,15 +114,24 @@ bool groundBelow(const LinearTransform& t, float& ground) {
 }
 } // namespace
 
+// No teleport in or out of a run (a dash, a time trial): it would cheat the time. Every way in (the menu,
+// the players panel, a summon, "Go back?", an answer to "may I come?") ends here, so the rule holds even
+// where the caller forgot to check.
+static bool refusedInRun(const char* what) {
+    if (!net::inRun()) return false;
+    MLOG("teleport: %s refused: you are in a run", what);
+    return true;
+}
+
 void requestGoTo(uint32_t peer) {
-    if (g_phase != Idle || !available()) return;
+    if (g_phase != Idle || !available() || refusedInRun("go to")) return;
     g_source = Peer;
     g_peer = peer;
     setPhase(FadeOut);
 }
 
 bool requestToPos(const float pos[3], float yaw) {
-    if (g_phase != Idle || !available() || !finite(pos, 3) || !std::isfinite(yaw)) return false;
+    if (g_phase != Idle || !available() || !finite(pos, 3) || !std::isfinite(yaw) || refusedInRun("summon")) return false;
     memcpy(g_fixedPos, pos, sizeof(g_fixedPos));
     g_fixedYaw = yaw;
     g_source = Fixed;
@@ -138,7 +147,7 @@ uint32_t returnLeftMs() {
 }
 
 bool requestReturn() {
-    if (g_phase != Idle || !available() || returnLeftMs() == 0) return false;
+    if (g_phase != Idle || !available() || returnLeftMs() == 0 || refusedInRun("go back")) return false;
     g_source = Back;
     setPhase(FadeOut);
     return true;

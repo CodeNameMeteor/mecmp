@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Faster ghosts after a load
+- **Ghosts come back much sooner after a level load or a checkpoint reload.** Ghosts were made one every 2 s,
+  after a 3 s wait, so five players took about 13 s. Now the next ghost is made as soon as the previous one is
+  ready (usually a fraction of a second), and the first one 1.5 s after your character appears. If a ghost's
+  parts never arrive, it still waits 2 s, as before.
+
 ### Pause
 - **The pause menu and the map pause the game again**, in a session too. (Since 0.9.0 they kept the world
   running while you were in a session; players wanted the pause back.)

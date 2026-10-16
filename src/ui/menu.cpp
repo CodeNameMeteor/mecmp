@@ -20,6 +20,7 @@
 #include "game/ghosts.h"
 #include "game/ping_point.h"
 #include "game/raycast.h"
+#include "game/time_of_day.h"
 #include "game/teleport.h"
 #include "game/models.h"
 #include "imgui.h"
@@ -549,6 +550,13 @@ void privacySection() {
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Sends your EA online id and profile name to the players in your session, so their map\n"
                           "shows your Runner Tag where you are. Off: you are not on their maps.");
+    bool tod = cfg->syncTimeOfDay;
+    if (ImGui::Checkbox("Use the host's time of day", &tod))
+        config::change([tod](config::Settings& c) { c.syncTimeOfDay = tod; });
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("On: when you join a player's session, your sky and light follow the host's time of day.\n"
+                          "Off: you keep your own. (A dedicated server has no time of day of its own.)\n%s",
+                          game::time_of_day::status());
     ImGui::BeginDisabled(config::get()->doNotDisturb);
     bool ask = cfg->askBeforeVisit;
 

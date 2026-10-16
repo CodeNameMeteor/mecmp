@@ -317,7 +317,7 @@ void takeVisits(DWORD now) {
     for (const net::VisitInfo& v : net::takeVisits()) {
         switch (v.kind) {
         case net::protocol::kVisitAsk: {
-            if(config::get()->doNotDisturb) {
+            if (config::get()->doNotDisturb) {
                 net::sendVisit(v.from, net::protocol::kVisitNo, v.id);
                 break;
             }
@@ -407,9 +407,9 @@ void update(const Input& in) {
         g_takeDecline = false;
     }
 
-    if(config::get()->doNotDisturb) {
-        for(const Pending& p : g_pending) {
-            if(p.visit) {
+    if (config::get()->doNotDisturb) {
+        for (const Pending& p : g_pending) {
+            if (p.visit) {
                 net::sendVisit(p.from, net::protocol::kVisitNo, p.id);
             }
             else {
@@ -426,7 +426,7 @@ void update(const Input& in) {
             removePending(s.id, s.from);
             continue;
         }
-        if(config::get()->doNotDisturb) {
+        if (config::get()->doNotDisturb) {
             net::sendSummonReply(s.id, s.from, net::protocol::kSummonDeclined);
             continue;
         }

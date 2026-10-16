@@ -154,6 +154,10 @@ std::thread g_thread;
 SOCKET g_sock = INVALID_SOCKET;
 uint32_t g_session = 0;
 std::atomic<uint32_t> g_hostSession{0}; // JOIN: the host's session id, from its HELLO (0 until heard)
+// Time of day (game/time_of_day.h): ours, sent in our HELLO while we host a session; the host's, from its HELLO.
+std::atomic<float> g_myTimeOfDay{-1.f};
+std::atomic<float> g_hostTimeOfDay{-1.f};
+std::atomic<DWORD> g_hostTimeOfDayAt{0};
 
 std::atomic<bool> g_hostAllowsMembers{false}; // JOIN: what the host's HELLO said about the same
 std::string g_serverName;                // JOIN: the dedicated server's name (empty: a player hosts); under g_m
@@ -331,7 +335,9 @@ void sendHello() {
         std::lock_guard<std::mutex> lock(g_m);
         profile = g_profile;
     }
-    sendAll(buf, proto::writeHello(buf, header(proto::kTypeHello), name.c_str(), g_look.load(), flags, g_outfit.load(), &profile));
+    const float timeOfDay = g_role == Role::Host ? g_myTimeOfDay.load() : -1.f; // only a host's clock is followed
+    sendAll(buf, proto::writeHello(buf, header(proto::kTypeHello), name.c_str(), g_look.load(), flags, g_outfit.load(), &profile,
+                                   timeOfDay));
 }
 
 // Player names are shown in the menu and written to the log: keep bytes that can be shown, drop control
@@ -943,7 +949,8 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
         uint8_t flags = 0;
         uint8_t wear = 0;
         proto::OnlineProfile profile;
-        proto::readHello(payload, len, raw, look, &flags, &wear, &profile);
+        float timeOfDay = -1.f;
+        proto::readHello(payload, len, raw, look, &flags, &wear, &profile, &timeOfDay);
         r.profile = profile;
         r.asksVisit = (flags & proto::kHelloAskVisit) != 0;
         // Accepted only straight from the host (forwarded copies come from the host's address too, but have the flag cleared).
@@ -958,6 +965,11 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
                 r.name = serverName; // its chat lines (welcome, notices) show under its name
                 return;
             }
+        }
+        // The host's clock (a player host; a dedicated server has no game): followed by game/time_of_day.cpp.
+        if (g_role == Role::Join && h.session == g_hostSession.load() && timeOfDay >= 0.f) {
+            g_hostTimeOfDay = timeOfDay;
+            g_hostTimeOfDayAt = GetTickCount();
         }
         const uint8_t outfit = look ? 0 : wear;
         if (look != r.look || outfit != r.outfit) {
@@ -1450,6 +1462,7 @@ bool startLocked(uint16_t port, const std::string& join, float loopbackOffset, c
         g_helloNow = false;
         g_heardFromHost = false;
         g_hostSession = 0;
+        g_hostTimeOfDayAt = 0;
         g_serverName.clear();
         g_joinCode.clear();
         g_lanCode.clear();
@@ -2060,6 +2073,14 @@ std::string joinCode() {
 }
 
 bool hosting() { return g_role == Role::Host; }
+void setTimeOfDay(float seconds) { g_myTimeOfDay = seconds; }
+bool hostTimeOfDay(float& seconds) {
+    if (g_role != Role::Join || !g_run) return false;
+    const DWORD at = g_hostTimeOfDayAt.load();
+    if (!at || GetTickCount() - at > 5000) return false; // none, or not heard for a while (left, or no longer sent)
+    seconds = g_hostTimeOfDay.load();
+    return seconds >= 0.f;
+}
 std::string serverName() {
     std::lock_guard<std::mutex> lock(g_m);
     return g_role == Role::Join ? g_serverName : std::string();

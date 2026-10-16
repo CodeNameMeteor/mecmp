@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Fixes
+- **Ghosts no longer freeze when someone joins.** A new ghost spawner the game creates (moving around the
+  city) could take over from the one the ghosts came from. The next spawn, from that spawner, failed, and the
+  mod then took every existing ghost for destroyed and stopped moving them: they froze where they were, and
+  the joining player never appeared ("the spawner returned no character" every 2 s). Now the chosen spawner
+  stays, each ghost is recognised by its own data, a failed spawn changes nothing for the others, and a
+  spawner that gives no character three times in a row is replaced by another.
+
 ### Controls
 - **Any key can be a bind.** Every key on the keyboard can now be bound in the *Controls* tab: arrows, the
   number pad, punctuation, F13–F24, Tab, Space, Shift/Ctrl/Alt, and keys only some layouts have (a UK

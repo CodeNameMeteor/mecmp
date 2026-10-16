@@ -15,6 +15,7 @@
 #include "game/ghosts.h"
 #include "game/players_map.h"
 #include "game/runs.h"
+#include "game/combat.h"
 #include "game/time_of_day.h"
 #include "game/teleport.h"
 #include "game/hooks.h"
@@ -42,7 +43,7 @@ void onTick(void* world, float dt) {
     prof::Scope scope(prof::GameTick);
     static void* lastWorld = nullptr;
     if (world != lastWorld) { // new level: everything of the old one is gone
-        if (lastWorld) { game::ghosts::levelChanged(); game::teleport::levelChanged(); game::runs::levelChanged(); ui::summon::levelChanged(); }
+        if (lastWorld) { game::ghosts::levelChanged(); game::teleport::levelChanged(); game::runs::levelChanged(); ui::summon::levelChanged(); game::combat::levelChanged(); }
         lastWorld = world;
         g_levelStartTick = g_ticks.load();
     }
@@ -61,6 +62,7 @@ void onTick(void* world, float dt) {
     }
     game::ghosts::tick(n, n - g_levelStartTick);
     { prof::Scope s(prof::Teleport); game::teleport::tick(); }
+    game::combat::tick();
     { prof::Scope s(prof::Ping); game::ping::tick(); }
     { prof::Scope s(prof::Models); game::models::tick(); }
     if (n % 30 == 0) game::runs::serverTick(); // registers our run listener once the server context exists

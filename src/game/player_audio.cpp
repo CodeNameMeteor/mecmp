@@ -3,6 +3,7 @@
 #include "game/level.h"
 #include "game/ghosts.h"
 #include "game/native_vocals.h"
+#include "game/combat.h"
 #include "core/config.h"
 #include "core/log.h"
 #include "net/net.h"
@@ -125,6 +126,7 @@ void eventHook(uintptr_t entity, const void* event) {
         source.previous = sample; source.sentAt = GetTickCount();
         if (g_captured.size() >= 64) g_captured.pop_front();
         g_captured.push_back({sample, GetTickCount()}); ++g_captures;
+        combat::onLocalCombatEvent(static_cast<uint8_t>(index), hash);
     }
     SetLastError(after);
 }
@@ -146,6 +148,7 @@ void vocalEventHook(uintptr_t entity, const void* event) {
             sample.source = found->second; sample.event = hash; sample.timeMs = timestamp();
             if (g_captured.size() >= 64) g_captured.pop_front();
             g_captured.push_back({sample, GetTickCount()}); ++g_captures; ++g_vocalCaptures;
+            if (hash == net::kVocalTrigger) combat::onLocalCombatEvent(found->second, 0);
         }
     }
     SetLastError(after);
@@ -158,6 +161,9 @@ struct Playing {
 std::map<uint32_t, std::array<Playing, net::kPlayerAudioSourceCount>> g_playing; // client thread only
 std::vector<std::unique_ptr<native_vocals::Playback>> g_retiringVocals;
 std::deque<net::RemoteAudio> g_pending;
+struct OwnVocal { std::unique_ptr<native_vocals::Playback> playback; DWORD until = 0; };
+std::vector<OwnVocal> g_ownPlaying;   // client thread only
+std::deque<uint8_t> g_ownRequests;    // vocal source indices asked for by requestOwnVocal; guarded by g_mutex
 uintptr_t g_world = 0, g_character = 0;
 DWORD g_tickAt = 0, g_discoverAt = 0;
 void release(Playing& sound) {
@@ -305,6 +311,7 @@ void tick() {
         clearSounds();
         { std::lock_guard<std::mutex> lock(g_mutex); g_sources = {}; g_localData.clear(); g_captured.clear(); g_haveVoiceRealm = false; }
         g_world = world; g_character = character;
+        { std::lock_guard<std::mutex> lock(g_mutex); g_ownRequests.clear(); } // a cry asked for before a death or a load
         g_discoverAt = now - 1000;
         if (character) catalogue(character);
     }
@@ -321,6 +328,26 @@ void tick() {
         voiceRealm = g_voiceRealm; haveVoiceRealm = g_haveVoiceRealm;
     }
     for (const auto& c : captured) if (now - c.at < 500) net::publishAudio(c.sample);
+    // Our own cries (requestOwnVocal): played at the local character and sent as a vocal trigger, as if the
+    // game had played it on the player.
+    for (auto it = g_ownPlaying.begin(); it != g_ownPlaying.end();) {
+        if (static_cast<int32_t>(now - it->until) < 0) { ++it; continue; }
+        native_vocals::cancel(*it->playback);
+        g_retiringVocals.push_back(std::move(it->playback));
+        it = g_ownPlaying.erase(it);
+    }
+    std::deque<uint8_t> ownRequests;
+    { std::lock_guard<std::mutex> lock(g_mutex); ownRequests.swap(g_ownRequests); }
+    for (const uint8_t index : ownRequests) {
+        const auto& source = sources[index];
+        if (!source.data || !haveVoiceRealm || g_ownPlaying.size() >= 4 || g_retiringVocals.size() >= 128) continue;
+        auto playback = std::make_unique<native_vocals::Playback>();
+        if (!native_vocals::start(*playback, source.data, character, voiceRealm)) continue;
+        g_ownPlaying.push_back({std::move(playback), now + source.durationMs});
+        net::PlayerAudio sample;
+        sample.source = index; sample.event = net::kVocalTrigger; sample.timeMs = timestamp();
+        net::publishAudio(sample);
+    }
     // Continuous inputs (speed, material) and a heartbeat for active graphs.
     for (size_t i = 0; i < net::kPlayerSoundCount; ++i) {
         auto& s = sources[i];
@@ -423,6 +450,14 @@ void tick() {
             reinterpret_cast<void(*)(uintptr_t, uint32_t)>(gameVirtual(reinterpret_cast<void*>(sound.instance), 0))(
                 sound.instance, sample.event);
         ++g_played;
+    }
+}
+void requestOwnVocal(const char* waveName) {
+    for (size_t i = 0; i < net::kPlayerVocalCount; ++i) {
+        if (strcmp(net::kPlayerVocalWaves[i], waveName)) continue;
+        std::lock_guard<std::mutex> lock(g_mutex);
+        if (g_ownRequests.size() < 4) g_ownRequests.push_back(static_cast<uint8_t>(net::kPlayerSoundCount + i));
+        return;
     }
 }
 std::string status() {

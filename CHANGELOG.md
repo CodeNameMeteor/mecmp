@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+### Hitting other players (off by default)
+- **Your punches and kicks can take a hit point from another player**, and you choose whether others can do
+  that to you. Two new settings, both off: *My punches and kicks hurt other players* (`[combat] deal_hits`) and
+  *Other players can hit me* (`[combat] hits_taken` = `off`, `one_hp` = hurt but never below 1 HP, `lethal` = the hit
+  that takes your last point knocks you out). Both are in the menu's You tab, Privacy section. A hit only lands
+  when the hitter has it on and the other player allows it, so nobody can be hurt who did not agree.
+- A ghost has no body for the game's combat to hit, so a hit is decided from positions: a swing counts when the
+  other player's capsule (0.4 m radius, 1.8 m tall) is within the arm's (or leg's) reach in front of you. The
+  receiving side also checks that the sender was seen within 1.5 s and could have reached it from its last
+  position. Hits are limited to one per sender per 350 ms and one overall per 200 ms, and none are accepted during
+  a run, a teleport or outside a level.
+- New packet DAMAGE (type 16) and HELLO flag `allow hits`; no protocol bump, older versions ignore both.
+- Hits go through the game's own damage call, so health, death and respawn are the game's. The game ignores a
+  second hit for about a second after one; the mod clears that window for these hits so 2 to 2.5 punches a second
+  all count. If the game does not cry out by itself, the mod plays the cry, so others hear it from the ghost.
+- **Known limit:** a player knocked out by another player gets no death animation (they stand, then respawn); one
+  knocked out by an enemy does. Not found yet (the damage data matches an enemy's melee hit).
+
 ### Time of day
 - **Everyone sees the host's sky.** When you join a player's session, your time of day (sky, sun, light) follows
   the host's. The host's clock goes with its HELLO once a second, and your clock is set to it when they are more

@@ -256,6 +256,41 @@ through PING cells), and reads hold gestures from `summon::Input` filled by the 
 (keys through `GetAsyncKeyState`, the pad through `gamepad::held`). While a summon waits, the accept
 key (and the decline key, also during "Go back?") is kept from the game as the wheel's keys are.
 
+## Hits between players (`game/combat.cpp`, `game/strike_math.h`)
+
+Off unless both sides choose: the striker's `[combat] deal_hits`, the target's `hits_taken` (`off` /
+`one_hp` / `lethal`, announced in HELLO as flag 16 `kHelloAllowHits`; a striker only considers players with
+the flag). Ghosts have no collision, so a hit is decided from positions.
+
+1. **Swing**: the local player's combat sound graphs (`Faith_Combat_Melee`, `Faith_Combat_DroneKick`) and the
+   `ME_Faith_PunchJab` / `PunchFull` vocal triggers, already captured for the audio packets in
+   `player_audio.cpp`, call `combat::onLocalCombatEvent`. Logs of every event are verbose-only.
+2. **Decision** (server tick, `combat::tick`): at most one strike per 400 ms. The reach is a horizontal segment
+   in front of the striker (punch 1.2 m at 1.1 m height, kick 1.8 m at 0.7 m, 0.3 m thick) against the
+   target's capsule (0.4 m radius, 1.8 m tall, feet at the ghost position). The target must be within +-75
+   degrees of the facing. The nearest allowed player gets a DAMAGE packet (type 16: id, target, kind, amount;
+   sent 3 times, deduplicated by id).
+3. **Receiving**: refused unless `hits_taken` is on, we are in a level, no teleport runs, we are not in a run,
+   and the sender was seen within 1.5 s and is plausible from its last position (no facing check, 1 m plus
+   reach of slack). The limiter allows one hit per sender per 350 ms and one overall per 200 ms.
+4. **Effect**: the hit goes through the game's own damage call (`Fn_DamageCharacter` 0x1434d94e0) with a
+   `PamServerDamageInfo` and a damage source built like an enemy melee hit (type 0x66 Melee, amount 1 as an
+   int at +0xe8, direction from the striker, impulse 800, hit position and source position). The game lowers
+   health, kills at 0 or below (`die()`, killed messages) and respawns. It ignores further damage for about
+   one second after a hit (a bool property inline in the health component at +0x128); the mod clears it
+   before each of these hits, so 2 to 2.5 punches a second count. `one_hp` mode skips the hit at 1 HP, so it
+   never takes the last point. `lethal` lets the hit that reaches 0 kill.
+5. **Sound**: if the game does not cry out by itself within 400 ms, the mod plays `ME_Faith_DamageLite`
+   (`ME_Faith_Damage` when killed) on the local character and sends it as a vocal trigger, so others hear it
+   from the ghost.
+6. **Solo test**: a swing at the mirrored ghost hurts yourself.
+7. **Developer builds** (`MECMP_DEBUG_KEYS`): the human health component's `setHealth`, `applyDamage` and
+   `die` slots are also hooked to log callers and dump DamageInfo, the death event table is printed, and the
+   debug build is otherwise identical.
+
+**Known limit:** a player knocked out by another player gets no death animation (stands, then respawns); one
+knocked out by an enemy does. The damage data matches an enemy's melee hit; the cause is not found.
+
 ## Positional voice (`game/mumble_link.cpp`)
 
 Mumble's Link plugin reads the shared memory `MumbleLink` (`LinkedMem`, version 2). Each rendered frame

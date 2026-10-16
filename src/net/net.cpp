@@ -109,6 +109,10 @@ struct Remote {
     proto::RecentIds<16> visitSeen;        // VISIT packets already handled (id and kind)
     DWORD visitBurstAt = 0;                // flood limit
     int visitBurst = 0;
+    bool allowsHits = false;               // their HELLO: strikes may hurt them (kHelloAllowHits)
+    proto::RecentIds<16> damageSeen;       // DAMAGE packets already handled
+    DWORD damageBurstAt = 0;               // flood limit
+    int damageBurst = 0;
     Snap snaps[kSnapCount];
     int head = 0, fill = 0;
 };
@@ -330,6 +334,7 @@ void sendHello() {
         if (config::get()->membersMayHardSummon) flags = static_cast<uint8_t>(flags | proto::kHelloMembersHard);
     }
     if (config::get()->askBeforeVisit) flags = static_cast<uint8_t>(flags | proto::kHelloAskVisit);
+    if (config::get()->hitsTaken != 0) flags = static_cast<uint8_t>(flags | proto::kHelloAllowHits);
     proto::OnlineProfile profile;
     {
         std::lock_guard<std::mutex> lock(g_m);
@@ -654,6 +659,7 @@ void sendActivity() {
 constexpr int kSummonBurst = 6; // at most this many summons / withdrawals from one player per kChatBurstMs
 std::deque<SummonInfo> g_summons; // summons to show, not yet taken; guarded by g_m
 std::deque<VisitInfo> g_visits;   // VISIT packets for us, not yet taken; guarded by g_m
+std::deque<DamageInfo> g_damages; // DAMAGE packets for us, not yet taken; guarded by g_m
 // Our own open summon: who has answered and how.
 struct MySummon {
     bool open = false;
@@ -741,6 +747,25 @@ void receiveVisit(Remote& r, bool own, const char* payload, size_t len) { // cal
     info.kind = v.kind;
     g_visits.push_back(info);
     while (g_visits.size() > 16) g_visits.pop_front();
+}
+
+constexpr int kDamageBurst = 6; // at most this many strikes from one player per kChatBurstMs
+
+void receiveDamage(Remote& r, bool own, const char* payload, size_t len) { // caller holds g_m
+    proto::Damage d;
+    if (!proto::readDamage(payload, len, d)) { ++g_dropped; return; }
+    if (own || d.target != g_session) return; // not for us
+    if (!r.damageSeen.add(d.id)) return;      // a repeat
+    const DWORD now = GetTickCount();
+    if (now - r.damageBurstAt > kChatBurstMs) { r.damageBurstAt = now; r.damageBurst = 0; }
+    if (++r.damageBurst > kDamageBurst) return;
+    DamageInfo info;
+    info.id = d.id;
+    info.from = r.id;
+    info.name = r.name.empty() ? std::string("Runner") : r.name;
+    info.kind = d.kind;
+    g_damages.push_back(info);
+    while (g_damages.size() > 8) g_damages.pop_front();
 }
 
 // --- Admission (protocol 7, see kTypeChallenge in protocol.h) -----------------------------------------
@@ -953,6 +978,7 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
         proto::readHello(payload, len, raw, look, &flags, &wear, &profile, &timeOfDay);
         r.profile = profile;
         r.asksVisit = (flags & proto::kHelloAskVisit) != 0;
+        r.allowsHits = (flags & proto::kHelloAllowHits) != 0;
         // Accepted only straight from the host (forwarded copies come from the host's address too, but have the flag cleared).
         if ((flags & proto::kHelloHost) && !own && g_role == Role::Join && sameAddr(from, g_hostAddr)) {
             g_hostSession = h.session;
@@ -1010,6 +1036,10 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
     }
     if (h.type == proto::kTypeVisit) {
         receiveVisit(r, own, payload, len);
+        return;
+    }
+    if (h.type == proto::kTypeDamage) {
+        receiveDamage(r, own, payload, len);
         return;
     }
     if (h.type == proto::kTypeSummon || h.type == proto::kTypeSummonReply) {
@@ -1880,6 +1910,27 @@ uint32_t sendVisit(uint32_t target, uint8_t kind, uint32_t id) {
     return v.id;
 }
 
+uint32_t sendDamage(uint32_t target, uint8_t kind) {
+    std::lock_guard<std::mutex> lock(g_m);
+    if (!g_run) return 0;
+    proto::Damage d;
+    d.id = nextBurstId();
+    d.target = target;
+    d.kind = kind;
+    d.amount = 1;
+    char buf[proto::kMaxPacket];
+    const size_t n = proto::writeDamage(buf, proto::Header{}, d);
+    g_outBurst.push_back({proto::kTypeDamage, std::vector<char>(buf + sizeof(proto::Header), buf + n), kChatSends});
+    return d.id;
+}
+
+std::vector<DamageInfo> takeDamages() {
+    std::lock_guard<std::mutex> lock(g_m);
+    std::vector<DamageInfo> out(g_damages.begin(), g_damages.end());
+    g_damages.clear();
+    return out;
+}
+
 std::vector<VisitInfo> takeVisits() {
     std::lock_guard<std::mutex> lock(g_m);
     std::vector<VisitInfo> out(g_visits.begin(), g_visits.end());
@@ -2033,6 +2084,7 @@ std::vector<RemoteInfo> remotes(uint32_t maxAgeMs) {
                          r.profile.name};
         info.typing = (r.stateFlags & kStateTyping) != 0;
         info.asksVisit = r.asksVisit;
+        info.allowsHits = r.allowsHits;
         if (r.activity.kind != proto::kActivityNone && r.activityAt && now - r.activityAt < kActivityForgetMs) {
             info.runKind = r.activity.kind;
             info.runMs = r.activity.elapsedMs + (now - r.activityAt);

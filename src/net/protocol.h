@@ -39,7 +39,8 @@ constexpr uint16_t kTypeSummonReply = 8; // a summoned player's answer (see SUMM
 constexpr uint16_t kTypeResult = 9; // a finished dash or other run, with its time (see RESULT below)
 constexpr uint16_t kTypeActivity = 10; // the run the sender is in now, with its clock (see ACTIVITY below)
 constexpr uint16_t kTypeVisit = 13; // "may I come to you?" and its answer (see VISIT below)
-constexpr uint16_t kTypeAudio = 14; // native movement event + scalar inputs (player_audio.h)
+constexpr uint16_t kTypeAudio = 15; // native movement event + scalar inputs (player_audio.h)
+// 14 is RENDEZVOUS (below): not a session packet, so it is not in knownType.
 // type 5 INFO: a server list's question "who are you?" and a dedicated server's answer. Not a session
 // packet: it is not in knownType (never stored or forwarded), and a server answers it whatever the
 // protocol in the header, so a list can say "other version" instead of nothing.

@@ -502,7 +502,9 @@ bool readState(const char* payload, size_t n, const Decoder& dec, PlayerState& o
     if (!sanePlacement(out)) return false;
     full = (fl & 1) != 0;
     out.boneCount = 0;
-    if (res || (fl & ~1) || (out.flags & ~(kStateInLevel | kStateTyping))) return false;
+    // Unknown kState flags are cleared by limitPose below, not refused: older versions must keep
+    // ignoring flags added later (as kStateTyping was).
+    if (res || (fl & ~1)) return false;
     const uint32_t validMask = nb == 32 ? UINT32_MAX : nb < 32 ? ((1u << nb) - 1) : 0;
     if ((mask & ~validMask) || (nb && full && mask != validMask)) return false;
     if (nb == 0) return p == end && limitPose(out);

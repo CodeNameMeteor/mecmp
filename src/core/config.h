@@ -90,7 +90,7 @@ struct Settings {
     // [protection]: every receiver also enforces a fixed 2 m ceiling.
     float boneReach = 1.f; // host clamp on each non-anchor replay translation, metres (.5..2)
     // [audio]
-    bool playerAudio = true;
+    bool playerAudio = false; // off until multiplayer playback has been play-tested
     float playerAudioDistance = 80.f;
     // [ghost]
     bool autoSpawn = true;

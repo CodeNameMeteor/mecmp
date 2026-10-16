@@ -1,5 +1,6 @@
 // Tests for the dedicated server's relay rules. They build on Linux:
 //   g++ -std=c++17 -Isrc tests/server_test.cpp src/server/relay.cpp src/server/discord.cpp src/net/protocol.cpp -ldl -pthread -o server_test && ./server_test
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <set>
@@ -73,11 +74,15 @@ static std::vector<char> hello(uint32_t session, const char* name, uint8_t flags
 }
 
 static std::vector<char> state(uint32_t session, uint32_t seq = 2) {
-    // The relay forwards a STATE unread: a header and a few bytes are enough.
-    std::vector<char> v(sizeof(proto::Header) + 8, 0);
+    // The relay decodes and checks a STATE before forwarding it, so it must be a real one (position only).
+    char buf[proto::kMaxPacket];
     const proto::Header h{proto::kMagic, proto::kProtocol, proto::kTypeState, session, seq};
-    memcpy(v.data(), &h, sizeof(h));
-    return v;
+    mecmp::net::PlayerState s;
+    s.pos[0] = 10.f; s.pos[1] = 2.f; s.pos[2] = -5.f;
+    s.flags = mecmp::net::kStateInLevel;
+    proto::Encoder enc;
+    const size_t n = proto::writeState(buf, h, s, enc);
+    return std::vector<char>(buf, buf + n);
 }
 
 static const Addr A{0x0a000001, 5000}, B{0x0a000002, 5000}, C{0x0a000003, 5000};
@@ -279,6 +284,74 @@ static void testRateLimit() {
     auto s = state(1, 100);
     t.deliver(A, s, 11000); // a second later: 10 more allowed (the burst caps them at 5)
     CHECK(t.sentTo(B) == 1);
+}
+
+// The relay checks and re-encodes poses with each player's own encoder: a full pose, then deltas.
+static void testPosesStayDeltas() {
+    Harness t;
+    auto hA = hello(1, "alice"), hB = hello(2, "bob");
+    t.deliver(A, hA, 0);
+    t.deliver(B, hB, 0);
+    proto::Encoder enc;
+    mecmp::net::PlayerState s;
+    s.pos[0] = 10.f; s.flags = mecmp::net::kStateInLevel; s.boneCount = 23;
+    for (int i = 0; i < 23; ++i) { s.bones[i][3] = 1; s.bones[i][7] = 1; s.bones[i][1] = 0.1f; }
+    std::vector<size_t> sizes;
+    proto::Decoder decB; // B's view of alice's poses
+    for (uint32_t seq = 10; seq < 13; ++seq) {
+        t.sent.clear();
+        char buf[proto::kMaxPacket];
+        const proto::Header h{proto::kMagic, proto::kProtocol, proto::kTypeState, 1, seq};
+        const size_t n = proto::writeState(buf, h, s, enc);
+        t.deliver(A, std::vector<char>(buf, buf + n), 100 + seq);
+        CHECK(t.sentTo(B) == 1);
+        for (const auto& x : t.sent) {
+            if (!(x.to == B)) continue;
+            sizes.push_back(x.data.size());
+            mecmp::net::PlayerState out;
+            bool f = false;
+            CHECK(proto::readState(x.data.data() + sizeof(proto::Header), x.data.size() - sizeof(proto::Header), decB, out, f));
+            if (f) proto::commitBase(decB, out);
+        }
+    }
+    CHECK(sizes.size() == 3 && sizes[1] < sizes[0] && sizes[2] == sizes[1]);
+    // A limb longer than bone_reach arrives shortened.
+    t.sent.clear();
+    s.bones[5][0] = 1.5f;
+    proto::Encoder full;
+    char buf[proto::kMaxPacket];
+    const proto::Header h{proto::kMagic, proto::kProtocol, proto::kTypeState, 1, 20};
+    const size_t n = proto::writeState(buf, h, s, full);
+    t.deliver(A, std::vector<char>(buf, buf + n), 200);
+    for (const auto& x : t.sent) {
+        if (!(x.to == B)) continue;
+        mecmp::net::PlayerState out;
+        bool f = false;
+        CHECK(proto::readState(x.data.data() + sizeof(proto::Header), x.data.size() - sizeof(proto::Header), decB, out, f));
+        const float len = std::sqrt(out.bones[5][0] * out.bones[5][0] + out.bones[5][1] * out.bones[5][1]);
+        CHECK(out.boneCount == 23 && len < 1.01f);
+    }
+}
+
+// Player sounds (type 15) are checked and forwarded like other session packets; 14 is the rendezvous.
+static void testAudioForwarded() {
+    CHECK(proto::kTypeAudio != proto::kTypeRendezvous && proto::knownType(proto::kTypeAudio));
+    Harness t;
+    auto hA = hello(1, "alice"), hB = hello(2, "bob");
+    t.deliver(A, hA, 0);
+    t.deliver(B, hB, 0);
+    t.sent.clear();
+    mecmp::net::PlayerAudio a;
+    a.id = 1; a.timeMs = 5; a.event = 0x99; a.source = 0;
+    char buf[proto::kMaxPacket];
+    const proto::Header h{proto::kMagic, proto::kProtocol, proto::kTypeAudio, 1, 30};
+    const size_t n = proto::writeAudio(buf, h, a);
+    t.deliver(A, std::vector<char>(buf, buf + n), 50);
+    CHECK(t.sentTo(B) == 1 && t.sentTo(A) == 0);
+    t.sent.clear();
+    buf[sizeof(h) + 12] = static_cast<char>(0xff); // the source: out of range
+    t.deliver(A, std::vector<char>(buf, buf + n), 60);
+    CHECK(t.sentTo(B) == 0);
 }
 
 static void testKickAndSay() {
@@ -864,6 +937,8 @@ int main() {
     testMotd();
     testMirror();
     testForwardsToOthers();
+    testPosesStayDeltas();
+    testAudioForwarded();
     testReactForwarded();
     testSummonForwarded();
     testHelloFlagsCleared();

@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Player sounds (by ReGlitched)
+- **Hear other players.** Their footsteps, hand contacts, landings, breathing, effort grunts and combat sounds
+  play through the game's own audio, from where they are. *Players* tab: *Other players' game sounds* and a
+  distance (80 m by default). **Off by default** until it has been play-tested; turn it on to try it. Everyone
+  needs this version, and a dedicated server must be updated too. See `docs/PLAYER_AUDIO.md`.
+- **Stretched bodies are cut short.** Hosts and dedicated servers shorten limbs longer than `bone_reach`
+  (1 m by default, 0.5 to 2) before forwarding a pose, and every player also caps them at 2 m.
+
 ### Hosting without port forwarding
 - **Hole punching.** A host registers with a dedicated server ([net] `rendezvous` in mecmp.ini, the community
   server by default); when someone joins with the host's code, the server tells each of them the other's address

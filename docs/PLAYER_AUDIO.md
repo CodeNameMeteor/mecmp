@@ -7,11 +7,12 @@ and the updated server binary when using a dedicated server.
 ## Player sounds
 
 The Players tab has **Other players' game sounds**, a distance setting, and
-capture/playback counters. Defaults in `mecmp.ini`:
+capture/playback counters. It is off by default until playback has been play-tested;
+capture and sending still run, so a player who turns it on hears the others. Defaults in `mecmp.ini`:
 
 ```ini
 [audio]
-player_sounds=1
+player_sounds=0
 distance=80
 ```
 
@@ -54,7 +55,7 @@ are bounded; each receiver accepts at most 64 distinct audio events per peer per
 
 The host validates audio packet structure before relaying. Receiving clients also
 validate graph events and scalar input hashes against their own movement assets.
-Older DLLs ignore the optional type 14 packet. An older dedicated server will not
+Older DLLs ignore the optional type 15 packet. An older dedicated server will not
 relay it; update that server for sound.
 
 ## Bone protections

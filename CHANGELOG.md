@@ -138,6 +138,8 @@
   first, shown like a summon (hold the accept key for yes, the decline key for no). The menu's Go to button
   asks too. New VISIT packet (type 13, no protocol bump): older versions never ask and are never asked; a
   dedicated server must be updated to pass it on.
+- **Do Not Disturb** (You tab, Privacy; `do_not_disturb` in [player]): automatically declines incoming
+  summons and go to requests, including any already waiting.
 
 ## 0.9.0: first public beta
 

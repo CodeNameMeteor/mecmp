@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Controls
+- **Any key can be a bind.** Every key on the keyboard can now be bound in the *Controls* tab: arrows, the
+  number pad, punctuation, F13–F24, Tab, Space, Shift/Ctrl/Alt, and keys only some layouts have (a UK
+  keyboard's `#`, say), not only a fixed list. Keys show their own name on your layout ("Page Up", "Num 4").
+  Escape, the Windows keys and Print Screen stay free.
+- **The menu key can be anything the other binds can,** including a letter, a digit or the middle or side
+  mouse buttons. A typing key used as the menu key still types in the chat and in the menu's text boxes.
+- F10 and Alt work as binds (Windows sends them as system keys, which the mod did not listen to).
+
 ### Player sounds (by ReGlitched)
 - **Hear other players.** Their footsteps, hand contacts, landings, breathing, effort grunts and combat sounds
   play through the game's own audio, from where they are. *Players* tab: *Other players' game sounds* and a

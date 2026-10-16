@@ -637,28 +637,14 @@ void voiceSection() {
 }
 
 // The action key pressed this frame (as ping_key names it: a letter, a digit, ENTER or a menu key), if any.
-bool pressedActionKey(std::string& name) {
-    for (int i = 0; i < 26; ++i) {
-        if (!ImGui::IsKeyPressed(static_cast<ImGuiKey>(ImGuiKey_A + i), false)) continue;
-        name.assign(1, static_cast<char>('A' + i));
-        return true;
-    }
-    for (int i = 0; i < 10; ++i) { // the number row
-        if (!ImGui::IsKeyPressed(static_cast<ImGuiKey>(ImGuiKey_0 + i), false)) continue;
-        name.assign(1, static_cast<char>('0' + i));
-        return true;
-    }
-    if (ImGui::IsKeyPressed(ImGuiKey_Enter, false)) {
-        name = "ENTER";
-        return true;
-    }
-    int count = 0;
-    const ui::MenuKey* keys = ui::menuKeys(count);
-    for (int i = 0; i < count; ++i) {
-        if (!ImGui::IsKeyPressed(static_cast<ImGuiKey>(keys[i].imguiKey), false)) continue;
-        name = keys[i].name;
-        return true;
-    }
+// The key (or, with `mouse`, the middle or a side mouse button) pressed while a binding is recorded.
+bool pressedBind(std::string& name, bool mouse) {
+    if (ui::takeCapturedKey(name)) return true;
+    for (int m = 2; m <= 4 && mouse; ++m) // middle, Mouse 4, Mouse 5
+        if (ImGui::IsMouseClicked(m)) {
+            name = "MOUSE" + std::to_string(m + 1);
+            return true;
+        }
     return false;
 }
 
@@ -841,13 +827,7 @@ void keyRow(const config::Settings& cfg, int which) {
         if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
             g_bindCapture = -1;
         } else {
-            bool got = pressedActionKey(name);
-            for (int m = 2; m <= 4 && !got && bind.mouse; ++m) // middle, Mouse 4, Mouse 5
-                if (ImGui::IsMouseClicked(m)) {
-                    name = "MOUSE" + std::to_string(m + 1);
-                    got = true;
-                }
-            if (got) {
+            if (pressedBind(name, bind.mouse)) {
                 if (bind.set(name)) {
                     config::change([name, field](config::Settings& c) { c.*field = name; });
                     g_bindNote[which].clear();
@@ -1526,30 +1506,24 @@ void controlsMenu(const config::Settings& c) {
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("The key that opens and closes this menu");
     ImGui::SameLine();
     if (g_keyCapture) {
-        ImGui::TextColored(ImVec4(1.f, 0.85f, 0.3f, 1.f), "press a key (Esc cancels)");
-        int count = 0;
-        const ui::MenuKey* keys = ui::menuKeys(count);
+        ImGui::TextColored(ImVec4(1.f, 0.85f, 0.3f, 1.f), "press a key or a mouse button (Esc cancels)");
+        std::string name;
         if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
             g_keyCapture = false;
-        } else {
-            for (int i = 0; i < count; ++i) {
-                if (!ImGui::IsKeyPressed(static_cast<ImGuiKey>(keys[i].imguiKey), false)) continue;
-                const std::string name = keys[i].name;
-                if (ui::setMenuKey(name)) {
-                    g_menuKeyNote.clear();
-                    config::change([name](config::Settings& c) { c.menuKey = name; });
-                } else {
-                    g_menuKeyNote = ui::keyLabel(name) + " is already in use";
-                }
-                g_keyCapture = false;
-                break;
+        } else if (pressedBind(name, true)) {
+            if (ui::setMenuKey(name)) {
+                g_menuKeyNote.clear();
+                config::change([name](config::Settings& c) { c.menuKey = name; });
+            } else {
+                g_menuKeyNote = ui::keyLabel(name) + " is already in use";
             }
+            g_keyCapture = false;
         }
         if (!g_keyCapture) ui::setKeyCapture(false);
     } else {
-        ImGui::Text("%s", cfg->menuKey.c_str());
+        ImGui::Text("%s", ui::keyLabel(cfg->menuKey).c_str());
         ImGui::SameLine();
-        ImGui::BeginDisabled(g_bindCapture >= 0); // one key is recorded at a time
+        ImGui::BeginDisabled(g_bindCapture >= 0 || gamepad::capturing()); // one binding is recorded at a time
         if (ImGui::SmallButton("Change##key")) {
             g_keyCapture = true;
             ui::setKeyCapture(true);
@@ -1641,7 +1615,8 @@ void controlsAdvanced(const config::Settings& c) {
 // "INSERT or LS+RS"
 std::string openKeys(const config::Settings& cfg) {
     const uint16_t pad = gamepad::parse(cfg.menuPad);
-    return pad ? cfg.menuKey + " or " + gamepad::labelCombo(gamepad::format(pad)) : cfg.menuKey;
+    const std::string key = ui::keyLabel(cfg.menuKey);
+    return pad ? key + " or " + gamepad::labelCombo(gamepad::format(pad)) : key;
 }
 } // namespace
 

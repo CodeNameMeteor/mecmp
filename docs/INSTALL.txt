@@ -15,6 +15,8 @@ The log and mecmp.ini are then in the game's folder. Remove both files to go bac
 
 PLAY
 - Press INSERT (or click both sticks on a gamepad) for the MECMP menu.
+  No Insert key? Open mecmp.ini next to the game and set menu_key to another key
+  (e.g. menu_key=F8 or menu_key=M). Controls tab: any key or mouse button for anything.
 - Session tab:
   * Host a session: you get a join code (e.g. 2HMAS-W9ENR). Send it to your friends.
   * Join: paste a friend's join code, or a server's address, and press Join.

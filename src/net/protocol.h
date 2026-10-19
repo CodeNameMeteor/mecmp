@@ -4,12 +4,13 @@
 // Header (16 bytes): u32 magic "MECM" | u16 protocol | u16 type | u32 session | u32 seq
 //
 // type 1 STATE: f32 pos[3] | f32 yaw | u32 flags | u32 timeMs | pose
-//   pose: u8 boneCount | u8 flags (bit0 = full) | u16 0 | u32 translation mask
-//         | boneCount x u32 rotation (smallest-three: 2-bit index + 3 x 10 bits)
-//         | per mask bit: 3 x i16 translation (1/1024 m)
-//   Bones whose translation is not in the packet keep the last full packet's value (a full packet,
-//   with every translation, goes out every kFullEvery packets). The trajectory bone's translation
-//   is world space and is clamped; receivers place it at pos instead.
+//   pose: u8 boneCount | u8 flags (bit0 = full) | u16 0 | u64 x2 translation mask | u64 x2 rotation mask
+//         | full only: u8 skeleton bone index per bone
+//         | per rotation-mask bit: u32 rotation (smallest-three: 2-bit index + 3 x 10 bits)
+//         | per translation-mask bit: 3 x i16 translation (1/1024 m)
+//   Bit i of a mask (word i / 64, bit i % 64) belongs to bone slot i. A bone not in a mask keeps the last full
+//   packet's value; a full packet (every bone, with the index list) goes out every kFullEvery packets and when the
+//   bone set changes. The trajectory bone's translation is world space and is clamped; receivers place it at pos.
 // type 2 HELLO (about once a second): char name[24] (UTF-8, at most 23 bytes, NUL padded)
 //   | u32 look (0 = Faith, else the game's echo CustomizationHash; absent from older versions = 0)
 //   | u8 flags (kHelloHost, kHelloServer) | u8 wear (Faith's outfit changes, kWear...; absent = 0)
@@ -31,7 +32,8 @@ namespace mecmp::net::protocol {
 constexpr uint32_t kMagic = 0x4d43454d; // "MECM"
 // 7: admission cookies (CHALLENGE and ANSWER). A stranger's HELLO is answered with a challenge, and it is let in
 // only after it answers. Older versions cannot answer, so everyone must run the same version.
-constexpr uint16_t kProtocol = 7;
+// 8: poses of up to 96 bones that name their skeleton bones, with delta rotations.
+constexpr uint16_t kProtocol = 8;
 constexpr uint16_t kTypeState = 1;
 constexpr uint16_t kTypeHello = 2;
 constexpr uint16_t kTypeChat = 3;
@@ -73,7 +75,7 @@ constexpr bool knownType(uint16_t type) {
 constexpr size_t kMaxChatBytes = 120; // UTF-8, after cleaning
 constexpr size_t kNameLen = 24;
 constexpr uint32_t kFullEvery = 30;
-constexpr size_t kMaxPacket = 1024;
+constexpr size_t kMaxPacket = 1200;
 
 #pragma pack(push, 1)
 struct Header {
@@ -88,13 +90,17 @@ static_assert(sizeof(Header) == 16, "header");
 size_t writeAudio(char* buf, const Header& h, const PlayerAudio& sample);
 bool readAudio(const char* payload, size_t size, PlayerAudio& out);
 
-struct Encoder { // sender side: translations of the last full packet
+struct Encoder { // sender side: what the last full packet held
     int16_t lastFullT[kMaxPoseBones][3] = {};
+    uint32_t lastFullQ[kMaxPoseBones] = {};
+    uint8_t lastFullIdx[kMaxPoseBones] = {};
     uint32_t lastFullCount = 0;
     uint32_t sinceFull = kFullEvery;
 };
-struct Decoder { // per remote player
+struct Decoder { // per remote player: the last full packet
     float baseT[kMaxPoseBones][3] = {};
+    float baseR[kMaxPoseBones][4] = {};
+    uint8_t baseIdx[kMaxPoseBones] = {};
     uint32_t baseCount = 0;
 };
 

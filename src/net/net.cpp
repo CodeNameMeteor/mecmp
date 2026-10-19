@@ -190,7 +190,7 @@ void routerUnmap() {
     g_routerMapped = 0;
 }
 
-std::atomic<uint64_t> g_sent{0}, g_recv{0}, g_dropped{0}, g_bytesSent{0}, g_relayed{0};
+std::atomic<uint64_t> g_sent{0}, g_recv{0}, g_dropped{0}, g_bytesSent{0}, g_bytesRecv{0}, g_relayed{0};
 
 // Messages caused by other players' packets (joins, leaves, names, new session ids) share a budget:
 // 20 at once, then one every 3 s, so a flood of fake players cannot fill the log (S-9).
@@ -253,7 +253,7 @@ void blend(const PlayerState& a, const PlayerState& b, float k, PlayerState& out
     while (dy > 3.14159265f) dy -= 6.2831853f;
     while (dy < -3.14159265f) dy += 6.2831853f;
     out.yaw = a.yaw + dy * k;
-    if (a.boneCount != b.boneCount) return;
+    if (a.boneCount != b.boneCount || memcmp(a.boneIdx, b.boneIdx, b.boneCount) != 0) return; // another bone set: no blend
     for (uint32_t i = 0; i < b.boneCount; ++i) {
         const float* pa = a.bones[i];
         const float* pb = b.bones[i];
@@ -941,6 +941,7 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
     r.lastSeq = h.seq;
     r.haveSeq = true;
     ++g_recv;
+    g_bytesRecv += static_cast<uint64_t>(n);
     const char* payload = data + sizeof(h);
     const size_t len = static_cast<size_t>(n) - sizeof(h);
     if (h.type == proto::kTypeHello) {
@@ -2124,16 +2125,19 @@ std::string describe() {
     const uint64_t sent = g_sent.load();
     char buf[320];
     if (g_role == Role::Host)
-        snprintf(buf, sizeof(buf), "hosting on port %u (code %s), %llu player(s) joined, sent %llu (avg %llu bytes), received %llu, forwarded %llu, dropped %llu",
+        snprintf(buf, sizeof(buf), "hosting on port %u (code %s), %llu player(s) joined, sent %llu (avg %llu bytes, %llu KB), received %llu (%llu KB), forwarded %llu, dropped %llu",
                  g_port, code.empty() ? "-" : code.c_str(), static_cast<unsigned long long>(peers), static_cast<unsigned long long>(sent),
                  static_cast<unsigned long long>(sent ? g_bytesSent.load() / sent : 0),
-                 static_cast<unsigned long long>(g_recv.load()), static_cast<unsigned long long>(g_relayed.load()),
+                 static_cast<unsigned long long>(g_bytesSent.load() >> 10),
+                 static_cast<unsigned long long>(g_recv.load()), static_cast<unsigned long long>(g_bytesRecv.load() >> 10),
+                 static_cast<unsigned long long>(g_relayed.load()),
                  static_cast<unsigned long long>(g_dropped.load()));
     else
-        snprintf(buf, sizeof(buf), "joined %s (%s), sent %llu (avg %llu bytes), received %llu, dropped %llu",
+        snprintf(buf, sizeof(buf), "joined %s (%s), sent %llu (avg %llu bytes, %llu KB), received %llu (%llu KB), dropped %llu",
                  addrToString(g_hostAddr).c_str(), g_heardFromHost ? "connected" : "no answer yet",
                  static_cast<unsigned long long>(sent), static_cast<unsigned long long>(sent ? g_bytesSent.load() / sent : 0),
-                 static_cast<unsigned long long>(g_recv.load()), static_cast<unsigned long long>(g_dropped.load()));
+                 static_cast<unsigned long long>(g_bytesSent.load() >> 10), static_cast<unsigned long long>(g_recv.load()),
+                 static_cast<unsigned long long>(g_bytesRecv.load() >> 10), static_cast<unsigned long long>(g_dropped.load()));
     return buf;
 }
 

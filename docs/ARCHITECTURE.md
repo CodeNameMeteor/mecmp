@@ -34,7 +34,8 @@ worlds in one process; the mod uses both.
 | Hook | Used for |
 |---|---|
 | Character spawner factories | capture the player's spawner (`Characters/FaithCharacter`) and the city-ghost spawner (`Characters/Projection/ProjectionCharacter`); collect spawn-template looks for models |
-| Client replay player factory | claim our ghosts' client components; others give the reference bone setup |
+| Client replay player factory | claim our ghosts' client components (their data records the body set); others give the reference bone setup and keep vanilla data |
+| Client replay recording factory | the local recorder's data records the body set before the recorder is built |
 | Client character factory | claim our ghosts' client characters (to make them visible) |
 | Look-picker factory (`PamServerCustomizeProjectionCharacterEntity`) | the echo look catalogue, without a memory scan (optional) |
 | `ServerGameWorld::postUpdate` | the per-tick update |
@@ -44,8 +45,24 @@ worlds in one process; the mod uses both.
 
 Position and facing come from the player's server character. The body pose comes from the
 player's own replay recorder (`PamClientReplayRecordingComponent` +0x48), which always keeps
-the last ~15 s for the game's "create a time trial" feature. Its newest keyframe is 23 bones of
-`{vec4 translation, quat rotation}`, exactly what a ghost's replay player plays.
+the last ~15 s for the game's "create a time trial" feature. Its newest keyframe is one `{vec4 translation,
+quat rotation}` per recorded bone, exactly what a ghost's replay player plays.
+
+### Pose sync (the bone set)
+
+The recorder and the ghost players record the bones named in their data (`RecordingBones`) plus all their
+ancestors. The mod replaces the game's 5-6 bones with one list (`kTargets` in `game/level.cpp`): fingers, toes,
+roll (twist) bones and the main body, 85 bones of the 182. The data is patched in the two factory hooks, before
+the objects are built; the player data only for our ghosts (the game's city and time-trial ghosts share it and keep
+their 23-bone replays). The face and the rig's procedural helpers are not sent.
+
+- A pose names its bones: each full STATE packet carries the skeleton index of every slot (`PlayerState::boneIdx`,
+  from the recorder's setup at `Rec_Setup`), so sender and receiver need no shared table and any set works.
+- A ghost's server component takes the setup of its own client (`readOwnSetup`), because the client drops a pose whose
+  bone count differs from its own. The pose is moved into that setup by index (`remapPose`); a bone the sender does not
+  send takes the local player's own current value.
+- If the mod loaded after the level, the recorder was built before the patch and records the vanilla set
+  (`noteRecorderSetup`): the player patches are then undone and ghosts stay vanilla until the next level.
 
 ## Ghosts (`game/ghosts.cpp`)
 
@@ -53,7 +70,7 @@ Per remote player:
 
 1. **Spawn** a ProjectionCharacter from the level's city-ghost spawner (`spawner->vtbl[0xd0]`),
    at the player's position. Give its server replay component a pose buffer with the bone setup
-   real ghosts use (copied from any live ghost client component).
+   of its own client component (until that exists: the setup of a live city ghost).
    Not before the player's own character has existed for 3 s: a ghost spawned right after it appears
    is deleted by the game ~0.6 s later on every level load (the spawner drops it; cause not found).
    A ghost the game deletes is logged with what was found (`ghost: ... is gone`) and spawned again.
@@ -303,7 +320,8 @@ UDP, one socket. Sessions have one host and any number of joiners (up to 16).
   8 SUMMON_REPLY (see `net/protocol.h`).
 - Packets: STATE 30 Hz and HELLO (name and look: u32, 0 = Faith, else the echo hash) ~1 Hz. Remote players are keyed by the random session id
   in each packet. Pose compression: rotations smallest-three 32-bit, translations i16 at 1/1024 m,
-  only for bones that changed since the last full packet (one per second); about 150 bytes.
+  only for bones that changed since the last full packet (every 30th, or when the bone set changes) and, since protocol 8, only for
+  rotations that changed too. The `net:` status line shows the bytes sent and received.
 - Receivers buffer 16 snapshots per player and show them 120 ms in the past, blended. The sender's
   32-bit millisecond clock is unwrapped (`protocol::ClockUnwrap`), so a 49-day uptime wrap is harmless. Positions and angles outside a sane range are dropped.
 - Packet loss per player (`protocol::LossWindow`): gaps in their sequence numbers over the last 5 s;

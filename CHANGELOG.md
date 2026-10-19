@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Body pose
+- **Fingers, toes and wrists now move on other players' ghosts.** A ghost used to get only 23 bones of the player's
+  pose (head, spine, one hand bone, legs). Now the whole body goes out: fingers, toes and the arm and leg roll (twist)
+  bones, 85 of the skeleton's 182 bones (the face is left out). A fist, a raised finger or a turned wrist show as the
+  player makes them.
+- **Any animation works.** Every pose names its skeleton bones, so a new animation mod needs no change here, and the
+  sender and receiver need no shared table. Unchanged bones are not sent again until the next full pose.
+- **Protocol 8.** Everyone in a session must run this version (older ones are shown as "other version").
+- **If MECMP is loaded after the level was created** (for example the game is started straight into a level by a
+  launcher), the player's recorder is already built with the game's 23 bones. Ghosts then stay on 23 bones too, so
+  nothing breaks; reload a checkpoint to get the full body. A normal start (main menu first) is not affected.
+- **The game's own ghosts are left alone.** City and time-trial ghosts keep their recorded poses.
+
 ### Your look
 - **"Ghost" remembers your last ghost.** Switching to Faith and back to Ghost in the menu used to fall back to the default
   RunVis ghost; now it returns to the style and color you had (saved as `[player] last_ghost`).

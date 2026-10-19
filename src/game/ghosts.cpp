@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <cstring>
+#include <map>
 #include <mutex>
 #include <vector>
 
@@ -12,7 +13,7 @@
 #include "game/models.h"
 #include "game/motion_stats.h"
 #include "game/pose_math.h"
-#include <map>
+#include "game/pose_remap.h"
 #include "net/net.h"
 #include "net/pose_limits.h"
 
@@ -184,8 +185,8 @@ struct ClientCompView {
         return v;
     }
     uintptr_t pose() const { return at<uintptr_t>(CRP_ReceivedPose); }
-    uint32_t bones() const { return at<uint32_t>(CRP_ExpectedBones); }
-    uintptr_t boneIndices() const { return at<uintptr_t>(CRP_Setup + 0x10); }
+    uint32_t bones() const { return at<uint32_t>(CRP_OwnSetup); }
+    uintptr_t boneIndices() const { return at<uintptr_t>(CRP_OwnSetup + 0x10); }
 };
 
 // Is the component still a client replay component of the same owner as when we claimed it (the memory
@@ -221,13 +222,18 @@ uintptr_t blueprintCharacterData(uintptr_t bp) {
     return 0;
 }
 
-// Gives the ghost's server replay component a pose buffer with the bone setup real ghosts use.
-// Buffers come from the component's own engine allocators, so its destructor frees them.
-bool preparePose(uint8_t* c) {
-    if (*reinterpret_cast<void**>(c + SRP_Pose)) return true;
-    level::BoneSetup ref;
-    if (!level::referenceSetup(ref)) return false;
-    const uint32_t N = ref.count;
+// Gives the ghost's server replay component a pose buffer with the bone setup `want` (the ghost client's own,
+// so the bone count it checks matches). Rebuilt when the setup differs; the old buffers stay in the
+// component's arena. Buffers come from the component's own engine allocators, so its destructor frees them.
+bool preparePose(uint8_t* c, const level::BoneSetup& want) {
+    const uint32_t currentN = *reinterpret_cast<uint32_t*>(c + SRP_Setup);
+    if (*reinterpret_cast<void**>(c + SRP_Pose)) {
+        const auto* cur = *reinterpret_cast<const uint32_t* const*>(c + SRP_Setup + 0x10);
+        if (currentN == want.count && cur && memcmp(cur, want.indices, want.count * 4) == 0) return true;
+        *reinterpret_cast<void**>(c + SRP_Pose) = nullptr;
+    }
+    const uint32_t N = want.count;
+    VLOG("ghost: pose setup of %p now has %u bones", c, N);
     uint8_t* S = c + SRP_Setup;
     if (!*reinterpret_cast<void**>(S + 0x10)) *reinterpret_cast<void**>(S + 0x08) = nullptr;
     if (!*reinterpret_cast<void**>(S + 0x78)) *reinterpret_cast<void**>(S + 0x90) = nullptr;
@@ -237,8 +243,8 @@ bool preparePose(uint8_t* c) {
     auto* pose = static_cast<float*>(engineAlloc(reinterpret_cast<void**>(c + SRP_PoseArena), N * 0x20, 16));
     if (!idx || !flags || !pose) return false;
     for (uint32_t i = 0; i < N; ++i) {
-        idx[i] = ref.indices[i];
-        flags[i] = ref.flags[i];
+        idx[i] = want.indices[i];
+        flags[i] = want.flags[i];
     }
     memset(pose, 0, N * 0x20);
     *reinterpret_cast<uint32_t**>(S + 0x10) = idx;
@@ -272,28 +278,78 @@ void placeAnchor(float* pose, int traj, const float pos[3]) {
     }
 }
 
+std::mutex g_ownM;
+float g_own[kMaxBones][8]; // the local recorder's latest pose
+uint8_t g_ownIdx[kMaxBones];
+uint32_t g_ownN = 0;
+
+// The pose for a ghost with setup `dstIdx`: the sender's bones, and for bones it does not send the local
+// player's own (same body: translations fit, rotations are a neutral pose).
+void fillPose(float dst[][8], const uint32_t* dstIdx, uint32_t dstN, const net::PlayerState& st) {
+    // The stand-in is only needed when the sender lacks some bone of the setup.
+    bool sent[256] = {};
+    for (uint32_t s = 0; s < st.boneCount; ++s) sent[st.boneIdx[s]] = true;
+    bool covered = true;
+    for (uint32_t d = 0; covered && d < dstN; ++d) covered = sent[dstIdx[d] & 0xff];
+    if (!covered) {
+        std::lock_guard<std::mutex> lock(g_ownM);
+        if (g_ownN) remapPose(dst, dstIdx, dstN, g_own, g_ownIdx, g_ownN);
+    }
+    remapPose(dst, dstIdx, dstN, st.bones, st.boneIdx, st.boneCount);
+}
+
+// A note that repeats every frame or tick: one per `ms` per call site.
+bool noteDue(DWORD& last, DWORD ms = 10000) {
+    const DWORD now = GetTickCount();
+    if (last && now - last < ms) return false;
+    last = now;
+    return true;
+}
+
 // Server side: the streamed pose into the ghost's replay component, replicated to clients.
 void drive(Ghost& g, const net::PlayerState& input) {
     net::PlayerState st = input;
     if (!net::limitPose(st)) return;
     auto* c = static_cast<uint8_t*>(getComponent(g.character, TI_PamServerReplayPlayerComponent));
-    if (!c || !preparePose(c)) return;
+    if (!c) return;
+    // The client drops a pose whose bone count differs from its own setup, so the server takes that setup.
+    // Until it is readable: the setup of the city ghosts' replays.
+    level::BoneSetup want;
+    thread_local ClientCompView v;
+    const bool own = g.clientComp && readClientComp(g.clientComp, g.clientChar, v) &&
+                     level::readOwnSetup(reinterpret_cast<uintptr_t>(g.clientComp), want);
+    if (!own) {
+        // Not known (yet): keep the setup the ghost has, else the replays' one. Changing it back and forth
+        // would leak a set of buffers each time.
+        const uint32_t haveN = *reinterpret_cast<uint32_t*>(c + SRP_Setup);
+        const auto* haveIdx = *reinterpret_cast<const uint32_t* const*>(c + SRP_Setup + 0x10);
+        if (*reinterpret_cast<void**>(c + SRP_Pose) && haveIdx && haveN && haveN <= kMaxBones) {
+            want.count = haveN;
+            memcpy(want.indices, haveIdx, haveN * 4);
+        } else if (!level::referenceSetup(want)) {
+            return;
+        }
+    }
+    if (!preparePose(c, want)) return;
     const uint32_t N = *reinterpret_cast<uint32_t*>(c + SRP_Setup);
     auto* pose = *reinterpret_cast<float**>(c + SRP_Pose);
     if (!pose || N == 0 || N > kMaxBones) return;
     *reinterpret_cast<uint32_t*>(c + SRP_PlaybackState) = 0; // no server replay overwriting the pose
     const int traj = trajectorySlot(c, N);
-    if (st.boneCount == N) {
-        memcpy(pose, st.bones, N * 0x20);
+    if (st.boneCount > 0) {
+        float tempBuf[kMaxBones][8];
+        memcpy(tempBuf, pose, N * 0x20);
+        fillPose(tempBuf, want.indices, N, st);
+        memcpy(pose, tempBuf, N * 0x20);
         if (!g.posing) {
             g.posing = true;
             g.posingSince = GetTickCount();
-            VLOG("ghost: player %08x now drives ghost %p with %u bones", g.peer, g.character, N);
+            VLOG("ghost: player %08x now drives ghost %p with %u bones (packets %u)", g.peer, g.character, N, st.boneCount);
         }
     }
     if (traj >= 0) {
         float* t = pose + traj * 8;
-        if (st.boneCount != N) { // no pose: at least face the right way
+        if (st.boneCount == 0) { // no pose: at least face the right way
             t[4] = 0.f; t[5] = std::sin(st.yaw * 0.5f); t[6] = 0.f; t[7] = std::cos(st.yaw * 0.5f);
         }
         placeAnchor(pose, traj, st.pos);
@@ -572,6 +628,19 @@ void handleRequests() {
 }
 } // namespace
 
+bool spawnInProgress() { return claimWindowOpen(); }
+
+void noteOwnPose(const float (*bones)[8], const uint8_t* idx, uint32_t n) {
+    if (n == 0 || n > kMaxBones) return;
+    for (uint32_t b = 0; b < n; ++b)
+        for (int j = 0; j < 8; ++j)
+            if (!std::isfinite(bones[b][j])) return;
+    std::lock_guard<std::mutex> lock(g_ownM);
+    memcpy(g_own, bones, n * sizeof(g_own[0]));
+    memcpy(g_ownIdx, idx, n);
+    g_ownN = n;
+}
+
 bool onClientReplayComp(void* comp) {
     if (!comp || !claimWindowOpen()) return false;
     // Only a component whose owner is a ghost character (B-3). The owner is normally known when the
@@ -584,6 +653,7 @@ bool onClientReplayComp(void* comp) {
         if (g.peer == peer && !g.clientComp) {
             if (owner && g.clientChar && reinterpret_cast<uintptr_t>(g.clientChar) != owner) continue;
             g.clientComp = comp;
+            MLOG("ghost: player %08x claimed clientComp %p", g.peer, comp);
             if (!owner) MLOG("ghost: claimed replay component %p without a known owner", comp);
             closeClaimIfDone(g);
             return true;
@@ -651,11 +721,16 @@ void renderFrame() {
             const uintptr_t idxPtr = v.boneIndices();
             // Logged once per change: a ghost that stops being posed stays where it was (seen as "gone").
             thread_local uint32_t skipPeer = 0, skipCount = ~0u;
-            const bool skip = !pose || bones != st.boneCount || !bones || bones > kMaxBones;
+            const bool skip = !pose || !bones || bones > kMaxBones || st.boneCount < 2;
+            if (!skip && !v.at<uint8_t>(CRP_CountOk)) { // the client drops the pose: writing it is pointless
+                static DWORD lastReject = 0;
+                if (noteDue(lastReject))
+                    MLOG("ghost: client of %08x rejects the pose (server sends %u, client expects %u)", targets[i].peer,
+                         st.boneCount, bones);
+            }
             if (skip && (skipPeer != targets[i].peer || skipCount != st.boneCount)) {
                 static DWORD lastNote = 0; // a mismatch repeats every frame: one note per 10 s
-                if (GetTickCount() - lastNote > 10000) {
-                    lastNote = GetTickCount();
+                if (noteDue(lastNote)) {
                     MLOG("ghost: player %08x is not posed (its ghost has %u bones, its packets %u)", targets[i].peer, bones,
                          st.boneCount);
                 }
@@ -669,7 +744,13 @@ void renderFrame() {
             if (skip || !idxPtr || !mem::read(idxPtr, idx, bones * 4)) continue;
         }
         float buf[kMaxBones][8];
-        memcpy(buf, st.bones, bones * 0x20);
+        if (!mem::read(pose, buf, bones * 0x20)) {
+            for (uint32_t b = 0; b < bones; ++b) {
+                buf[b][0] = buf[b][1] = buf[b][2] = 0.f; buf[b][3] = 1.f;
+                buf[b][4] = buf[b][5] = buf[b][6] = 0.f; buf[b][7] = 1.f;
+            }
+        }
+        fillPose(buf, idx, bones, st);
         for (uint32_t b = 0; b < bones; ++b)
             if ((idx[b] & 0xff) == 1) placeAnchor(&buf[0][0], static_cast<int>(b), st.pos); // the body's anchor
         prof::Scope s(prof::RenderWrite);
@@ -733,6 +814,7 @@ double nowUs() {
     QueryPerformanceCounter(&c);
     return static_cast<double>(c.QuadPart) * 1e6 / static_cast<double>(f.QuadPart);
 }
+
 } // namespace
 
 void tick(uint64_t tick, uint64_t ticksInLevel) {

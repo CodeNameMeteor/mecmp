@@ -4,6 +4,7 @@
 #include <cstdio>
 
 #include "game/pose_math.h"
+#include "game/pose_remap.h"
 
 using namespace mecmp::game;
 
@@ -81,6 +82,31 @@ int main() {
         float dot = 0;
         for (int j = 0; j < 4; ++j) dot += before[j] / nb * after[j];
         CHECK(std::fabs(dot) > 0.99999f);
+    }
+    // remapPose: bones move by skeleton index. Each source bone carries its own index in [0].
+    {
+        const uint8_t srcIdx[5] = {0, 1, 4, 50, 200};
+        const uint32_t dstIdx[6] = {4, 1, 7, 200, 0, 0x132}; // 7 is not sent, 0x132 = bone 50 with a stray high bit
+        float src[5][8], dst[6][8];
+        for (int i = 0; i < 5; ++i) { for (int j = 0; j < 8; ++j) src[i][j] = 0; src[i][0] = srcIdx[i]; src[i][7] = 1; }
+        for (int i = 0; i < 6; ++i) { for (int j = 0; j < 8; ++j) dst[i][j] = 0; dst[i][0] = -1.f; }
+        CHECK(remapPose(dst, dstIdx, 6, src, srcIdx, 5) == 5);
+        CHECK(dst[0][0] == 4.f && dst[1][0] == 1.f && dst[3][0] == 200.f && dst[4][0] == 0.f && dst[5][0] == 50.f);
+        CHECK(dst[2][0] == 0.f && dst[2][7] == 1.f && dst[2][3] == 1.f); // no source: zeroed rotation becomes identity
+        dst[2][7] = 0.5f;
+        CHECK(remapPose(dst, dstIdx, 6, src, srcIdx, 5) == 5 && dst[2][7] == 0.5f); // a slot with a rotation is left as it is
+        // Same set in another order, and a source with fewer bones than the destination.
+        const uint8_t rev[5] = {200, 50, 4, 1, 0};
+        float srcRev[5][8];
+        for (int i = 0; i < 5; ++i) { for (int j = 0; j < 8; ++j) srcRev[i][j] = 0; srcRev[i][0] = rev[i]; srcRev[i][7] = 1; }
+        CHECK(remapPose(dst, dstIdx, 6, srcRev, rev, 5) == 5 && dst[0][0] == 4.f && dst[3][0] == 200.f);
+        CHECK(remapPose(dst, dstIdx, 6, srcRev, rev, 0) == 0);
+        // The first of two bones with the same index wins.
+        const uint8_t twice[2] = {4, 4};
+        float two[2][8] = {{1, 0, 0, 1, 0, 0, 0, 1}, {2, 0, 0, 1, 0, 0, 0, 1}};
+        const uint32_t one[1] = {4};
+        float d1[1][8] = {};
+        CHECK(remapPose(d1, one, 1, two, twice, 2) == 1 && d1[0][0] == 1.f);
     }
     if (g_failures == 0) std::printf("pose tests: all passed\n");
     return g_failures == 0 ? 0 : 1;

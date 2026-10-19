@@ -17,6 +17,13 @@ struct BoneSetup {
 // Hook callbacks (game threads).
 void onSpawnerCreated(void* creationInfo, void* entity);
 void onForeignClientReplayComp(void* comp); // a client replay component that is not one of our ghosts'
+// Bones the replay recorder and player record: the data is patched when its owner is created, before it is built.
+void patchRecordingData(uintptr_t compData);
+// The player data is shared with the game's own ghosts: patched for our ghosts' clients (`ours`), vanilla for the others.
+void patchPlayerData(uintptr_t compData, bool ours);
+// The local recorder's setup. False if it lacks the bones we ask for (the mod loaded after the level), then ghost
+// clients stay vanilla as well.
+bool noteRecorderSetup(const BoneSetup& setup);
 
 // True when everything ghosts need is known (player + ghost spawner, a ghost client for the bones).
 bool complete();
@@ -49,5 +56,9 @@ bool characterAlive(void* character, void* spawner); // still in its spawner's s
 bool characterExists(void* character, uintptr_t expectedData); // a live PamServerCharacterEntity with this data
 // Bone setup the game's ghost clients use (copied from any live ghost client component).
 bool referenceSetup(BoneSetup& out);
+bool readSetup(uintptr_t comp, BoneSetup& out); // the playback setup (CRP_Setup)
+// A bone setup object (count +0x00, indices [+0x10], flags [+0x78]); false unless it looks built.
+bool readSetupAt(uintptr_t setup, BoneSetup& out);
+bool readOwnSetup(uintptr_t comp, BoneSetup& out); // a client replay component's own setup (CRP_OwnSetup)
 
 } // namespace mecmp::game::level

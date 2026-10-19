@@ -16,6 +16,9 @@ namespace mecmp::game::ghosts {
 
 // Hook callbacks. onClientReplayComp returns true if the component belongs to one of our ghosts.
 bool onClientReplayComp(void* comp);
+bool spawnInProgress(); // one of our ghosts was spawned moments ago: its client objects are being made
+// The local player's own pose (the recorder's bone set), the stand-in for bones a sender does not send.
+void noteOwnPose(const float (*bones)[8], const uint8_t* idx, uint32_t n);
 void onClientCharacter(void* ent);
 // Startup: runtime TypeInfo of PamCharacterEntityData (0 if unknown), used to validate the ghost
 // blueprint's character data before the first spawn.

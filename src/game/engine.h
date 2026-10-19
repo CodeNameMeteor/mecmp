@@ -68,6 +68,8 @@ constexpr uintptr_t Slot_PamServerCharacterSpawnFactory = 0x141c4b5c0;
 constexpr uintptr_t Fn_PamServerCharacterSpawnFactory = 0x143957610;
 constexpr uintptr_t Slot_ClientReplayPlayerFactory = 0x141c49158;
 constexpr uintptr_t Fn_ClientReplayPlayerFactory = 0x143949050;
+constexpr uintptr_t Slot_ClientReplayRecordingFactory = 0x141c491c8; // PamClientReplayRecordingComponent creator (vtable 0x141c48cd0)
+constexpr uintptr_t Fn_ClientReplayRecordingFactory = 0x143949120;
 // The updater objects that run every client replay component's update (created with the first
 // component; two of them, one per update pass): pointers at these globals, their vtable, and its
 // slot 2, PamClientReplayPlayerComponent_updateAll (calls ..._update, 0x1439501a0, per component).
@@ -146,15 +148,17 @@ constexpr size_t Phys_HavokWorld = 0x10, HavokWorld_FilterOwner = 0x150, FilterO
 constexpr size_t SRP_PlaybackState = 0x38, SRP_Setup = 0xb0, SRP_Pose = 0x178, SRP_PoseEnd = 0x180,
                  SRP_PoseCap = 0x188, SRP_PoseArena = 0x190, SRP_NetState = 0x1a0;
 // PamClientReplayPlayerComponent: own playback at +0x38 (state +0x40, forced +0xb0, setup +0xb8),
-// received pose +0x180, expected bone count +0x200, skipRoot +0x2e6.
+// received pose +0x180, skipRoot +0x2e6. Own bone setup +0x200 (count, indices [+0x210]), built at init from the
+// data's RecordingBones; the received pose only counts when the server's bone count equals it (+0x2e4).
 constexpr size_t CRP_PlaybackState = 0x40, CRP_PlaybackForced = 0xb0, CRP_Setup = 0xb8,
-                 CRP_ReceivedPose = 0x180, CRP_ExpectedBones = 0x200, CRP_SkipRoot = 0x2e6;
+                 CRP_ReceivedPose = 0x180, CRP_OwnSetup = 0x200, CRP_CountOk = 0x2e4, CRP_SkipRoot = 0x2e6;
 // Local replay recorder (PamClientReplayRecordingComponent +0x48): keyframe ring.
 constexpr size_t Rec_Stride = 0x68, Rec_Capacity = 0x70, Rec_Base = 0x78, Rec_Head = 0x88;
+constexpr size_t Rec_Setup = 0xd8; // the recorder's bone setup (same layout as the client's)
 
 constexpr const char* kGhostBlueprint = "Characters/Projection/ProjectionCharacter";
 constexpr const char* kPlayerBlueprint = "Characters/FaithCharacter";
-constexpr uint32_t kMaxBones = 32;
+constexpr uint32_t kMaxBones = 96;
 
 // --- Types ----------------------------------------------------------------------------------------
 struct alignas(16) LinearTransform {

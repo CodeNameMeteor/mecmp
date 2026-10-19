@@ -28,6 +28,10 @@ std::map<void*, int> g_spawnFails;
 // By address and data: the game reuses memory, and a later spawner at the same address is another one.
 std::vector<std::pair<void*, uintptr_t>> g_badSpawners;
 constexpr int kMaxSpawnFails = 3;
+// PamReplayPlayerComponentData objects we patched (data, original RecordingBones pointer), so that the patch can be undone.
+std::mutex g_patchM;
+std::vector<std::pair<uintptr_t, uintptr_t>> g_playerPatched;
+bool g_playerPatchOff = false;
 
 bool clientCompAlive(uintptr_t c) {
     uintptr_t vt = 0;
@@ -40,17 +44,105 @@ bool spawnerAliveUnlocked(void* spawner) {
            (vt == rva(Vtbl_PamServerCharacterSpawnEntity) || vt == rva(Vtbl_ServerCharacterSpawnEntity));
 }
 
-bool readSetup(uintptr_t comp, BoneSetup& out) {
-    const uintptr_t S = comp + CRP_Setup;
+// The bones the replay recorder and player are told to record: these and all their ancestors. One list for the
+// whole body - the animated bones the base set misses are the fingers, toes and the roll (twist) bones; the
+// procedural helpers (twists, bends, bulges, pits) are computed by the rig and the face is left out.
+constexpr uint32_t kTargets[] = {
+    5, 52, 15, 123, 167, 175, 168, 176, 169, 177, 111, 151, // spine, head, hands, feet, toes, throat, weapon root
+    19, 24, 29, 33, 38, 127, 132, 137, 141, 146,            // finger tips (the thumb's third bone, the others' fourth)
+    10, 11, 13, 14, 43, 48, 118, 119, 121, 122, 152, 157,   // arm rolls
+    163, 164, 165, 171, 172, 173                            // leg rolls
+};
+#pragma pack(push, 4)
+struct TargetBoneArray {
+    uint32_t count = sizeof(kTargets) / sizeof(kTargets[0]);
+    uint32_t bones[sizeof(kTargets) / sizeof(kTargets[0])];
+    constexpr TargetBoneArray() : bones() {
+        for (uint32_t i = 0; i < count; ++i) bones[i] = kTargets[i];
+    }
+};
+#pragma pack(pop)
+static const TargetBoneArray kTargetBones;
+
+} // namespace
+
+bool readSetupAt(uintptr_t S, BoneSetup& out) {
     uint32_t n = 0;
     uintptr_t idx = 0, flags = 0;
     if (!mem::read(S, n) || n == 0 || n > kMaxBones) return false;
     if (!mem::read(S + 0x10, idx) || !idx || !mem::read(S + 0x78, flags) || !flags) return false;
     if (!mem::read(idx, out.indices, n * 4) || !mem::read(flags, out.flags, n)) return false;
+    for (uint32_t i = 1; i < n; ++i)
+        if (out.indices[i] <= out.indices[i - 1]) return false; // the builder sorts them: not built yet
     out.count = n;
     return true;
 }
-} // namespace
+
+bool readOwnSetup(uintptr_t comp, BoneSetup& out) { return readSetupAt(comp + CRP_OwnSetup, out); }
+
+bool readSetup(uintptr_t comp, BoneSetup& out) { return readSetupAt(comp + CRP_Setup, out); }
+
+// The data objects of the recorder and the player hold the bones they record. Only the game's own list is
+// replaced (6 bones for the recorder, 5 for the player): another list is somebody else's and stays.
+bool vanillaTargets(uintptr_t list, uint32_t count, uint32_t first, uint32_t second) {
+    return list && mem::readOr<uint32_t>(list - 4) == count && mem::readOr<uint32_t>(list) == first &&
+           mem::readOr<uint32_t>(list + 4) == second;
+}
+
+void patchRecordingData(uintptr_t c) {
+    if (!c || c < 0x10000) return;
+    const uintptr_t list = mem::readOr<uintptr_t>(c + 0x78); // PamReplayRecordingComponentData::RecordingBones
+    if (vanillaTargets(list, 6, 5, 52)) {
+        poke<uintptr_t>(c + 0x78, reinterpret_cast<uintptr_t>(&kTargetBones.bones[0]));
+        MLOG("patch: recording data %p now records %u targets", reinterpret_cast<void*>(c), kTargetBones.count);
+    }
+}
+
+void patchPlayerData(uintptr_t c, bool ours) {
+    if (!c || c < 0x10000) return;
+    static DWORD lastOursAt = 0;
+    std::lock_guard<std::mutex> lock(g_patchM);
+    const uintptr_t list = mem::readOr<uintptr_t>(c + 0x70); // PamReplayPlayerComponentData::RecordingBones
+    const uintptr_t targets = reinterpret_cast<uintptr_t>(&kTargetBones.bones[0]);
+    if (ours) {
+        if (list == targets) lastOursAt = GetTickCount();
+        if (g_playerPatchOff || !vanillaTargets(list, 5, 52, 15)) return;
+        if (g_playerPatched.size() < 256) g_playerPatched.push_back({c, list});
+        poke<uintptr_t>(c + 0x70, targets);
+        lastOursAt = GetTickCount();
+        MLOG("patch: player data %p patched for our ghost", reinterpret_cast<void*>(c));
+        return;
+    }
+    // A foreign client: vanilla again, unless one of ours was just made from this data and is still to be set up.
+    if (list != targets || GetTickCount() - lastOursAt < 2000) return;
+    for (size_t i = 0; i < g_playerPatched.size(); ++i)
+        if (g_playerPatched[i].first == c) {
+            poke<uintptr_t>(c + 0x70, g_playerPatched[i].second);
+            g_playerPatched.erase(g_playerPatched.begin() + static_cast<long>(i));
+            VLOG("patch: player data %p back to vanilla for a game ghost", reinterpret_cast<void*>(c));
+            return;
+        }
+}
+
+// The recorder was built before the recording data was patched (the mod loaded after the level) when its setup
+// lacks a target. Then ghost clients must stay vanilla too: the player patches are undone and no longer made.
+bool noteRecorderSetup(const BoneSetup& setup) {
+    for (uint32_t t : kTargets) {
+        bool have = false;
+        for (uint32_t i = 0; i < setup.count && !have; ++i) have = setup.indices[i] == t;
+        if (have) continue;
+        std::lock_guard<std::mutex> lock(g_patchM);
+        if (!g_playerPatchOff) {
+            g_playerPatchOff = true;
+            for (const auto& p : g_playerPatched)
+                if (mem::readOr<uintptr_t>(p.first + 0x70) == reinterpret_cast<uintptr_t>(&kTargetBones.bones[0]))
+                    poke<uintptr_t>(p.first + 0x70, p.second);
+            g_playerPatched.clear();
+        }
+        return false;
+    }
+    return true;
+}
 
 // A spawner whose data names the player's or the ghost blueprint. `pooledData`: data shared by the
 // 15 pooled city replay-marker ghost spawners (only known after a memory scan; those are a worse
@@ -243,6 +335,11 @@ void spawnResult(void* spawner, bool gotCharacter) {
 void reset() {
     {
         std::lock_guard<std::mutex> lock(g_m);
+        {
+            std::lock_guard<std::mutex> patchLock(g_patchM);
+            g_playerPatchOff = false;
+            g_playerPatched.clear();
+        }
         g_playerSpawner = nullptr;
         g_ghostSpawner = nullptr;
         g_clientComps.clear();
@@ -348,9 +445,17 @@ bool referenceSetup(BoneSetup& out) {
         std::lock_guard<std::mutex> lock(g_m);
         comps = g_clientComps;
     }
+    BoneSetup best{};
     for (void* p : comps) {
         const uintptr_t c = reinterpret_cast<uintptr_t>(p);
-        if (clientCompAlive(c) && readSetup(c, out)) return true;
+        BoneSetup s;
+        if (clientCompAlive(c) && readSetup(c, s)) {
+            if (s.count > best.count) best = s;
+        }
+    }
+    if (best.count > 0) {
+        out = best;
+        return true;
     }
     return false;
 }

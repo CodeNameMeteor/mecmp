@@ -18,10 +18,10 @@ namespace mecmp::game::hooks {
 namespace {
 
 using FactoryFn = void* (*)(void* creator, void* ci, void* a3, void* a4);
-enum Factory { kSpawner, kPamSpawner, kClientReplay, kClientCharacter, kCustomize, kPresenceManager, kNamedChallenge, kChallengeMarker, kFactoryCount };
+enum Factory { kSpawner, kPamSpawner, kClientReplay, kClientRecording, kClientCharacter, kCustomize, kPresenceManager, kNamedChallenge, kChallengeMarker, kFactoryCount };
 FactoryFn g_orig[kFactoryCount] = {};
 const char* const kNames[kFactoryCount] = {"ServerCharacterSpawnEntity", "PamServerCharacterSpawnEntity",
-                                           "PamClientReplayPlayerComponent", "PamClientCharacterEntity",
+                                           "PamClientReplayPlayerComponent", "PamClientReplayRecordingComponent", "PamClientCharacterEntity",
                                            "PamServerCustomizeProjectionCharacterEntity", "PamClientPresenceInfoManagerEntity",
                                            "PamServerNamedChallengeEntity", "PamServerChallengeMarkerEntity"};
 
@@ -102,9 +102,25 @@ void hookUpdaters() {
 }
 
 void* clientReplayFactory(void* creator, void* ci, void* a3, void* a4) {
+    const bool ours = ghosts::spawnInProgress();
+    if (ci) {
+        level::patchPlayerData(mem::readOr<uintptr_t>(reinterpret_cast<uintptr_t>(ci) + CI_Data), ours);
+        level::patchPlayerData(mem::readOr<uintptr_t>(reinterpret_cast<uintptr_t>(ci) + 0x10), ours);
+    }
     void* comp = g_orig[kClientReplay](creator, ci, a3, a4);
     hookUpdaters();
-    if (comp && !ghosts::onClientReplayComp(comp)) level::onForeignClientReplayComp(comp);
+    if (comp) {
+        level::patchPlayerData(mem::readOr<uintptr_t>(reinterpret_cast<uintptr_t>(comp) + 0x10), ours);
+        if (!ghosts::onClientReplayComp(comp)) level::onForeignClientReplayComp(comp);
+    }
+    return comp;
+}
+
+// The local player's recorder takes its bones from the data when it is built, so the data is patched before.
+void* clientRecordingFactory(void* creator, void* ci, void* a3, void* a4) {
+    if (ci) level::patchRecordingData(mem::readOr<uintptr_t>(reinterpret_cast<uintptr_t>(ci) + CI_Data));
+    void* comp = g_orig[kClientRecording](creator, ci, a3, a4);
+    if (comp) level::patchRecordingData(mem::readOr<uintptr_t>(reinterpret_cast<uintptr_t>(comp) + 0x10));
     return comp;
 }
 void* clientCharacterFactory(void* creator, void* ci, void* a3, void* a4) {
@@ -243,6 +259,7 @@ bool install(TickFn onTick, Installed* out) {
     const bool sp2 = installFactory(kPamSpawner, Slot_PamServerCharacterSpawnFactory, Fn_PamServerCharacterSpawnFactory, &pamSpawnerFactory, undo);
     got.spawners = sp1 && sp2;
     const bool replay = installFactory(kClientReplay, Slot_ClientReplayPlayerFactory, Fn_ClientReplayPlayerFactory, &clientReplayFactory, undo);
+    installFactory(kClientRecording, Slot_ClientReplayRecordingFactory, Fn_ClientReplayRecordingFactory, &clientRecordingFactory, undo);
     const bool chars = installFactory(kClientCharacter, Slot_ClientCharacterFactory, Fn_ClientCharacterFactory, &clientCharacterFactory, undo);
     // Optional: without it the look catalogue is found by a memory scan instead.
     installFactory(kCustomize, Slot_CustomizeProjectionFactory, Fn_CustomizeProjectionCreate, &customizeFactory, undo);

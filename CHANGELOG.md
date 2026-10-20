@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Off for now
+- **Hole punching is off by default** until there is a permanent server. Joining goes straight to the join code's
+  address again (the host forwards the port or has UPnP, or everyone joins a dedicated server). To use it, set
+  `[net] rendezvous_server=ip:port` on both sides; the old `rendezvous=` line (which every mecmp.ini got with the
+  community server in it) is ignored and removed.
+- **Player sounds are disabled** until they are fixed: the capture is not installed, nothing is sent or played,
+  and the menu no longer shows the setting. The code stays (build with `-DMECMP_PLAYER_AUDIO=ON` to work on it).
+
 ### Your look
 - **"Ghost" remembers your last ghost.** Switching to Faith and back to Ghost in the menu used to fall back to the default
   RunVis ghost; now it returns to the style and color you had (saved as `[player] last_ghost`).

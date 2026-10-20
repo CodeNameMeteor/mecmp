@@ -75,7 +75,7 @@ void updateAllHook(void* self, void* info) {
     runs::clientTick(); // cheap once registered
     ghosts::beforeClientReplayUpdate();
     g_origUpdateAll(self, info);
-    player_audio::tick();
+    if (player_audio::kEnabled) player_audio::tick();
 }
 
 // Swaps the updateAll slot of the updater vtable. Both updater objects share that vtable, so one
@@ -263,7 +263,7 @@ bool install(TickFn onTick, Installed* out) {
     got.tick = true;
     hookUpdaters(); // the vtable is in the game image, so this does not wait for a component
     if (out) *out = got;
-    player_audio::install();
+    if (player_audio::kEnabled) player_audio::install();
     if (got.spawners && got.ghostClients) MLOG("hooks: all installed");
     else MLOG("hooks: %s%s", got.spawners ? "" : "spawner hooks missing (spawners are found by a memory scan instead); ",
               got.ghostClients ? "" : "ghost client hooks missing: remote players cannot be shown");

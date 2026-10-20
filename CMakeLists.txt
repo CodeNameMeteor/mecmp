@@ -103,6 +103,12 @@ endif()
 if(MECMP_DEBUG_KEYS)
   target_compile_definitions(mecmp PRIVATE MECMP_DEBUG_KEYS=1)
 endif()
+# Other players' game sounds (game/player_audio.cpp). Off until it is fixed: the capture is not installed,
+# nothing is sent or played and the menu does not offer it. The code stays; -DMECMP_PLAYER_AUDIO=ON builds it in.
+option(MECMP_PLAYER_AUDIO "Player sound sync (disabled until fixed)" OFF)
+if(MECMP_PLAYER_AUDIO)
+  target_compile_definitions(mecmp PRIVATE MECMP_PLAYER_AUDIO=1)
+endif()
 target_link_libraries(mecmp PRIVATE ws2_32 d3d11 dxgi d3dcompiler dwmapi)
 set_target_properties(mecmp PROPERTIES OUTPUT_NAME "mecmp" PREFIX "")
 

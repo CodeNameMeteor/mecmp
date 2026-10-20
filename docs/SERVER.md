@@ -125,8 +125,9 @@ line says which). Packets from other versions are ignored.
 ## Hole punching (rendezvous)
 
 Every server also introduces players who host from the game to players who join them, so a host needs no
-forwarded port on most home routers. A host registers its address with the server named by `rendezvous=` in
-its `mecmp.ini` (every ~20 s); a joiner using that host's join code asks the same server, and the server tells
+forwarded port on most home routers. It is off by default until there is a permanent server: the host and the
+joiner both set `rendezvous_server=ip:port` in `[net]` of their `mecmp.ini` (the older `rendezvous=` key is
+ignored). A host registers its address with that server (every ~20 s); a joiner using that host's join code asks the same server, and the server tells
 each the other's address. Both then send at once and their routers let the traffic through. The server only
 passes those addresses (a few dozen bytes per join): the game's traffic goes directly between the players and
 never through the server. Registration and introductions use the same address-proving cookie as joining, and

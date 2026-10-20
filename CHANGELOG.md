@@ -14,6 +14,13 @@
   launcher), the player's recorder is already built with the game's 23 bones. Ghosts then stay on 23 bones too, so
   nothing breaks; reload a checkpoint to get the full body. A normal start (main menu first) is not affected.
 - **The game's own ghosts are left alone.** City and time-trial ghosts keep their recorded poses.
+- **Lost packets no longer bend the body.** A pose that changed only some bones is now marked with the full pose it
+  was made from. If that full pose was lost, the ghost keeps its last pose (still moving with the player) until
+  the next full pose, instead of mixing the new bones with old ones. Late or repeated poses are dropped by
+  hosts, servers and players alike, and the loss shown in the menu counts lost poses only.
+- **`full_body_pose`** (`[player]`, on by default): 0 keeps the game's own 23-bone recording. The player's recorder
+  also records your runs, so this is the switch to use if a time trial or its uploaded ghost misbehaves. Takes
+  effect when a level loads.
 
 ### Your look
 - **"Ghost" remembers your last ghost.** Switching to Faith and back to Ghost in the menu used to fall back to the default

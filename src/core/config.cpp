@@ -75,6 +75,10 @@ constexpr const char* kDefaultIni =
     "; 1 = share your EA online id and profile name with the session, so the game's map shows your Runner Tag\r\n"
     ";     where you are (on the others' maps; needs online services such as Beat Revival). 0 = don't share\r\n"
     "share_profile=0\r\n"
+    "; 1 = the others see your whole body move (fingers, toes): your game records 85 bones instead of its own 23.\r\n"
+    ";     This is the recorder that also records your runs. 0 = the game's own recording. Takes effect when a\r\n"
+    ";     level loads.\r\n"
+    "full_body_pose=1\r\n"
     "; your name, shown to the other players\r\n"
     "name=Runner\r\n"
     "; how the other players see you: faith, or a ghost style and color (pick it in the in-game menu)\r\n"
@@ -567,6 +571,7 @@ void load(const std::wstring& dir) {
     s.syncTimeOfDay = readInt(ini, L"player", L"sync_time_of_day", 1) != 0;
     s.askBeforeVisit = readInt(ini, L"player", L"ask_before_go_to", 0) != 0;
     s.shareProfile = readInt(ini, L"player", L"share_profile", 0) != 0;
+    s.fullBodyPose = readInt(ini, L"player", L"full_body_pose", 1) != 0;
     s.membersMayHardSummon = readInt(ini, L"net", L"members_may_hard_summon", 0) != 0;
     s.padPlayStation = _stricmp(readString(ini, L"ui", L"pad_labels", "xbox").c_str(), "playstation") == 0;
     s.pingClearKey = readString(ini, L"ui", L"ping_clear_key", "X");
@@ -749,6 +754,7 @@ void applyPending() {
     put(L"player", L"sync_time_of_day", snapshot->syncTimeOfDay ? "1" : "0");
     put(L"player", L"ask_before_go_to", snapshot->askBeforeVisit ? "1" : "0");
     put(L"player", L"share_profile", snapshot->shareProfile ? "1" : "0");
+    put(L"player", L"full_body_pose", snapshot->fullBodyPose ? "1" : "0");
     put(L"net", L"members_may_hard_summon", snapshot->membersMayHardSummon ? "1" : "0");
     put(L"ui", L"pad_labels", snapshot->padPlayStation ? "playstation" : "xbox");
     put(L"ui", L"ping_wheel", std::to_string(snapshot->pingWheel + 1));

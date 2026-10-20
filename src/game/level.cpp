@@ -9,6 +9,7 @@
 #include <utility>
 #include <vector>
 
+#include "core/config.h"
 #include "core/log.h"
 #include "game/models.h"
 
@@ -89,8 +90,10 @@ bool vanillaTargets(uintptr_t list, uint32_t count, uint32_t first, uint32_t sec
            mem::readOr<uint32_t>(list + 4) == second;
 }
 
+// The player has one recorder, and it also records the runs (time trials, dashes) the game keeps and may
+// upload. full_body_pose=0 leaves it as the game made it; ghosts then stay vanilla too (noteRecorderSetup).
 void patchRecordingData(uintptr_t c) {
-    if (!c || c < 0x10000) return;
+    if (!c || c < 0x10000 || !config::get()->fullBodyPose) return;
     const uintptr_t list = mem::readOr<uintptr_t>(c + 0x78); // PamReplayRecordingComponentData::RecordingBones
     if (vanillaTargets(list, 6, 5, 52)) {
         poke<uintptr_t>(c + 0x78, reinterpret_cast<uintptr_t>(&kTargetBones.bones[0]));

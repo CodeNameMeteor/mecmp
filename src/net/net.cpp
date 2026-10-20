@@ -1026,7 +1026,9 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
         return;
     }
     if (h.type == proto::kTypeAudio) {
-        if (!game::player_audio::kEnabled) return; // player sounds are disabled in this build: nothing plays them
+#ifndef MECMP_PLAYER_AUDIO
+        return; // player sounds are disabled in this build (game/player_audio.h): nothing plays them
+#endif
         PlayerAudio sample;
         const DWORD now = GetTickCount();
         if (!proto::readAudio(payload, len, sample)) { ++g_dropped; return; }

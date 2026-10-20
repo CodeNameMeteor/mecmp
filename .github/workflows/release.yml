@@ -2,7 +2,8 @@ name: release
 
 # Two channels, chosen by the tag:
 #   v0.9.0         release: Release build, developer keys off, a draft GitHub release (publish it by hand after a last look)
-#   v0.9.1-beta.1  beta: Release build with the developer keys on (verbose log, F7/F9/F10/F12), a draft pre-release
+#   v0.9.1-beta.1  beta: Release build with the verbose log on, a draft pre-release
+# Neither has the developer keys (F7/F9/F10/F12): players kept pressing them. Those are for local builds only.
 # The tag's version must match src/app/mod.h (the part before the first "-"). "Run workflow" by hand builds the
 # packages only, in the channel picked there (beta by default), and makes no release.
 on:
@@ -11,7 +12,7 @@ on:
   workflow_dispatch:
     inputs:
       build:
-        description: "Channel to build: beta (developer keys and verbose log on) or release"
+        description: "Channel to build: beta (verbose log on) or release"
         type: choice
         options: [beta, release]
         default: beta
@@ -27,6 +28,7 @@ jobs:
       label: ${{ steps.plan.outputs.label }}
       build_type: ${{ steps.plan.outputs.build_type }}
       debug_keys: ${{ steps.plan.outputs.debug_keys }}
+      verbose: ${{ steps.plan.outputs.verbose }}
     steps:
       - uses: actions/checkout@v4
       - name: Channel and version
@@ -47,16 +49,18 @@ jobs:
             channel="${BUILD_INPUT:-beta}"
             if [ "$channel" = beta ]; then label="$ver-test.$GITHUB_RUN_NUMBER"; else label="$ver"; fi
           fi
-          # Both channels are optimised. The beta turns the developer keys on, and with them the verbose log.
+          # Both channels are optimised and have no developer keys. The beta turns the verbose log on.
           build_type=Release
-          if [ "$channel" = beta ]; then debug_keys=ON; else debug_keys=OFF; fi
+          debug_keys=OFF
+          if [ "$channel" = beta ]; then verbose=ON; else verbose=OFF; fi
           {
             echo "channel=$channel"
             echo "label=$label"
             echo "build_type=$build_type"
             echo "debug_keys=$debug_keys"
+            echo "verbose=$verbose"
           } >> "$GITHUB_OUTPUT"
-          echo "Building $label: $channel (CMAKE_BUILD_TYPE=$build_type, MECMP_DEBUG_KEYS=$debug_keys)"
+          echo "Building $label: $channel (CMAKE_BUILD_TYPE=$build_type, MECMP_DEBUG_KEYS=$debug_keys, MECMP_VERBOSE_LOG=$verbose)"
 
   windows:
     needs: plan
@@ -72,7 +76,8 @@ jobs:
             -DCMAKE_CXX_COMPILER=x86_64-w64-mingw32-g++-posix \
             -DCMAKE_C_COMPILER=x86_64-w64-mingw32-gcc-posix \
             -DCMAKE_BUILD_TYPE=${{ needs.plan.outputs.build_type }} \
-            -DMECMP_DEBUG_KEYS=${{ needs.plan.outputs.debug_keys }}
+            -DMECMP_DEBUG_KEYS=${{ needs.plan.outputs.debug_keys }} \
+            -DMECMP_VERBOSE_LOG=${{ needs.plan.outputs.verbose }}
           cmake --build build
       - name: Package
         run: |
@@ -83,8 +88,7 @@ jobs:
           test -s "pkg/$name/version.dll" && test -s "pkg/$name/mecmp.dll"
           if [ "${{ needs.plan.outputs.channel }}" = beta ]; then
             {
-              echo "BETA BUILD. Verbose logging is on and the developer keys are enabled"
-              echo "(F7, F9, F10, F12). Send mecmp.log with any bug report."
+              echo "BETA BUILD. Verbose logging is on: send mecmp.log with any bug report."
               echo
               cat docs/INSTALL.txt
             } > "pkg/$name/README.txt"
@@ -149,7 +153,7 @@ jobs:
           section "$ver" > notes.md
           if [ "$CHANNEL" = beta ] && ! grep -q '[^[:space:]]' notes.md; then section "Unreleased" > notes.md; fi
           if [ "$CHANNEL" = beta ]; then
-            printf '\nBeta build: optimised, with verbose logging and the developer keys (F7, F9, F10, F12).\n' >> notes.md
+            printf '\nBeta build: optimised, with verbose logging.\n' >> notes.md
           fi
           # Then the commits since the previous tag (all of them for the first release), newest first.
           prev=$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || true)

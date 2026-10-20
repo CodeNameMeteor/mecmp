@@ -652,7 +652,7 @@ void shownInGame() {
 }
 
 // Players tab: hearing the session's players (Mumble positional audio).
-void voiceSection() {
+void playerSoundsSection() {
     ImGui::SeparatorText("Player sounds");
     bool audio = config::get()->playerAudio;
     if (ImGui::Checkbox("Other players' game sounds", &audio))
@@ -663,6 +663,10 @@ void voiceSection() {
     if (ImGui::SliderFloat("Sound distance", &distance, 5.f, 200.f, "%.0f m"))
         config::change([distance](config::Settings& c) { c.playerAudioDistance = distance; });
     ImGui::TextDisabled("%s", game::player_audio::status().c_str());
+}
+
+void voiceSection() {
+    if (game::player_audio::kEnabled) playerSoundsSection(); // disabled until fixed (game/player_audio.h)
     ImGui::SeparatorText("Voice");
     bool mumble = config::get()->mumbleLink;
     if (ImGui::Checkbox("Positional voice (Mumble)", &mumble))

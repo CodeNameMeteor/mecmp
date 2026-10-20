@@ -1026,6 +1026,9 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
         return;
     }
     if (h.type == proto::kTypeAudio) {
+#ifndef MECMP_PLAYER_AUDIO
+        return; // player sounds are disabled in this build (game/player_audio.h): nothing plays them
+#endif
         PlayerAudio sample;
         const DWORD now = GetTickCount();
         if (!proto::readAudio(payload, len, sample)) { ++g_dropped; return; }
@@ -1199,7 +1202,7 @@ void hostSetup(uint32_t generation) {
 }
 
 // --- Hole punching (RENDEZVOUS in protocol.h) ---------------------------------------------------------
-// A dedicated server ([net] rendezvous in mecmp.ini) introduces a host and a joiner to each other; then both
+// A dedicated server ([net] rendezvous_server in mecmp.ini; off by default) introduces a host and a joiner to each other; then both
 // send at once (the host a CHALLENGE, the joiner its HELLO) and most home routers let both through, so the host
 // needs no forwarded port. Only the introduction goes through the server, never game traffic. If it does not
 // work, joining is exactly as before: straight to the join code's address.

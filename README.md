@@ -50,7 +50,7 @@ If the host's router has UPnP turned off, forward UDP 47800 to the host's PC by 
 says the address is not reachable (carrier-grade NAT, common on mobile internet), let another
 player host. Players on the same network can use the LAN code from the log.
 
-Developer builds (CMake option `MECMP_DEBUG_KEYS`, on by default, off for release builds) also have:
+Developer builds (configure with `-DMECMP_DEBUG_KEYS=ON`; off by default, and off in release and beta packages) also have:
 
 | Key | Action |
 |---|---|

@@ -122,7 +122,7 @@ void sessionSection() {
         else ImGui::Text("Joined %s", config::get()->join.c_str());
         ImGui::SameLine();
         if (net::connectedToHost()) ImGui::TextColored(ImVec4(0.4f, 1.f, 0.4f, 1.f), "connected");
-        else ImGui::TextColored(ImVec4(1.f, 0.5f, 0.3f, 1.f), "waiting for the host...");
+        else ImGui::TextColored(ImVec4(1.f, 0.5f, 0.3f, 1.f), "no connection to host");
     }
     if (running) {
         ImGui::SameLine();
@@ -276,8 +276,11 @@ void summonControls(const std::vector<net::RemoteInfo>& remotes) {
                                   : "Only the host, or a member the host allows, can pull players in.");
     const bool hard = g_summonHard && canHard;
     const bool inRun = net::inRun(); // nobody is brought to you mid-run
+    const bool haveOthers = std::any_of(remotes.begin(), remotes.end(), [](const net::RemoteInfo& r) {
+        return !r.self && !r.loopback && r.ageMs < 1000;
+    });
     ImGui::SameLine();
-    ImGui::BeginDisabled(inRun);
+    ImGui::BeginDisabled(inRun || !haveOthers);
     if (ImGui::Button("Summon everyone")) summon::send({}, hard);
     ImGui::EndDisabled();
     if (inRun && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
@@ -285,7 +288,7 @@ void summonControls(const std::vector<net::RemoteInfo>& remotes) {
     ImGui::SameLine();
     std::vector<uint32_t> picked;
     for (const auto& r : remotes)
-        if (!r.loopback && g_summonPick.count(r.id)) picked.push_back(r.id);
+        if (!r.self && !r.loopback && r.ageMs < 1000 && g_summonPick.count(r.id)) picked.push_back(r.id);
     ImGui::BeginDisabled(picked.empty() || inRun);
     char label[48];
     snprintf(label, sizeof(label), "Summon selected (%d)", static_cast<int>(picked.size()));
@@ -313,18 +316,30 @@ void ghostsRow() {
 
 void playersSection() {
     ImGui::SeparatorText("Players");
-    const auto remotes = net::remotes(5000);
+    const auto remotes = net::players();
     if (remotes.empty()) {
-        ImGui::TextDisabled("Nobody else here yet.");
+        ImGui::TextDisabled("Join or host a session to see players.");
         ghostsRow();
         return;
     }
-    if (ImGui::BeginTable("players", 4, ImGuiTableFlags_SizingStretchProp)) {
+    for (auto it = g_summonPick.begin(); it != g_summonPick.end();) {
+        bool present = false;
+        for (const auto& r : remotes) present = present || (!r.self && !r.loopback && r.id == *it);
+        if (!present) it = g_summonPick.erase(it);
+        else ++it;
+    }
+    if (ImGui::BeginTable("players", 5, ImGuiTableFlags_SizingStretchProp)) {
+        ImGui::TableSetupColumn("Player");
+        ImGui::TableSetupColumn("State");
+        ImGui::TableSetupColumn("Ping");
+        ImGui::TableSetupColumn("Loss");
+        ImGui::TableSetupColumn("Actions");
+        ImGui::TableHeadersRow();
         for (const auto& r : remotes) {
             ImGui::TableNextRow();
             ImGui::TableNextColumn();
             ImGui::PushID(static_cast<int>(r.id) + 1);
-            if (!r.loopback) {
+            if (!r.self && !r.loopback) {
                 bool on = g_summonPick.count(r.id) != 0;
                 if (ImGui::Checkbox("##pick", &on)) {
                     if (on) g_summonPick.insert(r.id);
@@ -334,21 +349,27 @@ void playersSection() {
                 ImGui::SameLine();
             }
             ImGui::PopID();
-            ImGui::Text("%s%s", r.name.empty() ? "(joining...)" : r.name.c_str(), r.loopback ? " (you, mirrored)" : "");
+            ImGui::Text("%s%s", r.name.empty() ? "Runner" : r.name.c_str(), r.self ? " (you)" : "");
             ImGui::TableNextColumn();
-            if (r.ageMs < 1000) ImGui::TextColored(ImVec4(0.4f, 1.f, 0.4f, 1.f), "live");
+            if (r.self) ImGui::TextUnformatted(net::hosting() ? "hosting" : net::connectedToHost() ? "connected" : "waiting");
+            else if (r.ageMs == UINT32_MAX) ImGui::TextDisabled("not in a level");
+            else if (r.ageMs < 1000) ImGui::TextColored(ImVec4(0.4f, 1.f, 0.4f, 1.f), "live");
             else ImGui::TextColored(ImVec4(1.f, 0.6f, 0.3f, 1.f), "%.1f s ago", r.ageMs / 1000.f);
             ImGui::TableNextColumn();
-            if (r.loopback || r.ageMs >= 1000) {
-                ImGui::TextUnformatted("");
-            } else if (r.lossPct < 2.f) {
-                ImGui::TextColored(ImVec4(0.4f, 1.f, 0.4f, 1.f), "good");
-            } else {
-                const ImVec4 c = r.lossPct < 10.f ? ImVec4(1.f, 0.85f, 0.3f, 1.f) : ImVec4(1.f, 0.4f, 0.35f, 1.f);
-                ImGui::TextColored(c, "%s, %.0f%% lost", r.lossPct < 10.f ? "fair" : "poor", r.lossPct);
-            }
-            if (ImGui::IsItemHovered()) ImGui::SetTooltip("Share of their updates that did not arrive in the last 5 s.");
+            if (r.self && net::hosting()) ImGui::TextDisabled("local");
+            else if (r.pingMs >= 0) ImGui::Text("%d ms", r.pingMs);
+            else ImGui::TextDisabled("n/a");
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip(r.self ? "Round-trip time to the host or server." : "Round-trip time to this player through the session host or server.");
             ImGui::TableNextColumn();
+            if (r.self || !r.lossKnown) ImGui::TextDisabled("n/a");
+            else {
+                const ImVec4 c = r.lossPct < 10.f ? ImVec4(1.f, 0.85f, 0.3f, 1.f) : ImVec4(1.f, 0.4f, 0.35f, 1.f);
+                ImGui::TextColored(r.lossPct < 2.f ? ImVec4(0.4f, 1.f, 0.4f, 1.f) : c, "%.1f%%", r.lossPct);
+            }
+            if (ImGui::IsItemHovered()) ImGui::SetTooltip(r.self ? "Incoming loss is shown on each other player's row. Your upload loss is not measured." : "Movement snapshots missing on their way to you over the last 5 s, including snapshots that arrived too late.");
+            ImGui::TableNextColumn();
+            if (r.self) continue;
             ImGui::PushID(static_cast<int>(r.id));
             const bool inRun = net::inRun();
             const bool can = game::teleport::available() && !game::teleport::busy() && r.ageMs < 1000 && !inRun;

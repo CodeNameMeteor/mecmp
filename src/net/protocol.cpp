@@ -63,6 +63,53 @@ constexpr float kMaxCoord = 100000.f;
 bool sanePlacement(const PlayerState& s) { return sanePosition(s.pos) && std::isfinite(s.yaw); }
 } // namespace
 
+size_t writeProbe(char* buf, const Header& h, const Probe& probe) {
+    char* p = buf;
+    put(p, h); put(p, probe.target); put(p, probe.id); put(p, static_cast<uint8_t>(probe.reply));
+    return static_cast<size_t>(p - buf);
+}
+
+bool readProbe(const char* payload, size_t n, Probe& out) {
+    const char* p = payload;
+    const char* end = p + n;
+    Probe probe;
+    uint8_t reply = 0;
+    if (!get(p, end, probe.target) || !get(p, end, probe.id) || !get(p, end, reply) || p != end || reply > 1 || !probe.id)
+        return false;
+    probe.reply = reply != 0;
+    out = probe;
+    return true;
+}
+
+size_t writeDeparture(char* buf, const Header& h, const Departure& departure) {
+    char* p = buf;
+    put(p, h); put(p, departure.player); put(p, static_cast<uint8_t>(departure.reason));
+    return static_cast<size_t>(p - buf);
+}
+
+bool readDeparture(const char* payload, size_t n, Departure& out) {
+    const char* p = payload;
+    const char* end = p + n;
+    Departure departure;
+    uint8_t reason = 0;
+    if (!get(p, end, departure.player) || !get(p, end, reason) || p != end ||
+        reason > static_cast<uint8_t>(DepartureReason::SessionClosed)) return false;
+    departure.reason = static_cast<DepartureReason>(reason);
+    out = departure;
+    return true;
+}
+
+const char* departureText(DepartureReason reason) {
+    switch (reason) {
+    case DepartureReason::Left: return "left the session";
+    case DepartureReason::TimedOut: return "lost connection (timed out)";
+    case DepartureReason::Kicked: return "was kicked";
+    case DepartureReason::Banned: return "was banned";
+    case DepartureReason::SessionClosed: return "left (session closed)";
+    }
+    return "left the session";
+}
+
 bool sanePosition(const float pos[3]) {
     for (int i = 0; i < 3; ++i)
         if (!std::isfinite(pos[i]) || std::fabs(pos[i]) > kMaxCoord) return false;
@@ -187,7 +234,7 @@ std::string formatRgb(const uint8_t rgb[3]) {
     return s;
 }
 
-size_t writeState(char* buf, const Header& h, const PlayerState& input, Encoder& enc) {
+size_t writeState(char* buf, const Header& h, const PlayerState& input) {
     PlayerState s = input;
     if (!limitPose(s)) return 0;
     char* p = buf;
@@ -197,17 +244,12 @@ size_t writeState(char* buf, const Header& h, const PlayerState& input, Encoder&
     put(p, s.flags);
     put(p, s.timeMs);
     const uint8_t nb = static_cast<uint8_t>(s.boneCount <= kMaxPoseBones ? s.boneCount : 0);
-    const bool full = nb && (nb != enc.lastFullCount || ++enc.sinceFull >= kFullEvery);
+    const bool full = nb != 0;
     int16_t qt[kMaxPoseBones][3];
     uint32_t mask = 0;
     for (uint8_t i = 0; i < nb; ++i) {
         for (int j = 0; j < 3; ++j) qt[i][j] = quantT(s.bones[i][j]);
-        if (full || memcmp(qt[i], enc.lastFullT[i], sizeof(qt[i])) != 0) mask |= 1u << i;
-    }
-    if (full) {
-        memcpy(enc.lastFullT, qt, sizeof(int16_t) * 3 * nb);
-        enc.lastFullCount = nb;
-        enc.sinceFull = 0;
+        mask |= 1u << i;
     }
     put(p, nb);
     put(p, static_cast<uint8_t>(full ? 1 : 0));
@@ -500,7 +542,7 @@ bool readHello(const char* payload, size_t n, std::string& name, uint32_t& look,
     return true;
 }
 
-bool readState(const char* payload, size_t n, const Decoder& dec, PlayerState& out, bool& full) {
+bool readState(const char* payload, size_t n, PlayerState& out, bool& full) {
     const char* p = payload;
     const char* end = payload + n;
     uint8_t nb = 0, fl = 0;
@@ -519,7 +561,7 @@ bool readState(const char* payload, size_t n, const Decoder& dec, PlayerState& o
     if ((mask & ~validMask) || (nb && full && mask != validMask)) return false;
     if (nb == 0) return p == end && limitPose(out);
     if (nb > kMaxPoseBones) return false;
-    const bool haveBase = full || dec.baseCount == nb;
+    if (!full) return false;
     // The rotations (4 bytes each) come first, the translations (6 bytes each, one per mask bit) after them.
     if (end - p < static_cast<ptrdiff_t>(nb) * 4) return false;
     const char* t = p + nb * 4;
@@ -533,23 +575,12 @@ bool readState(const char* payload, size_t n, const Decoder& dec, PlayerState& o
             memcpy(tv, t, 6);
             t += 6;
             for (int j = 0; j < 3; ++j) out.bones[i][j] = tv[j] / kTransScale;
-        } else {
-            for (int j = 0; j < 3; ++j) out.bones[i][j] = dec.baseT[i][j];
         }
         out.bones[i][3] = 1.f;
     }
-    // Validate the complete packet even without a delta base; only publish its
-    // placement until a full pose arrives. This also bounds yaw on that path.
-    out.boneCount = haveBase ? nb : 0;
+    out.boneCount = nb;
     return t == end && limitPose(out);
 }
-
-void commitBase(Decoder& dec, const PlayerState& s) {
-    for (uint32_t i = 0; i < s.boneCount; ++i)
-        for (int j = 0; j < 3; ++j) dec.baseT[i][j] = s.bones[i][j];
-    dec.baseCount = s.boneCount;
-}
-
 
 // --- RESULT ------------------------------------------------------------------------------------------
 

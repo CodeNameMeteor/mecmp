@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Connection and players
+- Movement poses no longer depend on earlier packets. Lost or late packets cannot replace the pose's translation base.
+- The host and dedicated server discard duplicate and older movement snapshots before processing them.
+- The Players list includes your own row without travel or summon controls. Ping shows measured round-trip time;
+  loss shows missing incoming movement snapshots. Unavailable measurements show `n/a`.
+- Session notices distinguish an exit message, a timeout, a kick, a ban and a closed session. Loading a level
+  does not count as leaving. A timeout does not claim whether the player lost internet or the game stopped responding.
+- Host connection status expires after ten seconds without traffic and recovers when traffic resumes.
+- Wire protocol is now 8. Update clients and dedicated servers together.
+
 ### Your look
 - **"Ghost" remembers your last ghost.** Switching to Faith and back to Ghost in the menu used to fall back to the default
   RunVis ghost; now it returns to the style and color you had (saved as `[player] last_ghost`).

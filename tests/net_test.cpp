@@ -11,6 +11,7 @@
 #include "net/joincode.h"
 #include "net/pose_limits.h"
 #include "net/protocol.h"
+#include "net/connection.h"
 #include "net/summon_policy.h"
 
 using namespace mecmp::net;
@@ -63,33 +64,29 @@ static void testHelloName() {
 }
 
 static void testReadState() {
-    protocol::Encoder enc;
     protocol::Header h{protocol::kMagic, protocol::kProtocol, protocol::kTypeState, 1, 1};
     PlayerState s{};
     s.pos[0] = 1; s.pos[1] = 2; s.pos[2] = 3; s.yaw = 0.5f; s.timeMs = 1234;
     s.boneCount = 23;
     for (int i = 0; i < 23; ++i) { s.bones[i][3] = 1; s.bones[i][7] = 1; s.bones[i][0] = i * 0.01f; }
     char buf[protocol::kMaxPacket];
-    const size_t n = protocol::writeState(buf, h, s, enc);
+    const size_t n = protocol::writeState(buf, h, s);
 
     // A well-formed packet decodes.
-    protocol::Decoder dec;
     PlayerState out;
     bool full = false;
-    CHECK(protocol::readState(buf + sizeof(h), n - sizeof(h), dec, out, full));
+    CHECK(protocol::readState(buf + sizeof(h), n - sizeof(h), out, full));
     CHECK(out.boneCount == 23 && std::fabs(out.pos[2] - 3) < 1e-6f);
 
     // Non-finite or far-away positions are refused.
     for (float bad : {NAN, INFINITY, 1e30f}) {
         PlayerState b = s;
         b.pos[0] = bad;
-        protocol::Encoder e2;
         char b2[protocol::kMaxPacket];
-        const size_t n2 = protocol::writeState(b2, h, b, e2);
+        const size_t n2 = protocol::writeState(b2, h, b);
         PlayerState o2;
         bool f2 = false;
-        protocol::Decoder d2;
-        CHECK(!protocol::readState(b2 + sizeof(h), n2 - sizeof(h), d2, o2, f2));
+        CHECK(!protocol::readState(b2 + sizeof(h), n2 - sizeof(h), o2, f2));
     }
 
     // Every truncation of a valid packet is refused or decoded without reading past the end.
@@ -97,9 +94,7 @@ static void testReadState() {
         std::vector<char> copy(buf + sizeof(h), buf + sizeof(h) + cut);
         PlayerState o3;
         bool f3 = false;
-        protocol::Decoder d3;
-        d3.baseCount = 23;
-        protocol::readState(copy.data(), copy.size(), d3, o3, f3);
+        protocol::readState(copy.data(), copy.size(), o3, f3);
     }
 
     // Random payloads never crash (run this file under -fsanitize=address,undefined to check reads).
@@ -107,11 +102,9 @@ static void testReadState() {
     for (int i = 0; i < 200000; ++i) {
         std::vector<char> p(rng() % 200);
         for (char& c : p) c = static_cast<char>(rng());
-        protocol::Decoder d;
-        d.baseCount = rng() % 33;
         PlayerState o;
         bool f = false;
-        protocol::readState(p.data(), p.size(), d, o, f);
+        protocol::readState(p.data(), p.size(), o, f);
     }
 }
 
@@ -882,15 +875,13 @@ static void testLimitPose() {
     PlayerState f{};
     f.pos[0] = 1; f.flags = kStateInLevel | 0x40;
     char buf[protocol::kMaxPacket];
-    protocol::Encoder enc;
-    const size_t n = protocol::writeState(buf, h, f, enc);
+    const size_t n = protocol::writeState(buf, h, f);
     // writeState clears it too, so set it on the wire by hand (flags follow pos and yaw).
     const uint32_t wire = kStateInLevel | 0x40;
     memcpy(buf + sizeof(h) + 16, &wire, 4);
-    protocol::Decoder dec;
     PlayerState out;
     bool full = false;
-    CHECK(protocol::readState(buf + sizeof(h), n - sizeof(h), dec, out, full));
+    CHECK(protocol::readState(buf + sizeof(h), n - sizeof(h), out, full));
     CHECK(out.flags == kStateInLevel);
 }
 
@@ -949,7 +940,83 @@ static void testHelloTimeOfDay() {
     CHECK(t < 0.f);
 }
 
+static void testIndependentPoses() {
+    PlayerState s{};
+    s.boneCount = 23;
+    for (uint32_t b = 0; b < s.boneCount; ++b) { s.bones[b][3] = 1; s.bones[b][7] = 1; }
+    char buf[protocol::kMaxPacket];
+    const protocol::Header h{protocol::kMagic, protocol::kProtocol, protocol::kTypeState, 1, 1};
+    PlayerState out{};
+    bool full = false;
+    for (uint32_t frame = 0; frame < 32; ++frame) {
+        s.bones[2][0] = frame < 30 ? .125f : .75f;
+        const size_t n = protocol::writeState(buf, h, s);
+        if (frame == 30) continue;
+        CHECK(protocol::readState(buf + sizeof(h), n - sizeof(h), out, full));
+        CHECK(full);
+        CHECK(out.bones[2][0] == s.bones[2][0]);
+    }
+}
+
+static void testConnectionMetrics() {
+    StateSequence sequence;
+    CHECK(sequence.accepts(UINT32_MAX - 1));
+    CHECK(sequence.commit(UINT32_MAX - 1) == 0);
+    CHECK(!sequence.accepts(UINT32_MAX - 1) && !sequence.accepts(UINT32_MAX - 2));
+    CHECK(sequence.accepts(1) && sequence.commit(1) == 2);
+    CHECK(!sequence.accepts(UINT32_MAX));
+    Heartbeat heartbeat;
+    CHECK(!heartbeat.connected(0));
+    heartbeat.receive(UINT32_MAX - 100);
+    CHECK(heartbeat.connected(100));
+    CHECK(!heartbeat.connected(kConnectionTimeoutMs));
+    heartbeat.receive(kConnectionTimeoutMs);
+    CHECK(heartbeat.connected(kConnectionTimeoutMs));
+    RoundTrip rtt;
+    CHECK(rtt.value(0) == -1);
+    CHECK(rtt.due(0));
+    rtt.request(7, UINT32_MAX - 20);
+    CHECK(!rtt.due(279));
+    CHECK(!rtt.reply(8, 30));
+    CHECK(rtt.reply(7, 30) && rtt.value(30) == 51);
+    CHECK(!rtt.due(280));
+    CHECK(rtt.due(2000));
+    CHECK(!rtt.reply(7, 40));
+    CHECK(rtt.value(30 + kProbeFreshMs) == -1);
+    rtt.request(9, 100);
+    CHECK(!rtt.reply(9, 100 + kProbeFreshMs + 1));
+}
+
+static void testConnectionPackets() {
+    char buf[protocol::kMaxPacket];
+    const protocol::Header h{protocol::kMagic, protocol::kProtocol, protocol::kTypeProbe, 1, 1};
+    protocol::Probe probe;
+    size_t n = protocol::writeProbe(buf, h, {2, 9, false});
+    CHECK(protocol::readProbe(buf + sizeof(h), n - sizeof(h), probe));
+    CHECK(probe.target == 2 && probe.id == 9 && !probe.reply);
+    for (size_t cut = 0; cut < n - sizeof(h); ++cut)
+        CHECK(!protocol::readProbe(buf + sizeof(h), cut, probe));
+    CHECK(!protocol::readProbe(buf + sizeof(h), n - sizeof(h) + 1, probe));
+    buf[n - 1] = 2;
+    CHECK(!protocol::readProbe(buf + sizeof(h), n - sizeof(h), probe));
+    protocol::Departure departure;
+    for (const auto reason : {protocol::DepartureReason::Left, protocol::DepartureReason::TimedOut,
+                              protocol::DepartureReason::Kicked, protocol::DepartureReason::Banned,
+                              protocol::DepartureReason::SessionClosed}) {
+        n = protocol::writeDeparture(buf, h, {2, reason});
+        CHECK(protocol::readDeparture(buf + sizeof(h), n - sizeof(h), departure));
+        CHECK(departure.player == 2 && departure.reason == reason);
+        CHECK(!protocol::readDeparture(buf + sizeof(h), n - sizeof(h) - 1, departure));
+        CHECK(!protocol::readDeparture(buf + sizeof(h), n - sizeof(h) + 1, departure));
+    }
+    buf[n - 1] = 99;
+    CHECK(!protocol::readDeparture(buf + sizeof(h), n - sizeof(h), departure));
+}
+
 int main() {
+    testConnectionMetrics();
+    testConnectionPackets();
+    testIndependentPoses();
     testRendezvous();
     testResult();
     testActivity();

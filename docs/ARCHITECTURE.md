@@ -303,12 +303,20 @@ UDP, one socket. Sessions have one host and any number of joiners (up to 16).
   8 SUMMON_REPLY (see `net/protocol.h`).
 - Packets: STATE 30 Hz and HELLO (name and look: u32, 0 = Faith, else the echo hash) ~1 Hz. Remote players are keyed by the random session id
   in each packet. Pose compression: rotations smallest-three 32-bit, translations i16 at 1/1024 m,
-  only for bones that changed since the last full packet (one per second); about 150 bytes.
+  every packet carries all translations; a 23-bone STATE is 278 bytes and needs no earlier packet.
+  Protocol 8 counts STATE sequence numbers separately from other traffic. Host and relay reject stale
+  movement before processing it, with unsigned wrap-aware sequence comparisons.
 - Receivers buffer 16 snapshots per player and show them 120 ms in the past, blended. The sender's
   32-bit millisecond clock is unwrapped (`protocol::ClockUnwrap`), so a 49-day uptime wrap is harmless. Positions and angles outside a sane range are dropped.
-- Packet loss per player (`protocol::LossWindow`): gaps in their sequence numbers over the last 5 s;
-  shown in the menu's player list. Join/leave notices (`ui/notices.cpp`) come from the same player
-  list: a named player appearing, or silent for 5 s (as for their ghost).
+- Packet loss per player (`protocol::LossWindow`): gaps in movement sequence numbers over the last 5 s.
+  Type 16 PROBE measures round-trip time, routed only to its target. Each client sends at most four
+  probe requests per second, cycling through players; host probes run about every 2 s. Large sessions
+  refresh individual peer measurements less often. The local row shows host RTT; upload loss is unknown.
+- Type 17 DEPARTURE carries a player id and reason. Members may report only their own voluntary exit;
+  the host or relay announces it to everyone under its own session id. They also announce timeouts,
+  kicks, bans and session closure. Exit notices are sent three times but can still be lost over UDP.
+  Without an exit notice, ten seconds without session traffic produces a timeout notice. HELLO keeps
+  membership alive through loading screens. Ghost visibility still follows fresh movement separately.
 - At most 64 player entries are kept; an entry silent for 2 minutes is forgotten. Packets of unknown
   type are dropped before anything is stored or forwarded.
 

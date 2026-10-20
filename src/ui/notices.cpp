@@ -18,11 +18,9 @@ namespace {
 constexpr DWORD kShowMs = 5000;   // each notice stays this long...
 constexpr DWORD kFadeMs = 1000;   // ...fading out over the last second
 constexpr size_t kMaxShown = 4;
-constexpr uint32_t kGoneMs = 5000; // same as the ghosts: silent this long = left
 
 struct Notice { std::string text; DWORD at; };
 std::deque<Notice> g_notices;
-std::unordered_map<uint32_t, std::string> g_present; // id -> name, players announced as here
 std::unordered_map<uint64_t, uint32_t> g_pingAge;    // owner and cell -> age of that marker when last looked at
 } // namespace
 
@@ -32,17 +30,9 @@ void push(std::string text) {
 }
 
 void draw() {
-    // Track arrivals and departures even while notices are off, so turning them on does not
-    // announce everyone at once.
-    std::unordered_map<uint32_t, std::string> now;
-    for (const auto& r : net::remotes(kGoneMs))
-        if (!r.loopback && !r.name.empty() && r.ageMs < kGoneMs) now[r.id] = r.name; // named: their HELLO arrived
     const bool on = config::get()->showNotices;
-    for (const auto& kv : now)
-        if (!g_present.count(kv.first) && on) push(kv.second + " joined");
-    for (const auto& kv : g_present)
-        if (!now.count(kv.first) && on) push(kv.second + " left");
-    g_present.swap(now);
+    for (const auto& text : net::takeConnectionNotices())
+        if (on) push(text);
 
     // Other players' markers. A marker counts as new when its cell was empty (and it is fresh: not
     // one that was already there when we joined), or when its age went back (a replacement starts

@@ -22,6 +22,7 @@
 #include <vector>
 
 #include "net/protocol.h"
+#include "net/connection.h"
 
 namespace mecmp::server {
 
@@ -64,8 +65,7 @@ struct Member {
     double tokens = 0;
     uint32_t refillAt = 0;
     uint64_t packets = 0, dropped = 0;
-    net::protocol::Decoder poseDecoder;
-    net::protocol::Encoder poseEncoder; // re-encodes its checked poses: deltas stay deltas
+    net::StateSequence stateSequence;
     bool announced = false; // its join was logged with a name
     uint32_t logAt = 0;     // the start of its current log window (see Relay::logAllowed)
     int logBurst = 0;       // log lines it has caused in that window
@@ -112,6 +112,7 @@ public:
     // `reset`: every player is dropped (each leave is reported), and the session-id reservations, pending notices,
     // server chat and counters start again. Bans stay, and so do kick blocks (they run out by themselves).
     void reset();
+    void shutdown();
     // The settings read again (`reset`): players stay connected; a lower limit only refuses new ones.
     void reconfigure(Config cfg);
 
@@ -136,6 +137,7 @@ private:
     // A player's lines in the log: a few per window, so one player cannot fill the log.
     bool logAllowed(Member& m, uint32_t nowMs);
     void drop(size_t index, const char* why);
+    void announceDeparture(uint32_t player, net::protocol::DepartureReason reason);
     void sendHello();
     void sendHelloTo(const Addr& to);
     // A short chat line to an address that is not let in (full, banned): at most one per 15 s each.

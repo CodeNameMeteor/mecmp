@@ -59,9 +59,16 @@ Developer builds (CMake option `MECMP_DEBUG_KEYS`, on by default, off for releas
 | F9 | Write a status line to `mecmp.log` (with the ghost update's cost) |
 | F10 | Developer: log the camera matrices (used to find the name tags' camera; needs a level) |
 
-Versions: everyone in a session needs the same wire protocol (this version uses protocol 7). Packets
-from a different protocol are ignored and the log says which version the other side runs. Protocol 7
-also lets a host or server admit only players who answer a challenge, so older versions cannot join.
+Versions: everyone in a session needs the same wire protocol (this version uses protocol 8). Update
+clients and dedicated servers together; protocol 7 cannot join. Packets from another protocol are
+ignored and the log says which version the other side runs. Admission still uses a challenge and answer.
+
+The Players list includes you, without travel or summon controls on your own row. Ping measures the
+round trip to the host on your row, and to each other player through the host or server on theirs.
+Loss counts incoming movement snapshots missing over the last five seconds. Your upload loss is not
+measured and shows as `n/a`. Join and leave notices use session traffic, so loading a level does not
+count as leaving. A received exit message shows a normal departure; missing traffic shows a timeout,
+which can also mean a crash or frozen game. Kick, ban and session closure have their own notices.
 
 Solo test (developer builds only): *Solo test* in the menu, or `join=127.0.0.1:47800`. Your own packets come back and a
 ghost copies your moves 3 m away along the world X axis (`loopback_offset`); it stays put while you

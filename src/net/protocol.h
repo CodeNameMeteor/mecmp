@@ -7,9 +7,8 @@
 //   pose: u8 boneCount | u8 flags (bit0 = full) | u16 0 | u32 translation mask
 //         | boneCount x u32 rotation (smallest-three: 2-bit index + 3 x 10 bits)
 //         | per mask bit: 3 x i16 translation (1/1024 m)
-//   Bones whose translation is not in the packet keep the last full packet's value (a full packet,
-//   with every translation, goes out every kFullEvery packets). The trajectory bone's translation
-//   is world space and is clamped; receivers place it at pos instead.
+//   Every pose carries all translations. STATE seq counts only movement snapshots; other packet types
+//   use a separate sequence space. The trajectory bone is placed at pos by receivers.
 // type 2 HELLO (about once a second): char name[24] (UTF-8, at most 23 bytes, NUL padded)
 //   | u32 look (0 = Faith, else the game's echo CustomizationHash; absent from older versions = 0)
 //   | u8 flags (kHelloHost, kHelloServer) | u8 wear (Faith's outfit changes, kWear...; absent = 0)
@@ -29,9 +28,8 @@
 namespace mecmp::net::protocol {
 
 constexpr uint32_t kMagic = 0x4d43454d; // "MECM"
-// 7: admission cookies (CHALLENGE and ANSWER). A stranger's HELLO is answered with a challenge, and it is let in
-// only after it answers. Older versions cannot answer, so everyone must run the same version.
-constexpr uint16_t kProtocol = 7;
+// 8: independent poses, movement-only sequence numbers, RTT probes and host-authored departures.
+constexpr uint16_t kProtocol = 8;
 constexpr uint16_t kTypeState = 1;
 constexpr uint16_t kTypeHello = 2;
 constexpr uint16_t kTypeChat = 3;
@@ -43,6 +41,8 @@ constexpr uint16_t kTypeResult = 9; // a finished dash or other run, with its ti
 constexpr uint16_t kTypeActivity = 10; // the run the sender is in now, with its clock (see ACTIVITY below)
 constexpr uint16_t kTypeVisit = 13; // "may I come to you?" and its answer (see VISIT below)
 constexpr uint16_t kTypeAudio = 15; // native movement event + scalar inputs (player_audio.h)
+constexpr uint16_t kTypeProbe = 16;
+constexpr uint16_t kTypeDeparture = 17;
 // 14 is RENDEZVOUS (below): not a session packet, so it is not in knownType.
 // type 5 INFO: a server list's question "who are you?" and a dedicated server's answer. Not a session
 // packet: it is not in knownType (never stored or forwarded), and a server answers it whatever the
@@ -68,11 +68,10 @@ constexpr uint16_t kTypeRendezvous = 14;
 constexpr bool knownType(uint16_t type) {
     return type == kTypeState || type == kTypeHello || type == kTypeChat || type == kTypePing || type == kTypeReact ||
            type == kTypeSummon || type == kTypeSummonReply || type == kTypeResult || type == kTypeActivity ||
-           type == kTypeVisit || type == kTypeAudio;
+           type == kTypeVisit || type == kTypeAudio || type == kTypeProbe || type == kTypeDeparture;
 }
 constexpr size_t kMaxChatBytes = 120; // UTF-8, after cleaning
 constexpr size_t kNameLen = 24;
-constexpr uint32_t kFullEvery = 30;
 constexpr size_t kMaxPacket = 1024;
 
 #pragma pack(push, 1)
@@ -85,18 +84,24 @@ struct Header {
 };
 #pragma pack(pop)
 static_assert(sizeof(Header) == 16, "header");
+
+struct Probe {
+    uint32_t target = 0, id = 0;
+    bool reply = false;
+};
+enum class DepartureReason : uint8_t { Left, TimedOut, Kicked, Banned, SessionClosed };
+struct Departure {
+    uint32_t player = 0;
+    DepartureReason reason = DepartureReason::Left;
+};
+size_t writeProbe(char* buf, const Header& h, const Probe& probe);
+bool readProbe(const char* payload, size_t n, Probe& out);
+size_t writeDeparture(char* buf, const Header& h, const Departure& departure);
+bool readDeparture(const char* payload, size_t n, Departure& out);
+const char* departureText(DepartureReason reason);
 size_t writeAudio(char* buf, const Header& h, const PlayerAudio& sample);
 bool readAudio(const char* payload, size_t size, PlayerAudio& out);
 
-struct Encoder { // sender side: translations of the last full packet
-    int16_t lastFullT[kMaxPoseBones][3] = {};
-    uint32_t lastFullCount = 0;
-    uint32_t sinceFull = kFullEvery;
-};
-struct Decoder { // per remote player
-    float baseT[kMaxPoseBones][3] = {};
-    uint32_t baseCount = 0;
-};
 
 // Longest player name that fits the HELLO field (one byte is kept for the NUL terminator).
 constexpr size_t kMaxNameBytes = kNameLen - 1;
@@ -393,7 +398,7 @@ bool readRendezvous(const char* payload, size_t n, Rendezvous& out); // false: s
 bool parseRgb(const std::string& hex, uint8_t rgb[3]);
 std::string formatRgb(const uint8_t rgb[3]);
 
-size_t writeState(char* buf, const Header& h, const PlayerState& s, Encoder& enc);
+size_t writeState(char* buf, const Header& h, const PlayerState& s);
 
 struct ServerInfo {
     uint8_t players = 0, maxPlayers = 0;
@@ -447,9 +452,8 @@ size_t writeHello(char* buf, const Header& h, const char* name, uint32_t look = 
 // `timeOfDay` = -1 if absent (or not a time).
 bool readHello(const char* payload, size_t n, std::string& name, uint32_t& look, uint8_t* flags = nullptr,
                uint8_t* wear = nullptr, OnlineProfile* profile = nullptr, float* timeOfDay = nullptr);
-// Decodes a STATE payload (after the header). `full` tells whether to commit it as the new base.
-bool readState(const char* payload, size_t n, const Decoder& dec, PlayerState& out, bool& full);
-void commitBase(Decoder& dec, const PlayerState& s);
+// Decodes a complete STATE payload (after the header). No previous packet is needed.
+bool readState(const char* payload, size_t n, PlayerState& out, bool& full);
 
 
 // type 9 RESULT: u32 id | u32 contentId | u8 kind | u8 flags | i64 value | i64 delta | u8 titleLength | title.

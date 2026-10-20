@@ -23,6 +23,7 @@
 #include "core/config.h"
 #include "core/log.h"
 #include "net/host_guard.h"
+#include "net/connection.h"
 #include "net/joincode.h"
 #include "net/protocol.h"
 #include "net/pose_limits.h"
@@ -66,11 +67,13 @@ struct Remote {
     uint8_t outfit = 0;
     proto::OnlineProfile profile; // shared by them (HELLO), for map markers
     bool loopback = false;
-    uint32_t lastSeq = 0;
-    bool haveSeq = false;
+    StateSequence stateSequence;
+    RoundTrip roundTrip;
+    bool announced = false;
+    bool departed = false;
+    proto::DepartureReason departureReason = proto::DepartureReason::TimedOut;
     DWORD lastTick = 0;  // last STATE (player data)
     DWORD lastHeard = 0; // last packet of any kind (a player who only sent a HELLO yet is still there)
-    proto::Decoder decoder;
     // Sender clock -> our clock: the smallest (arrival - sent) seen = one-way delay + clock offset.
     // Replaying on the sender's timestamps keeps movement smooth when packets arrive in bursts.
     double minDelta = 0;
@@ -123,8 +126,7 @@ struct Member {
     sockaddr_in addr{};
     DWORD lastSeen = 0;
     uint32_t session = 0;     // the session id this joiner speaks with (see handlePacket)
-    proto::Decoder poseDecoder;
-    proto::Encoder poseEncoder; // re-encodes its checked poses: deltas stay deltas
+    StateSequence stateSequence;
     guard::Bucket bucket;     // how fast it may send (net/host_guard.h)
 };
 
@@ -140,6 +142,10 @@ std::vector<Reserved> g_reserved;        // guarded by g_m
 constexpr DWORD kSessionGraceMs = 60000;
 sockaddr_in g_hostAddr{};                 // JOIN
 std::atomic<bool> g_heardFromHost{false};
+Heartbeat g_hostHeartbeat;
+RoundTrip g_hostRoundTrip;
+bool g_hostLost = false;
+std::deque<std::string> g_connectionNotices;
 std::string g_joinCode, g_lanCode;
 std::atomic<uint32_t> g_generation{0}; // bumped on every start(); stale host setups don't publish
 PlayerState g_local;
@@ -150,6 +156,7 @@ std::atomic<uint32_t> g_look{0};
 std::atomic<uint8_t> g_outfit{0};
 
 std::atomic<bool> g_run{false};
+std::atomic<bool> g_stopRequested{false};
 std::thread g_thread;
 SOCKET g_sock = INVALID_SOCKET;
 uint32_t g_session = 0;
@@ -294,8 +301,91 @@ void sendAll(const char* buf, size_t len) {
 }
 
 proto::Header header(uint16_t type) {
-    static uint32_t seq = 0;
-    return proto::Header{proto::kMagic, proto::kProtocol, type, g_session, ++seq};
+    static std::atomic<uint32_t> seq{0}, stateSeq{0};
+    return proto::Header{proto::kMagic, proto::kProtocol, type, g_session, type == proto::kTypeState ? ++stateSeq : ++seq};
+}
+
+void connectionNotice(std::string text) {
+    g_connectionNotices.push_back(std::move(text));
+    while (g_connectionNotices.size() > 32) g_connectionNotices.pop_front();
+}
+
+void departRemote(uint32_t session, proto::DepartureReason reason) {
+    const auto it = g_remotes.find(session);
+    if (it == g_remotes.end()) {
+        if (g_remotes.size() >= kMaxRemotes) return;
+        Remote remote;
+        remote.id = session;
+        remote.lastHeard = GetTickCount();
+        remote.departed = true;
+        remote.departureReason = reason;
+        g_remotes.emplace(session, std::move(remote));
+        return;
+    }
+    Remote& r = it->second;
+    if (r.departed) {
+        if (r.departureReason == proto::DepartureReason::TimedOut && reason != proto::DepartureReason::TimedOut)
+            r.departureReason = reason;
+        return;
+    }
+    if (r.announced) connectionNotice((r.name.empty() ? std::string("Runner") : r.name) + " " + proto::departureText(reason));
+    r.announced = false;
+    r.departed = true;
+    r.departureReason = reason;
+    r.fill = 0;
+    r.roundTrip = {};
+}
+
+void sendDepartureTo(const sockaddr_in& to, uint32_t session, proto::DepartureReason reason) {
+    char buf[proto::kMaxPacket];
+    const size_t n = proto::writeDeparture(buf, header(proto::kTypeDeparture), {session, reason});
+    for (int repeat = 0; repeat < 3; ++repeat)
+        sendto(g_sock, buf, static_cast<int>(n), 0, reinterpret_cast<const sockaddr*>(&to), sizeof(to));
+}
+
+void announceDeparture(uint32_t session, proto::DepartureReason reason) {
+    for (const auto& to : g_sendTo) sendDepartureTo(to, session, reason);
+}
+
+void sendProbe(uint32_t target, uint32_t id, bool reply) {
+    sockaddr_in to = g_hostAddr;
+    if (g_role == Role::Host) {
+        bool found = false;
+        for (const auto& member : g_members)
+            if (member.session == target) { to = member.addr; found = true; break; }
+        if (!found) return;
+    }
+    char buf[proto::kMaxPacket];
+    const size_t n = proto::writeProbe(buf, header(proto::kTypeProbe), {target, id, reply});
+    sendto(g_sock, buf, static_cast<int>(n), 0, reinterpret_cast<const sockaddr*>(&to), sizeof(to));
+}
+
+void probePeers() {
+    static DWORD lastAt = 0;
+    static uint32_t token = 0, cursor = 0;
+    const DWORD now = GetTickCount();
+    if (now - lastAt < kProbeSpacingMs) return;
+    lastAt = now;
+    std::lock_guard<std::mutex> lock(g_m);
+    const auto request = [&](uint32_t target, RoundTrip& rtt) {
+        if (!++token) ++token;
+        rtt.request(token, now);
+        sendProbe(target, token, false);
+    };
+    if (g_role == Role::Join && g_hostSession && g_hostRoundTrip.due(now)) {
+        request(g_hostSession, g_hostRoundTrip);
+        return;
+    }
+    for (int pass = 0; pass < 2; ++pass) {
+        for (auto& entry : g_remotes) {
+            Remote& remote = entry.second;
+            if (!remote.announced || remote.departed || remote.loopback || remote.id == g_hostSession ||
+                !remote.roundTrip.due(now) || (pass == 0 && remote.id <= cursor)) continue;
+            request(remote.id, remote.roundTrip);
+            cursor = remote.id;
+            return;
+        }
+    }
 }
 
 std::atomic<bool> g_typing{false};
@@ -310,9 +400,8 @@ void sendState() {
         s = g_local;
     }
     if (g_typing.load()) s.flags |= kStateTyping;
-    static proto::Encoder enc;
     char buf[proto::kMaxPacket];
-    sendAll(buf, proto::writeState(buf, header(proto::kTypeState), s, enc));
+    sendAll(buf, proto::writeState(buf, header(proto::kTypeState), s));
 }
 
 proto::OnlineProfile g_profile; // ours, under g_m
@@ -791,6 +880,7 @@ void handleAdmission(const proto::Header& h, const char* buf, int n, const socka
 void handleRendezvous(const proto::Header& h, const char* buf, int n, const sockaddr_in& from); // hole punching, below
 
 void handlePacket(const char* buf, int n, const sockaddr_in& from) {
+    if (g_stopRequested) return;
     proto::Header h;
     if (n < static_cast<int>(sizeof(h))) { ++g_dropped; return; }
     memcpy(&h, buf, sizeof(h));
@@ -833,21 +923,54 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
             if (h.type != proto::kTypeHello || sessionInUse(h.session, from)) { ++g_dropped; return; }
             if (peerLogAllowed()) MLOG("net: %s is now session %08x (restarted)", addrToString(from).c_str(), h.session);
             m->session = h.session;
-            m->poseDecoder = {};
-            m->poseEncoder = {};
+
+
+            m->stateSequence = {};
         }
         if (!m->bucket.take(GetTickCount())) { ++g_dropped; return; } // flooding: not forwarded, not processed
+        if (h.type == proto::kTypeDeparture) {
+            proto::Departure departure;
+            if (!proto::readDeparture(buf + sizeof(h), static_cast<size_t>(n) - sizeof(h), departure) ||
+                departure.player != h.session || departure.reason != proto::DepartureReason::Left) {
+                ++g_dropped; return;
+            }
+            announceDeparture(h.session, departure.reason);
+            departRemote(h.session, departure.reason);
+            g_reserved.push_back({h.session, from, GetTickCount() + kSessionGraceMs});
+            g_sendTo.erase(std::remove_if(g_sendTo.begin(), g_sendTo.end(),
+                                         [&](const sockaddr_in& a) { return sameAddr(a, from); }), g_sendTo.end());
+            g_members.erase(std::remove_if(g_members.begin(), g_members.end(),
+                                          [&](const Member& member) { return sameAddr(member.addr, from); }), g_members.end());
+            return;
+        }
+        if (h.type == proto::kTypeProbe) {
+            proto::Probe probe;
+            if (!proto::readProbe(buf + sizeof(h), static_cast<size_t>(n) - sizeof(h), probe)) { ++g_dropped; return; }
+            if (probe.target == g_session) {
+                if (probe.reply) {
+                    const auto remote = g_remotes.find(h.session);
+                    if (remote != g_remotes.end()) remote->second.roundTrip.reply(probe.id, GetTickCount());
+                } else sendProbe(h.session, probe.id, true);
+            } else {
+                for (const auto& member : g_members)
+                    if (member.session == probe.target && !sameAddr(member.addr, from)) {
+                        sendto(g_sock, buf, n, 0, reinterpret_cast<const sockaddr*>(&member.addr), sizeof(member.addr));
+                        break;
+                    }
+            }
+            return;
+        }
         // A joiner's HELLO goes on without the "I host" flag: only the host's own HELLO may set it.
         const char* out = buf;
         if (h.type == proto::kTypeState) {
+            if (!m->stateSequence.accepts(h.seq)) { ++g_dropped; return; }
             PlayerState state; bool full = false;
-            if (!proto::readState(buf + sizeof(h), static_cast<size_t>(n) - sizeof(h), m->poseDecoder, state, full)) {
+            if (!proto::readState(buf + sizeof(h), static_cast<size_t>(n) - sizeof(h), state, full)) {
                 ++g_dropped; return;
             }
-            if (full) proto::commitBase(m->poseDecoder, state);
             if (!limitPose(state, config::get()->boneReach)) { ++g_dropped; return; }
-            // Re-encoded with this joiner's own encoder: full every kFullEvery packets, deltas between.
-            n = static_cast<int>(proto::writeState(relay, h, state, m->poseEncoder));
+            m->stateSequence.commit(h.seq);
+            n = static_cast<int>(proto::writeState(relay, h, state));
             if (!n) { ++g_dropped; return; }
             out = relay;
         } else if (h.type == proto::kTypeAudio) {
@@ -898,6 +1021,40 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
         }
         return;
     }
+    if (g_role == Role::Join) {
+        g_hostHeartbeat.receive(GetTickCount());
+        if (g_hostLost) { connectionNotice("Connection restored"); g_hostLost = false; }
+        if (h.type == proto::kTypeDeparture) {
+            proto::Departure departure;
+            if (h.session != g_hostSession ||
+                !proto::readDeparture(data + sizeof(h), static_cast<size_t>(n) - sizeof(h), departure)) {
+                ++g_dropped; return;
+            }
+            if (departure.player == g_hostSession || departure.player == g_session) {
+                if (departure.player == g_hostSession) connectionNotice("Session closed");
+                else connectionNotice(departure.reason == proto::DepartureReason::Kicked ? "You were kicked"
+                                     : departure.reason == proto::DepartureReason::Banned ? "You were banned"
+                                     : departure.reason == proto::DepartureReason::TimedOut ? "Your connection timed out"
+                                     : "Session closed");
+                for (auto& entry : g_remotes) { entry.second.announced = false; entry.second.departed = true; entry.second.fill = 0; }
+                g_hostHeartbeat = {};
+                g_stopRequested = true;
+            } else departRemote(departure.player, departure.reason);
+            return;
+        }
+        if (h.type == proto::kTypeProbe) {
+            proto::Probe probe;
+            if (!proto::readProbe(data + sizeof(h), static_cast<size_t>(n) - sizeof(h), probe) || probe.target != g_session) {
+                ++g_dropped; return;
+            }
+            if (probe.reply) {
+                if (h.session == g_hostSession) g_hostRoundTrip.reply(probe.id, GetTickCount());
+                const auto remote = g_remotes.find(h.session);
+                if (remote != g_remotes.end()) remote->second.roundTrip.reply(probe.id, GetTickCount());
+            } else sendProbe(h.session, probe.id, true);
+            return;
+        }
+    }
     // Joining: the host answered. A solo test joins itself, so its own packets coming back count too.
     if (g_role == Role::Join && !g_heardFromHost) {
         g_heardFromHost = true;
@@ -927,6 +1084,12 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
         found = g_remotes.emplace(h.session, Remote{}).first;
     }
     Remote& r = found->second;
+    if (r.departed) {
+        if (r.departureReason != proto::DepartureReason::TimedOut || h.type != proto::kTypeHello) return;
+        r.departed = false;
+        r.stateSequence = {};
+        r.loss = {};
+    }
     r.lastHeard = GetTickCount();
     if (!r.id) {
         r.id = h.session;
@@ -934,12 +1097,6 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
         r.loopback = own;
         if (peerLogAllowed()) MLOG("net: new player %08x from %s%s", h.session, addrToString(from).c_str(), own ? " (our own packets: solo test)" : "");
     }
-    // Sequence numbers restart when a player restarts the game: accept a large backwards jump.
-    if (r.haveSeq && h.seq <= r.lastSeq && r.lastSeq - h.seq < 1000) return;
-    const uint32_t gap = r.haveSeq && h.seq > r.lastSeq ? h.seq - r.lastSeq - 1 : 0;
-    r.loss.add(nowMs(), gap < 1000 ? gap : 0); // a bigger jump is a restart, not loss
-    r.lastSeq = h.seq;
-    r.haveSeq = true;
     ++g_recv;
     const char* payload = data + sizeof(h);
     const size_t len = static_cast<size_t>(n) - sizeof(h);
@@ -950,7 +1107,7 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
         uint8_t wear = 0;
         proto::OnlineProfile profile;
         float timeOfDay = -1.f;
-        proto::readHello(payload, len, raw, look, &flags, &wear, &profile, &timeOfDay);
+        if (!proto::readHello(payload, len, raw, look, &flags, &wear, &profile, &timeOfDay)) { ++g_dropped; return; }
         r.profile = profile;
         r.asksVisit = (flags & proto::kHelloAskVisit) != 0;
         // Accepted only straight from the host (forwarded copies come from the host's address too, but have the flag cleared).
@@ -985,6 +1142,10 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
                 MLOG("net: player %08x is '%s'%s", r.id, name.c_str(),
                      r.nameLogs == kMaxNameLogs ? " (further name changes of this player are not logged)" : "");
             }
+        }
+        if (!r.announced && !own) {
+            r.announced = true;
+            connectionNotice((r.name.empty() ? std::string("Runner") : r.name) + " joined");
         }
         return;
     }
@@ -1044,10 +1205,11 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
         return;
     }
     if (h.type != proto::kTypeState) return;
+    if (!r.stateSequence.accepts(h.seq)) return;
     PlayerState s;
     bool full = false;
-    if (!proto::readState(payload, len, r.decoder, s, full)) { ++g_dropped; return; }
-    if (full) proto::commitBase(r.decoder, s);
+    if (!proto::readState(payload, len, s, full)) { ++g_dropped; return; }
+    r.loss.add(nowMs(), r.stateSequence.commit(h.seq));
     r.stateFlags = s.flags;
     if (own) { // solo test: the mirror stands a fixed distance away along the world X axis, so it does
                // not turn with the camera and you can walk around it (to check it and its name tag)
@@ -1374,13 +1536,14 @@ void threadMain() {
     // GetTickCount), and the wait below ends at the deadline.
     constexpr double kSendMs = 1000.0 / 30.0;
     double nextSend = nowMs();
-    while (g_run) {
+    while (g_run && !g_stopRequested) {
         fd_set rd;
         FD_ZERO(&rd);
         FD_SET(g_sock, &rd);
         const double untilSend = nextSend - nowMs();
         timeval tv{0, untilSend < 10.0 ? static_cast<long>(std::max(0.0, untilSend) * 1000.0) : 10000};
         if (select(0, &rd, nullptr, nullptr, &tv) > 0) receiveAll();
+        if (g_stopRequested) break;
         const DWORD now = GetTickCount();
         const double t = nowMs();
         if (t >= nextSend) {
@@ -1392,11 +1555,22 @@ void threadMain() {
             sendActivity();
         }
         if (now - lastHello >= 1000 || g_helloNow.exchange(false)) { lastHello = now; sendHello(); }
+        probePeers();
         rendezvousTick();
         if (now - lastStats >= 30000) { lastStats = now; MLOG("net: %s", describe().c_str()); }
         if (now - lastHousekeeping >= 1000) {
             lastHousekeeping = now;
             std::lock_guard<std::mutex> lock(g_m);
+            if (g_role == Role::Join && g_hostHeartbeat.heard && !g_hostHeartbeat.connected(now) && !g_hostLost) {
+                connectionNotice("Connection lost (host timed out)");
+                g_hostLost = true;
+                for (auto& entry : g_remotes) entry.second.announced = false;
+            }
+            for (auto& entry : g_remotes) {
+                Remote& remote = entry.second;
+                if (remote.announced && !remote.departed && now - remote.lastHeard >= kConnectionTimeoutMs)
+                    departRemote(entry.first, proto::DepartureReason::TimedOut);
+            }
             for (auto it = g_remotes.begin(); it != g_remotes.end();) {
                 if (now - it->second.lastHeard > kRemoteForgetMs) it = g_remotes.erase(it);
                 else ++it;
@@ -1405,6 +1579,8 @@ void threadMain() {
                 for (size_t i = 0; i < g_members.size();) {
                     if (now - g_members[i].lastSeen < 15000) { ++i; continue; }
                     if (peerLogAllowed()) MLOG("net: %s left", addrToString(g_members[i].addr).c_str());
+                    announceDeparture(g_members[i].session, proto::DepartureReason::TimedOut);
+                    departRemote(g_members[i].session, proto::DepartureReason::TimedOut);
                     g_reserved.push_back({g_members[i].session, g_members[i].addr, now + kSessionGraceMs});
                     for (size_t k = 0; k < g_sendTo.size(); ++k)
                         if (sameAddr(g_sendTo[k], g_members[i].addr)) { g_sendTo.erase(g_sendTo.begin() + static_cast<long>(k)); break; }
@@ -1439,6 +1615,10 @@ void stopLocked() { // caller holds g_startM
     if (!g_run.exchange(false)) return;
     // The router mapping stays until the next start() (re-hosting reuses it) or shutdown().
     if (g_thread.joinable()) g_thread.join();
+    if (!g_stopRequested && g_sock != INVALID_SOCKET) {
+        std::lock_guard<std::mutex> lock(g_m);
+        announceDeparture(g_session, g_role == Role::Host ? proto::DepartureReason::SessionClosed : proto::DepartureReason::Left);
+    }
     if (g_sock != INVALID_SOCKET) closesocket(g_sock);
     g_sock = INVALID_SOCKET;
     WSACleanup();
@@ -1461,6 +1641,10 @@ bool startLocked(uint16_t port, const std::string& join, float loopbackOffset, c
         g_punches.clear();
         g_helloNow = false;
         g_heardFromHost = false;
+        g_hostHeartbeat = {};
+        g_hostRoundTrip = {};
+        g_hostLost = false;
+        g_connectionNotices.clear();
         g_hostSession = 0;
         g_hostTimeOfDayAt = 0;
         g_serverName.clear();
@@ -1468,6 +1652,7 @@ bool startLocked(uint16_t port, const std::string& join, float loopbackOffset, c
         g_lanCode.clear();
         g_name = name;
         g_outBurst.clear();
+        g_outChat.clear();
         for (PingCell& c : g_myPings) c = PingCell{};
         g_summons.clear();
         g_mySummon = MySummon{};
@@ -1555,6 +1740,7 @@ bool startLocked(uint16_t port, const std::string& join, float loopbackOffset, c
         g_sendTo.push_back(a);
         MLOG("net: joining the host at %s", addrToString(a).c_str());
     }
+    g_stopRequested = false;
     g_run = true;
     g_thread = std::thread(threadMain);
     if (g_role == Role::Host) std::thread(hostSetup, g_generation.load()).detach();
@@ -2026,12 +2212,24 @@ std::vector<RemoteInfo> remotes(uint32_t maxAgeMs) {
     std::vector<RemoteInfo> v;
     const DWORD now = GetTickCount();
     std::lock_guard<std::mutex> lock(g_m);
+    if (!g_run || g_stopRequested) return v;
     for (const auto& kv : g_remotes) {
         const Remote& r = kv.second;
         if (!r.fill || now - r.lastTick > maxAgeMs) continue;
-        RemoteInfo info{r.id, r.name, r.loopback, now - r.lastTick, r.loss.percent(nowMs()), r.look, r.outfit, r.profile.id,
-                         r.profile.name};
+        RemoteInfo info;
+        info.id = r.id;
+        info.name = r.name;
+        info.loopback = r.loopback;
+        info.ageMs = now - r.lastTick;
+        info.lossPct = r.loss.percent(nowMs());
+        info.look = r.look;
+        info.outfit = r.outfit;
+        info.onlineId = r.profile.id;
+        info.profileName = r.profile.name;
         info.typing = (r.stateFlags & kStateTyping) != 0;
+        info.pingMs = r.id == g_hostSession ? g_hostRoundTrip.value(now)
+                     : r.roundTrip.value(now, std::max(kProbeFreshMs, static_cast<uint32_t>(g_remotes.size() + 1) * 500));
+        info.lossKnown = r.stateSequence.have;
         info.asksVisit = r.asksVisit;
         if (r.activity.kind != proto::kActivityNone && r.activityAt && now - r.activityAt < kActivityForgetMs) {
             info.runKind = r.activity.kind;
@@ -2041,6 +2239,41 @@ std::vector<RemoteInfo> remotes(uint32_t maxAgeMs) {
         v.push_back(std::move(info));
     }
     return v;
+}
+
+std::vector<RemoteInfo> players() {
+    std::vector<RemoteInfo> result;
+    std::lock_guard<std::mutex> lock(g_m);
+    if (!g_run || g_stopRequested) return result;
+    const DWORD now = GetTickCount();
+    RemoteInfo own;
+    own.id = g_session;
+    own.name = g_name;
+    own.self = true;
+    own.pingMs = g_role == Role::Host ? 0 : g_hostRoundTrip.value(now);
+    result.push_back(own);
+    for (const auto& entry : g_remotes) {
+        const Remote& remote = entry.second;
+        if (!remote.announced || remote.departed || remote.loopback || now - remote.lastHeard >= kConnectionTimeoutMs) continue;
+        RemoteInfo info;
+        info.id = remote.id;
+        info.name = remote.name;
+        info.ageMs = remote.fill ? now - remote.lastTick : UINT32_MAX;
+        info.lossPct = remote.loss.percent(nowMs());
+        info.lossKnown = remote.stateSequence.have && remote.fill && info.ageMs < kProbeFreshMs;
+        info.pingMs = remote.id == g_hostSession ? g_hostRoundTrip.value(now)
+                      : remote.roundTrip.value(now, std::max(kProbeFreshMs, static_cast<uint32_t>(g_remotes.size() + 1) * 500));
+        info.asksVisit = remote.asksVisit;
+        result.push_back(std::move(info));
+    }
+    return result;
+}
+
+std::vector<std::string> takeConnectionNotices() {
+    std::lock_guard<std::mutex> lock(g_m);
+    std::vector<std::string> result(g_connectionNotices.begin(), g_connectionNotices.end());
+    g_connectionNotices.clear();
+    return result;
 }
 
 bool remoteState(uint32_t id, PlayerState& out, uint32_t& ageMs) {
@@ -2075,7 +2308,7 @@ std::string joinCode() {
 bool hosting() { return g_role == Role::Host; }
 void setTimeOfDay(float seconds) { g_myTimeOfDay = seconds; }
 bool hostTimeOfDay(float& seconds) {
-    if (g_role != Role::Join || !g_run) return false;
+    if (g_role != Role::Join || !running()) return false;
     const DWORD at = g_hostTimeOfDayAt.load();
     if (!at || GetTickCount() - at > 5000) return false; // none, or not heard for a while (left, or no longer sent)
     seconds = g_hostTimeOfDay.load();
@@ -2086,11 +2319,14 @@ std::string serverName() {
     return g_role == Role::Join ? g_serverName : std::string();
 }
 uint32_t sessionKey() {
-    if (!g_run) return 0;
+    if (!running()) return 0;
     return g_role == Role::Host ? g_session : g_hostSession.load();
 }
-bool running() { return g_run.load(); }
-bool connectedToHost() { return g_heardFromHost; }
+bool running() { return g_run.load() && !g_stopRequested.load(); }
+bool connectedToHost() {
+    std::lock_guard<std::mutex> lock(g_m);
+    return g_run && !g_stopRequested && g_hostHeartbeat.connected(GetTickCount());
+}
 std::string lanCode() {
     std::lock_guard<std::mutex> lock(g_m);
     return g_lanCode;
@@ -2116,10 +2352,12 @@ void setName(const std::string& name) {
 std::string describe() {
     size_t peers = 0;
     std::string code;
+    bool connected = false;
     {
         std::lock_guard<std::mutex> lock(g_m);
         peers = g_role == Role::Host ? g_members.size() : g_sendTo.size();
         code = g_joinCode;
+        connected = g_hostHeartbeat.connected(GetTickCount());
     }
     const uint64_t sent = g_sent.load();
     char buf[320];
@@ -2131,7 +2369,7 @@ std::string describe() {
                  static_cast<unsigned long long>(g_dropped.load()));
     else
         snprintf(buf, sizeof(buf), "joined %s (%s), sent %llu (avg %llu bytes), received %llu, dropped %llu",
-                 addrToString(g_hostAddr).c_str(), g_heardFromHost ? "connected" : "no answer yet",
+                 addrToString(g_hostAddr).c_str(), !running() ? "offline" : connected ? "connected" : "no connection",
                  static_cast<unsigned long long>(sent), static_cast<unsigned long long>(sent ? g_bytesSent.load() / sent : 0),
                  static_cast<unsigned long long>(g_recv.load()), static_cast<unsigned long long>(g_dropped.load()));
     return buf;

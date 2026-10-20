@@ -80,8 +80,7 @@ static std::vector<char> state(uint32_t session, uint32_t seq = 2) {
     mecmp::net::PlayerState s;
     s.pos[0] = 10.f; s.pos[1] = 2.f; s.pos[2] = -5.f;
     s.flags = mecmp::net::kStateInLevel;
-    proto::Encoder enc;
-    const size_t n = proto::writeState(buf, h, s, enc);
+    const size_t n = proto::writeState(buf, h, s);
     return std::vector<char>(buf, buf + n);
 }
 
@@ -286,23 +285,21 @@ static void testRateLimit() {
     CHECK(t.sentTo(B) == 1);
 }
 
-// The relay checks and re-encodes poses with each player's own encoder: a full pose, then deltas.
-static void testPosesStayDeltas() {
+// Every forwarded pose must be usable without a previous packet.
+static void testPosesStayIndependent() {
     Harness t;
     auto hA = hello(1, "alice"), hB = hello(2, "bob");
     t.deliver(A, hA, 0);
     t.deliver(B, hB, 0);
-    proto::Encoder enc;
     mecmp::net::PlayerState s;
     s.pos[0] = 10.f; s.flags = mecmp::net::kStateInLevel; s.boneCount = 23;
     for (int i = 0; i < 23; ++i) { s.bones[i][3] = 1; s.bones[i][7] = 1; s.bones[i][1] = 0.1f; }
     std::vector<size_t> sizes;
-    proto::Decoder decB; // B's view of alice's poses
     for (uint32_t seq = 10; seq < 13; ++seq) {
         t.sent.clear();
         char buf[proto::kMaxPacket];
         const proto::Header h{proto::kMagic, proto::kProtocol, proto::kTypeState, 1, seq};
-        const size_t n = proto::writeState(buf, h, s, enc);
+        const size_t n = proto::writeState(buf, h, s);
         t.deliver(A, std::vector<char>(buf, buf + n), 100 + seq);
         CHECK(t.sentTo(B) == 1);
         for (const auto& x : t.sent) {
@@ -310,24 +307,22 @@ static void testPosesStayDeltas() {
             sizes.push_back(x.data.size());
             mecmp::net::PlayerState out;
             bool f = false;
-            CHECK(proto::readState(x.data.data() + sizeof(proto::Header), x.data.size() - sizeof(proto::Header), decB, out, f));
-            if (f) proto::commitBase(decB, out);
+            CHECK(proto::readState(x.data.data() + sizeof(proto::Header), x.data.size() - sizeof(proto::Header), out, f));
         }
     }
-    CHECK(sizes.size() == 3 && sizes[1] < sizes[0] && sizes[2] == sizes[1]);
+    CHECK(sizes.size() == 3 && sizes[1] == sizes[0] && sizes[2] == sizes[0]);
     // A limb longer than bone_reach arrives shortened.
     t.sent.clear();
     s.bones[5][0] = 1.5f;
-    proto::Encoder full;
     char buf[proto::kMaxPacket];
     const proto::Header h{proto::kMagic, proto::kProtocol, proto::kTypeState, 1, 20};
-    const size_t n = proto::writeState(buf, h, s, full);
+    const size_t n = proto::writeState(buf, h, s);
     t.deliver(A, std::vector<char>(buf, buf + n), 200);
     for (const auto& x : t.sent) {
         if (!(x.to == B)) continue;
         mecmp::net::PlayerState out;
         bool f = false;
-        CHECK(proto::readState(x.data.data() + sizeof(proto::Header), x.data.size() - sizeof(proto::Header), decB, out, f));
+        CHECK(proto::readState(x.data.data() + sizeof(proto::Header), x.data.size() - sizeof(proto::Header), out, f));
         const float len = std::sqrt(out.bones[5][0] * out.bones[5][0] + out.bones[5][1] * out.bones[5][1]);
         CHECK(out.boneCount == 23 && len < 1.01f);
     }
@@ -413,18 +408,16 @@ static void testMirror() {
     char buf[proto::kMaxPacket];
     net::PlayerState st;
     st.pos[0] = 10.f;
-    proto::Encoder enc;
     const proto::Header h{proto::kMagic, proto::kProtocol, proto::kTypeState, 1, 5};
-    const size_t n = proto::writeState(buf, h, st, enc);
+    const size_t n = proto::writeState(buf, h, st);
     t.relay.onPacket(A, buf, n, 10);
     CHECK(t.sentTo(A) == 1);
     proto::Header back;
     memcpy(&back, t.sent[0].data.data(), sizeof(back));
     CHECK(back.session == server::mirrorSession(1));
-    proto::Decoder dec;
     net::PlayerState out;
     bool full = false;
-    CHECK(proto::readState(t.sent[0].data.data() + sizeof(back), t.sent[0].data.size() - sizeof(back), dec, out, full));
+    CHECK(proto::readState(t.sent[0].data.data() + sizeof(back), t.sent[0].data.size() - sizeof(back), out, full));
     CHECK(out.pos[0] == 13.f);
 }
 
@@ -917,7 +910,99 @@ static void testReconfigure() {
     CHECK(t.relay.members().size() == 1); // full at one player now
 }
 
+static std::vector<char> departurePacket(uint32_t sender, uint32_t player, proto::DepartureReason reason) {
+    char buf[proto::kMaxPacket];
+    const proto::Header h{proto::kMagic, proto::kProtocol, proto::kTypeDeparture, sender, 1};
+    const size_t n = proto::writeDeparture(buf, h, {player, reason});
+    return {buf, buf + n};
+}
+
+static bool hasDeparture(const Harness& t, const Addr& to, uint32_t player, proto::DepartureReason reason) {
+    for (const auto& sent : t.sent) {
+        proto::Header h{};
+        if (sent.to != to || sent.data.size() < sizeof(h)) continue;
+        memcpy(&h, sent.data.data(), sizeof(h));
+        proto::Departure departure;
+        if (h.type == proto::kTypeDeparture && h.session == t.relay.session() &&
+            proto::readDeparture(sent.data.data() + sizeof(h), sent.data.size() - sizeof(h), departure) &&
+            departure.player == player && departure.reason == reason) return true;
+    }
+    return false;
+}
+
+static void testDepartures() {
+    Harness t;
+    t.deliver(A, hello(1, "alice"), 100);
+    t.deliver(B, hello(2, "bob"), 100);
+    t.sent.clear();
+    t.deliver(A, departurePacket(1, 2, proto::DepartureReason::Left), 200);
+    t.deliver(A, departurePacket(1, 1, proto::DepartureReason::Kicked), 210);
+    CHECK(t.relay.members().size() == 2 && t.sent.empty());
+    t.deliver(B, departurePacket(2, 2, proto::DepartureReason::Left), 220);
+    CHECK(t.relay.members().size() == 1);
+    CHECK(hasDeparture(t, A, 2, proto::DepartureReason::Left));
+    t.sent.clear();
+    t.deliver(C, hello(3, "charlie"), 300);
+    t.deliver(A, hello(1, "alice"), 10500);
+    t.sent.clear();
+    t.relay.tick(10501);
+    CHECK(hasDeparture(t, A, 3, proto::DepartureReason::TimedOut));
+    t.deliver(B, hello(4, "bob"), 10600);
+    t.sent.clear();
+    CHECK(t.relay.kick("bob", 10700));
+    CHECK(hasDeparture(t, A, 4, proto::DepartureReason::Kicked));
+    t.sent.clear();
+    t.relay.shutdown();
+    CHECK(hasDeparture(t, A, t.relay.session(), proto::DepartureReason::SessionClosed));
+}
+
+static void testProbeRouting() {
+    Harness t;
+    t.deliver(A, hello(1, "alice"), 100);
+    t.deliver(B, hello(2, "bob"), 100);
+    t.deliver(C, hello(3, "charlie"), 100);
+    char buf[proto::kMaxPacket];
+    const proto::Header h{proto::kMagic, proto::kProtocol, proto::kTypeProbe, 1, 500};
+    size_t n = proto::writeProbe(buf, h, {2, 11, false});
+    t.sent.clear();
+    t.deliver(A, {buf, buf + n}, 200);
+    CHECK(t.sentTo(B) == 1 && t.sentTo(A) == 0 && t.sentTo(C) == 0);
+    n = proto::writeProbe(buf, h, {t.relay.session(), 12, false});
+    t.sent.clear();
+    t.deliver(A, {buf, buf + n}, 210);
+    CHECK(t.sentTo(A) == 1 && t.sentTo(B) == 0 && t.sentTo(C) == 0);
+    proto::Probe reply;
+    CHECK(proto::readProbe(t.sent[0].data.data() + sizeof(h), t.sent[0].data.size() - sizeof(h), reply));
+    CHECK(reply.reply && reply.target == 1 && reply.id == 12);
+    n = proto::writeProbe(buf, h, {999, 13, false});
+    t.sent.clear();
+    t.deliver(A, {buf, buf + n}, 220);
+    CHECK(t.sent.empty());
+}
+
+static void testStateOrder() {
+    Harness t;
+    t.deliver(A, hello(1, "alice"), 100);
+    t.deliver(B, hello(2, "bob"), 100);
+    t.sent.clear();
+    t.deliver(A, state(1, UINT32_MAX - 1), 200);
+    CHECK(t.sentTo(B) == 1);
+    t.sent.clear();
+    t.deliver(A, state(1, UINT32_MAX - 2), 210);
+    CHECK(t.sentTo(B) == 0);
+    t.deliver(A, state(1, UINT32_MAX - 1), 220);
+    CHECK(t.sentTo(B) == 0);
+    t.deliver(A, state(1, 0), 230);
+    CHECK(t.sentTo(B) == 1);
+    t.sent.clear();
+    t.deliver(A, state(1, UINT32_MAX), 240);
+    CHECK(t.sentTo(B) == 0);
+}
+
 int main() {
+    testDepartures();
+    testProbeRouting();
+    testStateOrder();
     testReset();
     testReconfigure();
     testResultEvents();
@@ -937,7 +1022,7 @@ int main() {
     testMotd();
     testMirror();
     testForwardsToOthers();
-    testPosesStayDeltas();
+    testPosesStayIndependent();
     testAudioForwarded();
     testReactForwarded();
     testSummonForwarded();

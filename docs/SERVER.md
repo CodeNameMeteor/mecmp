@@ -148,8 +148,9 @@ menu's solo test, but through the server.
 
 ## A Linux VPS
 
-Any small VPS works. A full server (16 players) sends about 1 MB/s (each player's ~150-byte update,
-30 times a second, to 15 others); an emptier one much less. Pick a plan with enough monthly transfer
+Any small VPS works. A full server (16 players) sends about 2 MB/s of movement payload (each player's
+278-byte update, 30 times a second, to 15 others), plus network headers and other traffic. An emptier
+one sends much less. Pick a plan with enough monthly transfer
 for how busy you expect it to be.
 
 Build (needs `g++` and `cmake`):

@@ -95,12 +95,26 @@ bool Relay::blocked(const Addr& a, uint32_t nowMs) {
 
 void Relay::drop(size_t index, const char* why) {
     const Member& m = members_[index];
+    const auto reason = !strcmp(why, "timed out") ? proto::DepartureReason::TimedOut
+                      : !strcmp(why, "kicked") ? proto::DepartureReason::Kicked
+                      : !strcmp(why, "banned") ? proto::DepartureReason::Banned
+                      : !strcmp(why, "left") ? proto::DepartureReason::Left
+                      : proto::DepartureReason::SessionClosed;
+    announceDeparture(m.session, reason);
     log_("player " + hex(m.session) + " '" + m.name + "' (" + toString(m.addr) + ") left: " + why + "; " +
          std::to_string(members_.size() - 1) + " connected");
     Event e{Event::Left, m.name, members_.size() - 1, {}};
     const bool tell = m.announced; // a player who never said its name was never announced either
     members_.erase(members_.begin() + static_cast<long>(index));
     if (tell && onEvent_) onEvent_(e);
+}
+
+void Relay::announceDeparture(uint32_t player, proto::DepartureReason reason) {
+    char buf[proto::kMaxPacket];
+    const proto::Header h{proto::kMagic, proto::kProtocol, proto::kTypeDeparture, session_, ++seq_};
+    const size_t n = proto::writeDeparture(buf, h, {player, reason});
+    for (int repeat = 0; repeat < 3; ++repeat)
+        for (const auto& m : members_) send_(m.addr, buf, n);
 }
 
 void Relay::onPacket(const Addr& from, const char* buf, size_t n, uint32_t nowMs) {
@@ -150,8 +164,9 @@ void Relay::onPacket(const Addr& from, const char* buf, size_t n, uint32_t nowMs
         if (h.type != proto::kTypeHello || sessionTaken(h.session, from)) { ++stats_.dropped; ++m->dropped; return; }
         log_("player " + hex(m->session) + " '" + m->name + "' is now " + hex(h.session) + " (restarted)");
         m->session = h.session;
-        m->poseDecoder = {};
-        m->poseEncoder = {};
+
+
+        m->stateSequence = {};
     }
     // Rate limit (token bucket).
     m->tokens += (nowMs - m->refillAt) * cfg_.ratePerSec / 1000.0;
@@ -165,16 +180,39 @@ void Relay::onPacket(const Addr& from, const char* buf, size_t n, uint32_t nowMs
 
     const char* payload = buf + sizeof(h);
     const size_t len = n - sizeof(h);
+    if (h.type == proto::kTypeProbe) {
+        proto::Probe probe;
+        if (!proto::readProbe(payload, len, probe)) { ++stats_.dropped; return; }
+        if (probe.target == session_) {
+            if (!probe.reply) {
+                char answer[proto::kMaxPacket];
+                const proto::Header ph{proto::kMagic, proto::kProtocol, proto::kTypeProbe, session_, ++seq_};
+                send_(from, answer, proto::writeProbe(answer, ph, {h.session, probe.id, true}));
+            }
+        } else {
+            for (const auto& target : members_)
+                if (target.session == probe.target && target.addr != from) { send_(target.addr, buf, n); break; }
+        }
+        return;
+    }
+    if (h.type == proto::kTypeDeparture) {
+        proto::Departure departure;
+        if (!proto::readDeparture(payload, len, departure) || departure.player != m->session ||
+            departure.reason != proto::DepartureReason::Left) { ++stats_.dropped; return; }
+        const size_t index = static_cast<size_t>(m - members_.data());
+        reserved_.push_back({m->session, from, nowMs + cfg_.sessionGraceMs});
+        drop(index, "left");
+        return;
+    }
     char copy[proto::kMaxPacket];
     const char* out = buf;
     if (h.type == proto::kTypeState) {
+        if (!m->stateSequence.accepts(h.seq)) { ++stats_.dropped; return; }
         net::PlayerState state; bool full = false;
-        if (!proto::readState(payload, len, m->poseDecoder, state, full)) { ++stats_.dropped; return; }
-        if (full) proto::commitBase(m->poseDecoder, state);
+        if (!proto::readState(payload, len, state, full)) { ++stats_.dropped; return; }
         if (!net::limitPose(state, cfg_.boneReach)) { ++stats_.dropped; return; }
-        // This player's own encoder: a full pose goes out every kFullEvery packets, as the sender's would,
-        // and deltas in between (a fresh encoder each time made every forwarded pose a full one).
-        n = proto::writeState(copy, h, state, m->poseEncoder);
+        m->stateSequence.commit(h.seq);
+        n = proto::writeState(copy, h, state);
         if (!n) { ++stats_.dropped; return; }
         out = copy;
     } else if (h.type == proto::kTypeAudio) {
@@ -501,6 +539,8 @@ void Relay::reset() {
     fullWarnAt_ = 0;
     stats_ = Stats{};
 }
+
+void Relay::shutdown() { announceDeparture(session_, proto::DepartureReason::SessionClosed); }
 
 void Relay::reconfigure(Config cfg) { cfg_ = std::move(cfg); }
 

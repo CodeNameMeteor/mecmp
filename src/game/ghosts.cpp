@@ -330,6 +330,15 @@ void drive(Ghost& g, const net::PlayerState& input) {
             return;
         }
     }
+    // Opening the game's map (and maybe other screens) makes the ghost's client stop taking the pose (its
+    // count check at CRP_CountOk turns 0), while it is driven every frame and the server no longer replicates:
+    // the ghost froze until hidden and shown again. Replicating again (as after a show) sets the check back.
+    if (own && g.posing && GetTickCount() - g.posingSince > kReplicateMs && !v.at<uint8_t>(CRP_CountOk)) {
+        g.posingSince = GetTickCount();
+        static DWORD lastNote = 0;
+        if (noteDue(lastNote))
+            MLOG("ghost: client of %08x stopped taking the pose; replicating it again", g.peer);
+    }
     if (!preparePose(c, want)) return;
     const uint32_t N = *reinterpret_cast<uint32_t*>(c + SRP_Setup);
     auto* pose = *reinterpret_cast<float**>(c + SRP_Pose);

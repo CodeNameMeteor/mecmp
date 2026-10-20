@@ -18,6 +18,8 @@
   was made from. If that full pose was lost, the ghost keeps its last pose (still moving with the player) until
   the next full pose, instead of mixing the new bones with old ones. Late or repeated poses are dropped by
   hosts, servers and players alike, and the loss shown in the menu counts lost poses only.
+- **Ghosts no longer freeze after you open the map.** Opening the game's map made other players' ghosts stop taking
+  their pose until they were hidden and shown again (F12/F7). The mod now notices and sets them going again.
 - **`full_body_pose`** (`[player]`, on by default): 0 keeps the game's own 23-bone recording. The player's recorder
   also records your runs, so this is the switch to use if a time trial or its uploaded ghost misbehaves. Takes
   effect when a level loads.

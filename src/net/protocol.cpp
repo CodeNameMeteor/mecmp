@@ -214,10 +214,11 @@ size_t writeState(char* buf, const Header& h, const PlayerState& input, Encoder&
         memcpy(enc.lastFullIdx, s.boneIdx, nb);
         enc.lastFullCount = nb;
         enc.sinceFull = 0;
+        ++enc.fullId;
     }
     put(p, nb);
     put(p, static_cast<uint8_t>(full ? 1 : 0));
-    put(p, static_cast<uint16_t>(0));
+    put(p, static_cast<uint16_t>(nb ? enc.fullId : 0));
     put(p, tmask[0]);
     put(p, tmask[1]);
     put(p, rmask[0]);
@@ -518,10 +519,10 @@ bool readState(const char* payload, size_t n, const Decoder& dec, PlayerState& o
     const char* p = payload;
     const char* end = payload + n;
     uint8_t nb = 0, fl = 0;
-    uint16_t res = 0;
+    uint16_t base = 0;
     uint64_t tmask[2] = {0, 0}, rmask[2] = {0, 0};
     if (!get(p, end, out.pos) || !get(p, end, out.yaw) || !get(p, end, out.flags) || !get(p, end, out.timeMs) || !get(p, end, nb) ||
-        !get(p, end, fl) || !get(p, end, res) || !get(p, end, tmask[0]) || !get(p, end, tmask[1]) || !get(p, end, rmask[0]) ||
+        !get(p, end, fl) || !get(p, end, base) || !get(p, end, tmask[0]) || !get(p, end, tmask[1]) || !get(p, end, rmask[0]) ||
         !get(p, end, rmask[1]))
         return false;
     if (!sanePlacement(out)) return false;
@@ -529,18 +530,20 @@ bool readState(const char* payload, size_t n, const Decoder& dec, PlayerState& o
     out.boneCount = 0;
     // Unknown kState flags are cleared by limitPose below, not refused: older versions must keep
     // ignoring flags added later (as kStateTyping was).
-    if (res || (fl & ~1)) return false;
-    if (nb == 0) return p == end && !tmask[0] && !tmask[1] && !rmask[0] && !rmask[1] && limitPose(out);
+    if (fl & ~1) return false;
+    if (nb == 0) return p == end && !base && !tmask[0] && !tmask[1] && !rmask[0] && !rmask[1] && limitPose(out);
     if (nb > kMaxPoseBones) return false;
     // The bits of bones 0..nb-1, in two words.
     const uint64_t valid[2] = {nb >= 64 ? ~0ull : (1ull << nb) - 1, nb <= 64 ? 0 : (1ull << (nb - 64)) - 1};
     if ((tmask[0] & ~valid[0]) || (tmask[1] & ~valid[1]) || (rmask[0] & ~valid[0]) || (rmask[1] & ~valid[1])) return false;
     if (full && (tmask[0] != valid[0] || tmask[1] != valid[1] || rmask[0] != valid[0] || rmask[1] != valid[1])) return false;
-    const bool haveBase = full || dec.baseCount == nb;
+    // A delta is only good against the very full packet it was made from.
+    const bool haveBase = full || (dec.baseCount == nb && dec.baseId == base);
     if (full) {
         if (end - p < nb) return false;
         memcpy(out.boneIdx, p, nb);
         p += nb;
+        out.poseBase = base;
     } else {
         memcpy(out.boneIdx, dec.baseIdx, nb);
     }
@@ -578,6 +581,7 @@ void commitBase(Decoder& dec, const PlayerState& s) {
     }
     memcpy(dec.baseIdx, s.boneIdx, s.boneCount);
     dec.baseCount = s.boneCount;
+    dec.baseId = s.poseBase;
 }
 
 

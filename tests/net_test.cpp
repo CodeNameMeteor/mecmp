@@ -10,6 +10,7 @@
 
 #include "net/joincode.h"
 #include "net/pose_limits.h"
+#include "net/connection.h"
 #include "net/protocol.h"
 #include "net/summon_policy.h"
 
@@ -144,6 +145,54 @@ static void testReadState() {
         protocol::writeState(b4, h, again, e4);
         const size_t n4 = protocol::writeState(b4, h, again, e4); // second packet of this encoder: a delta
         CHECK(protocol::readState(b4 + sizeof(h), n4 - sizeof(h), fresh, o4, f4) && !f4 && o4.boneCount == 0);
+    }
+
+    // A delta names its full packet: when that full packet was lost, a decoder still holding the one before
+    // (same bone count and bones) reads the delta for its placement only, never against the wrong base.
+    {
+        PlayerState a = s;
+        a.boneCount = 40;
+        for (int i = 0; i < 40; ++i) {
+            a.bones[i][3] = 1; a.bones[i][7] = 1; a.bones[i][1] = i * 0.01f;
+            a.boneIdx[i] = static_cast<uint8_t>(i);
+        }
+        protocol::Encoder e;
+        protocol::Decoder d;
+        char pk[protocol::kMaxPacket];
+        PlayerState o;
+        bool f = false;
+        size_t m = protocol::writeState(pk, h, a, e); // full #1: arrives
+        CHECK(protocol::readState(pk + sizeof(h), m - sizeof(h), d, o, f) && f);
+        protocol::commitBase(d, o);
+        PlayerState b = a;
+        for (int i = 0; i < 40; ++i) b.bones[i][1] += 0.25f; // the whole body moved
+        for (uint32_t k = 1; k < protocol::kFullEvery; ++k) protocol::writeState(pk, h, b, e); // deltas vs #1
+        m = protocol::writeState(pk, h, b, e); // full #2: lost
+        PlayerState c = b;
+        c.bones[3][1] += 0.1f;
+        m = protocol::writeState(pk, h, c, e); // a delta vs #2 (bone 3 only)
+        CHECK(protocol::readState(pk + sizeof(h), m - sizeof(h), d, o, f) && !f);
+        CHECK(o.boneCount == 0); // against #1 every other bone would sit 0.25 m off
+        // The next full packet is a base again.
+        for (uint32_t k = 2; k < protocol::kFullEvery; ++k) protocol::writeState(pk, h, c, e); // (the delta above was 1)
+        m = protocol::writeState(pk, h, c, e); // full #3
+        CHECK(protocol::readState(pk + sizeof(h), m - sizeof(h), d, o, f) && f && o.boneCount == 40);
+        protocol::commitBase(d, o);
+        m = protocol::writeState(pk, h, c, e);
+        CHECK(protocol::readState(pk + sizeof(h), m - sizeof(h), d, o, f) && !f && o.boneCount == 40);
+        CHECK(std::fabs(o.bones[3][1] - c.bones[3][1]) < 1e-3f);
+    }
+
+    // STATE sequence numbers: stale and repeated packets are refused, gaps counted, wrap handled.
+    {
+        StateSequence q;
+        CHECK(q.accepts(100) && q.commit(100) == 0);
+        CHECK(!q.accepts(100) && !q.accepts(99));
+        CHECK(q.accepts(103) && q.commit(103) == 2);
+        CHECK(!q.accepts(101)); // arrived late: an older pose
+        StateSequence w;
+        w.commit(0xFFFFFFFEu);
+        CHECK(w.accepts(1) && w.commit(1) == 2 && !w.accepts(0xFFFFFFFFu));
     }
 
     // Non-finite or far-away positions are refused.

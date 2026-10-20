@@ -321,10 +321,13 @@ UDP, one socket. Sessions have one host and any number of joiners (up to 16).
 - Packets: STATE 30 Hz and HELLO (name and look: u32, 0 = Faith, else the echo hash) ~1 Hz. Remote players are keyed by the random session id
   in each packet. Pose compression: rotations smallest-three 32-bit, translations i16 at 1/1024 m,
   only for bones that changed since the last full packet (every 30th, or when the bone set changes) and, since protocol 8, only for
-  rotations that changed too. The `net:` status line shows the bytes sent and received.
+  rotations that changed too. A delta names the full packet it was made from (`base`); a receiver without that
+  full packet shows no pose from it (placement only) until the next one. The `net:` status line shows the bytes sent and received.
+- STATE packets have a sequence of their own (`net/connection.h`, `StateSequence`): hosts, servers and receivers
+  drop a STATE older than one already taken, so a late full packet never becomes the delta base.
 - Receivers buffer 16 snapshots per player and show them 120 ms in the past, blended. The sender's
   32-bit millisecond clock is unwrapped (`protocol::ClockUnwrap`), so a 49-day uptime wrap is harmless. Positions and angles outside a sane range are dropped.
-- Packet loss per player (`protocol::LossWindow`): gaps in their sequence numbers over the last 5 s;
+- Packet loss per player (`protocol::LossWindow`): gaps in their STATE sequence numbers over the last 5 s;
   shown in the menu's player list. Join/leave notices (`ui/notices.cpp`) come from the same player
   list: a named player appearing, or silent for 5 s (as for their ghost).
 - At most 64 player entries are kept; an entry silent for 2 minutes is forgotten. Packets of unknown

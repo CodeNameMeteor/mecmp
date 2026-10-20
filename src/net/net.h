@@ -30,6 +30,7 @@ struct PlayerState {
     uint32_t boneCount = 0;
     uint8_t boneIdx[kMaxPoseBones] = {};
     float bones[kMaxPoseBones][8] = {};
+    uint16_t poseBase = 0; // wire only: the number of the full packet this pose came in (protocol.h, STATE)
 };
 
 struct RemoteInfo {

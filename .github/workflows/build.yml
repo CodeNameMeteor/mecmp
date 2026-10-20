@@ -8,13 +8,21 @@ jobs:
   windows-session-tests:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: x64
+      - uses: actions/checkout@v7.0.1
+      - name: Locate MSVC
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $installation = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $installation) { throw "MSVC x64 tools were not found" }
+          $devCmd = Join-Path $installation "Common7\Tools\VsDevCmd.bat"
+          if (-not (Test-Path -LiteralPath $devCmd)) { throw "VsDevCmd.bat was not found" }
+          "MSVC_DEV_CMD=$devCmd" >> $env:GITHUB_ENV
       - name: Session packet handling (Windows)
         shell: cmd
         run: |
+          call "%MSVC_DEV_CMD%" -arch=x64 -host_arch=x64
+          if errorlevel 1 exit /b 1
           cl /nologo /std:c++17 /EHsc /W4 /utf-8 /DNOMINMAX /DMECMP_DEBUG_KEYS=0 /DMECMP_VERBOSE_DEFAULT=0 /Isrc tests/session_test.cpp src/core/config.cpp src/core/log.cpp src/net/upnp.cpp src/net/joincode.cpp src/net/protocol.cpp /Fe:session_test.exe /link ws2_32.lib
           if errorlevel 1 exit /b 1
           session_test.exe
@@ -22,7 +30,7 @@ jobs:
   portable-tests:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
       - name: Network tests (Linux, sanitizers)
         run: |
           g++ -std=c++17 -Wall -Wextra -Isrc -fsanitize=address,undefined -fno-sanitize-recover=undefined -g \
@@ -48,7 +56,7 @@ jobs:
           cmake -S . -B build-linux -DCMAKE_BUILD_TYPE=Release
           cmake --build build-linux --target mecmp_server
       - name: Upload the Linux server
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: mecmp_server-linux-x64
           path: build-linux/mecmp_server
@@ -61,7 +69,7 @@ jobs:
   windows-build:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
       - name: Install MinGW-w64 and CMake
         run: sudo apt-get update && sudo apt-get install -y g++-mingw-w64-x86-64 cmake ninja-build
       - name: Configure and build (x64, Release)
@@ -74,7 +82,7 @@ jobs:
             -DMECMP_DEBUG_KEYS=OFF
           cmake --build build
       - name: Upload binaries
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: mecmp-x64
           path: |

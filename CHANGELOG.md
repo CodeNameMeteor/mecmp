@@ -7,6 +7,8 @@
   address again (the host forwards the port or has UPnP, or everyone joins a dedicated server). To use it, set
   `[net] rendezvous_server=ip:port` on both sides; the old `rendezvous=` line (which every mecmp.ini got with the
   community server in it) is ignored and removed.
+- **No developer keys in release or beta builds.** F7, F9, F10 and F12 did things players did not expect (hiding
+  ghosts, pausing spawning). Beta builds keep the verbose log. Developers build with `-DMECMP_DEBUG_KEYS=ON`.
 - **Player sounds are disabled** until they are fixed: the capture is not installed, nothing is sent or played,
   and the menu no longer shows the setting. The code stays (build with `-DMECMP_PLAYER_AUDIO=ON` to work on it).
 

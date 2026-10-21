@@ -1,7 +1,17 @@
 #pragma once
 #include <cmath>
+#include <cstdint>
 
 namespace mecmp::game::door_policy {
+// All operations are serialized by the adapter's registry mutex.
+struct Lifecycle {
+    uint64_t ticket=0;
+    unsigned retiring=0;
+    void changed() {++ticket;}
+    void beginDestroy() {++ticket;++retiring;}
+    void endDestroy() {++ticket;--retiring;}
+    bool accepts(uint64_t observed) const {return !retiring&&observed==ticket;}
+};
 struct Observation {
     bool seen=false,closed=false,suppress=false,publishApplied=false;
     void reset() { *this={}; }

@@ -519,6 +519,7 @@ void Relay::setBans(std::set<uint32_t> ips) {
 void Relay::reset() {
     doorAuthority_.reset();
     while (!members_.empty()) drop(0, "server reset");
+    if (++session_==0) ++session_; // A new authority lifetime invalidates clients' cached openings.
     reserved_.clear();
     notices_.clear();
     chat_.clear();

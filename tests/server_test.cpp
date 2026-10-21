@@ -904,7 +904,9 @@ static void testReset() {
     CHECK(t.relay.members().size() == 1);
     CHECK(t.relay.ban("10.0.0.9") == 0x0a000009); // an address nobody uses yet
     t.relay.say("welcome back"); // server chat still due on the next ticks
+    const auto oldSession=t.relay.session();
     t.relay.reset();
+    CHECK(t.relay.session()!=oldSession&&t.relay.session()!=0); // Clients must discard cached door state.
     CHECK(t.relay.members().empty());
     CHECK(t.relay.stats().received == 0);
     CHECK(t.relay.bans().count(0x0a000009) == 1);

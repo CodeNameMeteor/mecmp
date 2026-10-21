@@ -5,6 +5,10 @@ using namespace mecmp::game::door_policy;
 static int failures=0;
 #define CHECK(x) do { if (!(x)) { std::printf("FAILED line %d: %s\n",__LINE__,#x); ++failures; } } while(0)
 int main() {
+    Lifecycle life;
+    const auto before=life.ticket;life.beginDestroy(); CHECK(!life.accepts(before));
+    const auto during=life.ticket;CHECK(!life.accepts(during));
+    life.endDestroy();CHECK(!life.accepts(during));CHECK(life.accepts(life.ticket));
     const float mat[16]={1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};
     const float eye[3]={0,1.6f,2},hit[3]={0,1.6f,.05f},normal[3]={0,0,1};
     CHECK(matchesHit(mat,eye,hit,normal));

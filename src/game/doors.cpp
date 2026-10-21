@@ -42,7 +42,7 @@ std::mutex g_mutex;
 std::map<uintptr_t,Driver> g_drivers; // Indexed by ANT identity, never sent over the network.
 std::atomic<bool> g_installed{false},g_bankReady{false},g_request{false};
 std::atomic<uint64_t> g_world{0},g_readyAt{0},g_targetAt{0};
-uint64_t g_lifecycle=0;
+door_policy::Lifecycle g_lifecycle;
 Key g_target,g_command;
 uint64_t g_commandUntil=0;
 std::atomic<uintptr_t> g_manager{0},g_table{0},g_closed{0},g_pulse{0};
@@ -65,7 +65,7 @@ bool snapshot(uintptr_t address,Driver& out) {
 uintptr_t initialized(void* self) {
     const auto result=g_init(self);
     std::lock_guard<std::mutex> lock(g_mutex);
-    ++g_lifecycle;
+    g_lifecycle.changed();
     Driver d;
     if (g_drivers.size()<kMaxDrivers&&snapshot(reinterpret_cast<uintptr_t>(self),d)) g_drivers[d.ant]=d;
     return result;
@@ -73,13 +73,15 @@ uintptr_t initialized(void* self) {
 uintptr_t destroyed(void* self,uint32_t flags) {
     {
         std::lock_guard<std::mutex> lock(g_mutex);
-        ++g_lifecycle;
+        g_lifecycle.beginDestroy();
         const auto address=reinterpret_cast<uintptr_t>(self);
         for (auto it=g_drivers.begin();it!=g_drivers.end();) {
             if (it->second.address==address) it=g_drivers.erase(it); else ++it;
         }
     }
-    return g_destroy(self,flags);
+    const auto result=g_destroy(self,flags);
+    {std::lock_guard<std::mutex> lock(g_mutex);g_lifecycle.endDestroy();}
+    return result;
 }
 bool current(const Driver& d,uintptr_t actor) {
     if (q(d.address)!=mem::rva(kDriver)||q(d.address+0x28)!=d.data||q(d.address+0x38)!=d.ant+0x60||
@@ -122,18 +124,23 @@ void readClosed(void* definition,void* bindings,int* assetIndex,int* propertyInd
     const bool enabled=config::get()->syncDoors;
     d.closed=reinterpret_cast<GetFn>(mem::rva(kGet))(closed,actor)!=0;
     if (d.applied&&now-d.applied>3000) { d.observation.suppress=false; d.observation.publishApplied=false; }
-    if (d.observation.observe(d.closed,enabled)) d.pending=true;
+    const bool opened=d.observation.observe(d.closed,enabled);
+    const bool manual=now<=g_commandUntil&&g_command==d.key;
+    const bool remote=d.closed&&enabled&&net::doorIsOpen(d.key);
+    if (opened||d.pending||manual||remote) {
+        // Reject ambiguous placement before publishing as well as before applying.
+        for (const auto& entry:g_drivers) {
+            Key other;
+            if (entry.first!=ant&&net::doors::makeKey(world,entry.second.placement,other)&&other==d.key) {
+                d.pending=false;return;
+            }
+        }
+    }
+    if (opened) d.pending=true;
     if (!enabled) d.pending=false;
     if (d.pending&&net::publishDoorOpened(d.key)) d.pending=false;
     if (!d.closed) return;
-    const bool manual=now<=g_commandUntil&&g_command==d.key;
-    const bool remote=enabled&&net::doorIsOpen(d.key);
     if ((!manual&&!remote)||(d.applied&&now-d.applied<3000)) return;
-    // A placement shared by two loaded actors is ambiguous; do not operate either.
-    for (const auto& entry:g_drivers) {
-        Key other;
-        if (entry.first!=ant&&net::doors::makeKey(world,entry.second.placement,other)&&other==d.key) return;
-    }
     const auto pulse=g_pulse.load();
     if (reinterpret_cast<GetFn>(mem::rva(kGet))(pulse,actor)!=0) return;
     d.observation.applied(manual&&enabled);
@@ -172,37 +179,54 @@ void bank() {
     g_closedId=closedId;g_pulseId=pulseId;
     g_manager=manager;g_table=table;g_closed=closed;g_pulse=pulse;g_bankReady=true;
 }
-void bootstrap() {
-    const auto start=GetTickCount64();size_t bytesRead=0;unsigned added=0;
-    std::vector<uint8_t> buffer(1024*1024);
+// One incremental late-injection pass. Keep the cursor between calls so a time
+// slice or a lifecycle conflict cannot silently abandon the remaining heap.
+std::atomic<int> g_scan{0}; // 0 waiting, 1 scanning, 2 complete, 3 limited
+bool bootstrap() {
+    static uintptr_t cursor=0x10000;
+    static uint64_t started=0,bytesRead=0;
+    static unsigned added=0,unreadable=0;
+    static std::vector<uint8_t> buffer(1024*1024);
+    if (!started) {started=GetTickCount64();g_scan=1;}
+    const auto slice=GetTickCount64();
     SYSTEM_INFO system{};GetSystemInfo(&system);
-    for (uintptr_t at=0x10000;at<reinterpret_cast<uintptr_t>(system.lpMaximumApplicationAddress);) {
+    while (cursor<reinterpret_cast<uintptr_t>(system.lpMaximumApplicationAddress)) {
+        if (GetTickCount64()-started>120000||bytesRead>32ULL*1024*1024*1024) {
+            g_scan=3;MLOG("doors: bootstrap limited after %u drivers; some loaded doors may need a level reload",added);return true;
+        }
+        if (GetTickCount64()-slice>=40) return false;
         MEMORY_BASIC_INFORMATION page{};
-        if (!VirtualQuery(reinterpret_cast<void*>(at),&page,sizeof(page))||!page.RegionSize) break;
+        if (!VirtualQuery(reinterpret_cast<void*>(cursor),&page,sizeof(page))||!page.RegionSize) {
+            g_scan=3;MLOG("doors: bootstrap stopped at an unreadable memory map");return true;
+        }
         const auto end=reinterpret_cast<uintptr_t>(page.BaseAddress)+page.RegionSize;
-        if (end<=at) break;
+        if (end<=cursor) {g_scan=3;return true;}
         const bool readable=page.State==MEM_COMMIT&&page.Type==MEM_PRIVATE&&
             !(page.Protect&(PAGE_GUARD|PAGE_NOACCESS))&&(page.Protect&(PAGE_READWRITE|PAGE_WRITECOPY));
-        if (readable) for (auto cursor=at;cursor+8<end;) {
-            if (GetTickCount64()-start>10000||bytesRead>8ULL*1024*1024*1024) goto done;
-            const size_t size=static_cast<size_t>(std::min<uintptr_t>(buffer.size(),end-cursor));
-            uint64_t ticket;
-            { std::lock_guard<std::mutex> lock(g_mutex);ticket=g_lifecycle; }
-            if (mem::read(cursor,buffer.data(),size)) {
-                for (size_t i=0;i+8<=size;i+=8) {
-                    uintptr_t vt=0;memcpy(&vt,buffer.data()+i,8);
-                    if (vt!=mem::rva(kDriver)) continue;
-                    Driver d;if (!snapshot(cursor+i,d)) continue;
-                    std::lock_guard<std::mutex> lock(g_mutex);
-                    if (ticket==g_lifecycle&&g_drivers.size()<kMaxDrivers&&g_drivers.emplace(d.ant,d).second) ++added;
-                }
+        if (!readable) {cursor=end;continue;}
+        const size_t size=static_cast<size_t>(std::min<uintptr_t>(buffer.size(),end-cursor));
+        uint64_t ticket;
+        { std::lock_guard<std::mutex> lock(g_mutex);
+          if (g_lifecycle.retiring) return false;
+          ticket=g_lifecycle.ticket; }
+        bool retry=false;
+        if (mem::read(cursor,buffer.data(),size)) {
+            for (size_t i=0;i+8<=size;i+=8) {
+                uintptr_t vt=0;memcpy(&vt,buffer.data()+i,8);
+                if (vt!=mem::rva(kDriver)) continue;
+                Driver d;if (!snapshot(cursor+i,d)) continue;
+                std::lock_guard<std::mutex> lock(g_mutex);
+                if (!g_lifecycle.accepts(ticket)) {retry=true;break;}
+                if (g_drivers.size()<kMaxDrivers&&g_drivers.emplace(d.ant,d).second) ++added;
             }
-            bytesRead+=size;cursor+=size;
-        }
-        at=end;
+        } else ++unreadable;
+        bytesRead+=size;
+        if (!retry) cursor+=size;
     }
-done:
-    MLOG("doors: bootstrap registered %u drivers in %llu ms",added,static_cast<unsigned long long>(GetTickCount64()-start));
+    g_scan=2;
+    MLOG("doors: bootstrap finished, %u drivers, %u unreadable chunks, %llu ms",added,unreadable,
+         static_cast<unsigned long long>(GetTickCount64()-started));
+    return true;
 }
 } // namespace
 
@@ -233,7 +257,7 @@ bool install() {
 void levelChanged() {
     std::lock_guard<std::mutex> lock(g_mutex);
     g_world=0;g_readyAt=GetTickCount64()+2000;g_targetAt=0;g_commandUntil=0;g_request=false;
-    ++g_lifecycle;
+    g_lifecycle.changed();
     for (auto& entry:g_drivers) { auto& d=entry.second;d.key={};d.pending=false;d.observation.reset();d.applied=0; }
 }
 
@@ -278,15 +302,16 @@ void maintain() {
     if (!g_installed) return;
     static uint64_t checked=0;static bool scanned=false;
     const auto now=GetTickCount64();
-    if (now-checked<1000) return;
-    checked=now;bank();
-    if (!scanned&&g_world.load()&&now>=g_readyAt.load()&&g_bankReady) {scanned=true;bootstrap();}
+    if (now-checked>=1000) {checked=now;bank();}
+    if (!scanned&&g_world.load()&&now>=g_readyAt.load()&&g_bankReady) scanned=bootstrap();
 }
 bool canOpen() {const auto at=g_targetAt.load();return at&&GetTickCount64()-at<250;}
 void requestOpen() {if (canOpen()) g_request=true;}
 std::string status() {
     if (!g_installed) return "Door controls are unavailable for this game build.";
     if (!g_bankReady) return "Waiting for a supported animation bank.";
+    if (g_scan==3) return "Door discovery was incomplete. Reload the level to register remaining doors.";
+    if (g_scan==1) return "Registering doors already loaded in this level.";
     if (!config::get()->syncDoors) return "Local only. Other players cannot change your doors.";
     return net::doorSyncAvailable()?"Syncing nearby doors.":"Local controls ready. Waiting for door sync from the host.";
 }

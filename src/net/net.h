@@ -214,6 +214,21 @@ void setLook(uint32_t look, uint8_t outfit = 0); // our look, sent to everyone (
 // Our EA online id and profile name, sent in HELLO so the others' maps can show our Runner Tag; id 0 = not shared.
 void setOnlineProfile(uint64_t id, const char* name);
 std::string joinCode(); // the host's code (empty until set up, or when not reachable)
+enum class UpnpState { NotStarted, Pending, Disabled, Mapped, Failed };
+enum class PublicAddressState { NotStarted, Pending, Available, Unavailable, PrivateNetwork };
+struct HostStatus {
+    bool active = false;
+    uint16_t port = 0;
+    UpnpState upnp = UpnpState::NotStarted;
+    PublicAddressState address = PublicAddressState::NotStarted;
+    bool additionalNat = false;
+    std::string upnpError;
+    std::string publicAddress;
+    std::string joinCode;
+    std::string lanCode;
+};
+// One snapshot of the current host's setup results, not a test of internet reachability.
+HostStatus hostStatus();
 std::string describe();
 
 } // namespace mecmp::net

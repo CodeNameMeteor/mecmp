@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Hosting status
+- The Session tab now shows the listening UDP port, UPnP setup result and external-address lookup separately.
+  If no internet join code can be obtained, the menu explains the result instead of showing
+  "Preparing your join code" indefinitely. The local host keeps running. Finding an external address
+  does not confirm that the port is reachable from the internet.
+
 ### Body pose
 - **Fingers, toes and wrists now move on other players' ghosts.** A ghost used to get only 23 bones of the player's
   pose (head, spine, one hand bone, legs). Now the whole body goes out: fingers, toes and the arm and leg roll (twist)

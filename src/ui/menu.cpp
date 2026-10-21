@@ -100,21 +100,48 @@ void sessionSection() {
     } else if (!running) {
         ImGui::TextDisabled("Offline");
     } else if (net::hosting()) {
-        const std::string code = net::joinCode();
-        if (code.empty()) {
-            ImGui::Text("Hosting. Preparing your join code...");
-        } else {
-            ImGui::Text("Hosting. Your join code:");
-            ImGui::SameLine();
-            ImGui::TextColored(ImVec4(1.f, 0.85f, 0.3f, 1.f), "%s", code.c_str());
-            ImGui::SameLine();
-            if (ImGui::SmallButton("Copy")) copyToClipboard(code);
+        const net::HostStatus status = net::hostStatus();
+        ImGui::Text("Hosting on UDP port %u", status.port);
+        switch (status.upnp) {
+        case net::UpnpState::Pending:
+            ImGui::TextDisabled("UPnP: checking your router...");
+            break;
+        case net::UpnpState::Disabled:
+            ImGui::TextDisabled("UPnP: off in settings");
+            break;
+        case net::UpnpState::Mapped:
+            ImGui::TextDisabled("UPnP: port mapping created");
+            break;
+        case net::UpnpState::Failed:
+            ImGui::TextWrapped("UPnP: %s", status.upnpError.c_str());
+            break;
+        default:
+            break;
         }
-        const std::string lan = net::lanCode();
-        if (!lan.empty()) {
-            ImGui::TextDisabled("Same network: %s", lan.c_str());
+        if (status.address == net::PublicAddressState::Pending) {
+            ImGui::TextDisabled("Finding your external address...");
+        } else if (status.address == net::PublicAddressState::Available) {
+            ImGui::TextDisabled("External address: %s", status.publicAddress.c_str());
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Finding an external address does not check whether other players can reach this port.");
+            ImGui::TextUnformatted("Join code:");
             ImGui::SameLine();
-            if (ImGui::SmallButton("Copy##lan")) copyToClipboard(lan);
+            ImGui::TextColored(ImVec4(1.f, 0.85f, 0.3f, 1.f), "%s", status.joinCode.c_str());
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Copy")) copyToClipboard(status.joinCode);
+            if (status.upnp != net::UpnpState::Mapped || status.additionalNat)
+                ImGui::TextWrapped("Players outside your network may need UDP port %u forwarded on your router.", status.port);
+        } else if (status.address == net::PublicAddressState::PrivateNetwork) {
+            ImGui::TextWrapped("Your router reported a private address. No internet join code is available.");
+            ImGui::TextWrapped("Another router or your internet provider may be in front of it. Try another host or a dedicated server.");
+        } else if (status.address == net::PublicAddressState::Unavailable) {
+            ImGui::TextWrapped("Could not find your external address. No internet join code is available.");
+            ImGui::TextWrapped("Local hosting is still running. Check your connection or use a dedicated server for internet play.");
+        }
+        if (!status.lanCode.empty()) {
+            ImGui::TextDisabled("Same network: %s", status.lanCode.c_str());
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Copy##lan")) copyToClipboard(status.lanCode);
         }
     } else {
         const std::string server = net::serverName();

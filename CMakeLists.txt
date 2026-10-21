@@ -89,19 +89,26 @@ add_library(mecmp SHARED
   third_party/imgui/backends/imgui_impl_win32.cpp
 )
 target_include_directories(mecmp PRIVATE src third_party/imgui)
-# Developer hotkeys (F7 spawn/show ghosts, F9 status, F10 camera finder, F12 hide). Not configurable and
-# not part of release builds: configure release builds with -DMECMP_DEBUG_KEYS=OFF.
+# Developer hotkeys (F7 spawn/show ghosts, F9 status, F10 camera finder, F12 hide). Not configurable, and off
+# unless asked for: players kept pressing them. A developer configures with -DMECMP_DEBUG_KEYS=ON.
 # Also the solo test (a ghost that mirrors you) and the F9 perf line.
-option(MECMP_DEBUG_KEYS "Developer build: hotkeys F7/F9/F10/F12, solo test (OFF for release builds)" ON)
+option(MECMP_DEBUG_KEYS "Developer build: hotkeys F7/F9/F10/F12, solo test" OFF)
 # The verbose log (mecmp.ini [debug] verbose) starts on in developer builds (a Debug build, or with the developer
-# hotkeys) and off in release builds. Once mecmp.ini has a verbose= line, that line decides.
-if(CMAKE_BUILD_TYPE STREQUAL "Debug" OR MECMP_DEBUG_KEYS)
+# hotkeys) and in beta builds (MECMP_VERBOSE_LOG), off otherwise. Once mecmp.ini has a verbose= line, that line decides.
+option(MECMP_VERBOSE_LOG "Verbose log on by default (beta builds)" OFF)
+if(CMAKE_BUILD_TYPE STREQUAL "Debug" OR MECMP_DEBUG_KEYS OR MECMP_VERBOSE_LOG)
   target_compile_definitions(mecmp PRIVATE MECMP_VERBOSE_DEFAULT=1)
 else()
   target_compile_definitions(mecmp PRIVATE MECMP_VERBOSE_DEFAULT=0)
 endif()
 if(MECMP_DEBUG_KEYS)
   target_compile_definitions(mecmp PRIVATE MECMP_DEBUG_KEYS=1)
+endif()
+# Other players' game sounds (game/player_audio.cpp). Off until it is fixed: the capture is not installed,
+# nothing is sent or played and the menu does not offer it. The code stays; -DMECMP_PLAYER_AUDIO=ON builds it in.
+option(MECMP_PLAYER_AUDIO "Player sound sync (disabled until fixed)" OFF)
+if(MECMP_PLAYER_AUDIO)
+  target_compile_definitions(mecmp PRIVATE MECMP_PLAYER_AUDIO=1)
 endif()
 target_link_libraries(mecmp PRIVATE ws2_32 d3d11 dxgi d3dcompiler dwmapi)
 set_target_properties(mecmp PROPERTIES OUTPUT_NAME "mecmp" PREFIX "")

@@ -221,8 +221,12 @@ void run(HMODULE self) {
     log::open(self);
     wchar_t path[MAX_PATH] = {};
     GetModuleFileNameW(self, path, MAX_PATH);
-    MLOG("MECMP %s loaded from %ls (verbose log %s, %s build)", kVersion, path, log::verbose ? "on" : "off",
-         MECMP_VERBOSE_DEFAULT ? "developer" : "release");
+#if MECMP_DEBUG_KEYS
+    constexpr const char* kBuild = "developer build, developer keys on";
+#else
+    constexpr const char* kBuild = "player build";
+#endif
+    MLOG("MECMP %s loaded from %ls (verbose log %s, %s)", kVersion, path, log::verbose ? "on" : "off", kBuild);
     diagnostics::install(self);
     std::wstring dir = path;
     dir = dir.substr(0, dir.find_last_of(L"\\/") + 1);

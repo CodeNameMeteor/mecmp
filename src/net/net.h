@@ -15,7 +15,7 @@
 namespace mecmp::net {
 namespace protocol { struct Result; } // net/protocol.h
 
-constexpr uint32_t kMaxPoseBones = 32;
+constexpr uint32_t kMaxPoseBones = 96;
 // PlayerState::flags (STATE packet).
 constexpr uint32_t kStateInLevel = 1;
 constexpr uint32_t kStateTyping = 2; // the chat box is open (older versions ignore it)
@@ -26,9 +26,11 @@ struct PlayerState {
     uint32_t flags = 0; // kState... bits
     uint32_t timeMs = 0; // sender's clock when this state was captured (receivers replay on it)
     // Body pose in the replay player's format: per bone {translation x,y,z,w; rotation x,y,z,w}.
-    // Bone order = the recorder's, which maps 1:1 onto a ghost's replay pose. 0 = no pose.
+    // boneIdx[i] = the skeleton bone slot i belongs to (the recorder's setup). 0 bones = no pose.
     uint32_t boneCount = 0;
+    uint8_t boneIdx[kMaxPoseBones] = {};
     float bones[kMaxPoseBones][8] = {};
+    uint16_t poseBase = 0; // wire only: the number of the full packet this pose came in (protocol.h, STATE)
 };
 
 struct RemoteInfo {

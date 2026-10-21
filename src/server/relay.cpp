@@ -152,6 +152,7 @@ void Relay::onPacket(const Addr& from, const char* buf, size_t n, uint32_t nowMs
         m->session = h.session;
         m->poseDecoder = {};
         m->poseEncoder = {};
+        m->stateSeq = {};
     }
     // Rate limit (token bucket).
     m->tokens += (nowMs - m->refillAt) * cfg_.ratePerSec / 1000.0;
@@ -168,10 +169,12 @@ void Relay::onPacket(const Addr& from, const char* buf, size_t n, uint32_t nowMs
     char copy[proto::kMaxPacket];
     const char* out = buf;
     if (h.type == proto::kTypeState) {
+        if (!m->stateSeq.accepts(h.seq)) { ++stats_.dropped; ++m->dropped; return; } // stale or repeated
         net::PlayerState state; bool full = false;
         if (!proto::readState(payload, len, m->poseDecoder, state, full)) { ++stats_.dropped; return; }
         if (full) proto::commitBase(m->poseDecoder, state);
         if (!net::limitPose(state, cfg_.boneReach)) { ++stats_.dropped; return; }
+        m->stateSeq.commit(h.seq);
         // This player's own encoder: a full pose goes out every kFullEvery packets, as the sender's would,
         // and deltas in between (a fresh encoder each time made every forwarded pose a full one).
         n = proto::writeState(copy, h, state, m->poseEncoder);

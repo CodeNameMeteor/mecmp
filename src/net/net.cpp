@@ -24,6 +24,7 @@
 #include "core/log.h"
 #include "net/host_guard.h"
 #include "net/joincode.h"
+#include "net/connection.h"
 #include "net/protocol.h"
 #include "net/pose_limits.h"
 #include "net/summon_policy.h"
@@ -66,8 +67,9 @@ struct Remote {
     uint8_t outfit = 0;
     proto::OnlineProfile profile; // shared by them (HELLO), for map markers
     bool loopback = false;
-    uint32_t lastSeq = 0;
+    uint32_t lastSeq = 0;       // newest sequence number of their other packets (not STATE)
     bool haveSeq = false;
+    StateSequence stateSeq;     // their STATE packets (net/connection.h): stale ones dropped, gaps = loss
     DWORD lastTick = 0;  // last STATE (player data)
     DWORD lastHeard = 0; // last packet of any kind (a player who only sent a HELLO yet is still there)
     proto::Decoder decoder;
@@ -125,6 +127,7 @@ struct Member {
     uint32_t session = 0;     // the session id this joiner speaks with (see handlePacket)
     proto::Decoder poseDecoder;
     proto::Encoder poseEncoder; // re-encodes its checked poses: deltas stay deltas
+    StateSequence stateSeq;     // its STATE packets: a stale one is not forwarded (nor decoded as a base)
     guard::Bucket bucket;     // how fast it may send (net/host_guard.h)
 };
 
@@ -190,7 +193,7 @@ void routerUnmap() {
     g_routerMapped = 0;
 }
 
-std::atomic<uint64_t> g_sent{0}, g_recv{0}, g_dropped{0}, g_bytesSent{0}, g_relayed{0};
+std::atomic<uint64_t> g_sent{0}, g_recv{0}, g_dropped{0}, g_bytesSent{0}, g_bytesRecv{0}, g_relayed{0};
 
 // Messages caused by other players' packets (joins, leaves, names, new session ids) share a budget:
 // 20 at once, then one every 3 s, so a flood of fake players cannot fill the log (S-9).
@@ -253,7 +256,7 @@ void blend(const PlayerState& a, const PlayerState& b, float k, PlayerState& out
     while (dy > 3.14159265f) dy -= 6.2831853f;
     while (dy < -3.14159265f) dy += 6.2831853f;
     out.yaw = a.yaw + dy * k;
-    if (a.boneCount != b.boneCount) return;
+    if (a.boneCount != b.boneCount || memcmp(a.boneIdx, b.boneIdx, b.boneCount) != 0) return; // another bone set: no blend
     for (uint32_t i = 0; i < b.boneCount; ++i) {
         const float* pa = a.bones[i];
         const float* pb = b.bones[i];
@@ -293,9 +296,11 @@ void sendAll(const char* buf, size_t len) {
     }
 }
 
+// STATE packets are numbered on their own (net/connection.h), so receivers measure STATE loss and drop stale
+// poses without other packets in between counting as gaps.
 proto::Header header(uint16_t type) {
-    static uint32_t seq = 0;
-    return proto::Header{proto::kMagic, proto::kProtocol, type, g_session, ++seq};
+    static std::atomic<uint32_t> seq{0}, stateSeq{0};
+    return proto::Header{proto::kMagic, proto::kProtocol, type, g_session, type == proto::kTypeState ? ++stateSeq : ++seq};
 }
 
 std::atomic<bool> g_typing{false};
@@ -835,17 +840,20 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
             m->session = h.session;
             m->poseDecoder = {};
             m->poseEncoder = {};
+            m->stateSeq = {};
         }
         if (!m->bucket.take(GetTickCount())) { ++g_dropped; return; } // flooding: not forwarded, not processed
         // A joiner's HELLO goes on without the "I host" flag: only the host's own HELLO may set it.
         const char* out = buf;
         if (h.type == proto::kTypeState) {
+            if (!m->stateSeq.accepts(h.seq)) { ++g_dropped; return; } // older than one already forwarded
             PlayerState state; bool full = false;
             if (!proto::readState(buf + sizeof(h), static_cast<size_t>(n) - sizeof(h), m->poseDecoder, state, full)) {
                 ++g_dropped; return;
             }
             if (full) proto::commitBase(m->poseDecoder, state);
             if (!limitPose(state, config::get()->boneReach)) { ++g_dropped; return; }
+            m->stateSeq.commit(h.seq);
             // Re-encoded with this joiner's own encoder: full every kFullEvery packets, deltas between.
             n = static_cast<int>(proto::writeState(relay, h, state, m->poseEncoder));
             if (!n) { ++g_dropped; return; }
@@ -934,13 +942,18 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
         r.loopback = own;
         if (peerLogAllowed()) MLOG("net: new player %08x from %s%s", h.session, addrToString(from).c_str(), own ? " (our own packets: solo test)" : "");
     }
-    // Sequence numbers restart when a player restarts the game: accept a large backwards jump.
-    if (r.haveSeq && h.seq <= r.lastSeq && r.lastSeq - h.seq < 1000) return;
-    const uint32_t gap = r.haveSeq && h.seq > r.lastSeq ? h.seq - r.lastSeq - 1 : 0;
-    r.loss.add(nowMs(), gap < 1000 ? gap : 0); // a bigger jump is a restart, not loss
-    r.lastSeq = h.seq;
-    r.haveSeq = true;
+    if (h.type == proto::kTypeState) {
+        // Stale or repeated: dropped before it can be decoded (an old full packet must not become the base).
+        // Taken as the newest (and its gap counted as loss) once it decodes, below.
+        if (!r.stateSeq.accepts(h.seq)) return;
+    } else {
+        // Sequence numbers restart when a player restarts the game: accept a large backwards jump.
+        if (r.haveSeq && h.seq <= r.lastSeq && r.lastSeq - h.seq < 1000) return;
+        r.lastSeq = h.seq;
+        r.haveSeq = true;
+    }
     ++g_recv;
+    g_bytesRecv += static_cast<uint64_t>(n);
     const char* payload = data + sizeof(h);
     const size_t len = static_cast<size_t>(n) - sizeof(h);
     if (h.type == proto::kTypeHello) {
@@ -1051,6 +1064,8 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
     bool full = false;
     if (!proto::readState(payload, len, r.decoder, s, full)) { ++g_dropped; return; }
     if (full) proto::commitBase(r.decoder, s);
+    const uint32_t missed = r.stateSeq.commit(h.seq);
+    r.loss.add(nowMs(), missed < 1000 ? missed : 0); // a bigger jump is not loss
     r.stateFlags = s.flags;
     if (own) { // solo test: the mirror stands a fixed distance away along the world X axis, so it does
                // not turn with the camera and you can walk around it (to check it and its name tag)
@@ -2127,16 +2142,19 @@ std::string describe() {
     const uint64_t sent = g_sent.load();
     char buf[320];
     if (g_role == Role::Host)
-        snprintf(buf, sizeof(buf), "hosting on port %u (code %s), %llu player(s) joined, sent %llu (avg %llu bytes), received %llu, forwarded %llu, dropped %llu",
+        snprintf(buf, sizeof(buf), "hosting on port %u (code %s), %llu player(s) joined, sent %llu (avg %llu bytes, %llu KB), received %llu (%llu KB), forwarded %llu, dropped %llu",
                  g_port, code.empty() ? "-" : code.c_str(), static_cast<unsigned long long>(peers), static_cast<unsigned long long>(sent),
                  static_cast<unsigned long long>(sent ? g_bytesSent.load() / sent : 0),
-                 static_cast<unsigned long long>(g_recv.load()), static_cast<unsigned long long>(g_relayed.load()),
+                 static_cast<unsigned long long>(g_bytesSent.load() >> 10),
+                 static_cast<unsigned long long>(g_recv.load()), static_cast<unsigned long long>(g_bytesRecv.load() >> 10),
+                 static_cast<unsigned long long>(g_relayed.load()),
                  static_cast<unsigned long long>(g_dropped.load()));
     else
-        snprintf(buf, sizeof(buf), "joined %s (%s), sent %llu (avg %llu bytes), received %llu, dropped %llu",
+        snprintf(buf, sizeof(buf), "joined %s (%s), sent %llu (avg %llu bytes, %llu KB), received %llu (%llu KB), dropped %llu",
                  addrToString(g_hostAddr).c_str(), g_heardFromHost ? "connected" : "no answer yet",
                  static_cast<unsigned long long>(sent), static_cast<unsigned long long>(sent ? g_bytesSent.load() / sent : 0),
-                 static_cast<unsigned long long>(g_recv.load()), static_cast<unsigned long long>(g_dropped.load()));
+                 static_cast<unsigned long long>(g_bytesSent.load() >> 10), static_cast<unsigned long long>(g_recv.load()),
+                 static_cast<unsigned long long>(g_bytesRecv.load() >> 10), static_cast<unsigned long long>(g_dropped.load()));
     return buf;
 }
 

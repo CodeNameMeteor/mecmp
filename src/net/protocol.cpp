@@ -197,25 +197,40 @@ size_t writeState(char* buf, const Header& h, const PlayerState& input, Encoder&
     put(p, s.flags);
     put(p, s.timeMs);
     const uint8_t nb = static_cast<uint8_t>(s.boneCount <= kMaxPoseBones ? s.boneCount : 0);
-    const bool full = nb && (nb != enc.lastFullCount || ++enc.sinceFull >= kFullEvery);
+    const bool full = nb && (nb != enc.lastFullCount || memcmp(s.boneIdx, enc.lastFullIdx, nb) != 0 ||
+                             ++enc.sinceFull >= kFullEvery);
     int16_t qt[kMaxPoseBones][3];
-    uint32_t mask = 0;
+    uint32_t qr[kMaxPoseBones];
+    uint64_t tmask[2] = {0, 0}, rmask[2] = {0, 0}; // bit i: bone i sends its translation / rotation
     for (uint8_t i = 0; i < nb; ++i) {
         for (int j = 0; j < 3; ++j) qt[i][j] = quantT(s.bones[i][j]);
-        if (full || memcmp(qt[i], enc.lastFullT[i], sizeof(qt[i])) != 0) mask |= 1u << i;
+        qr[i] = encodeQuat(&s.bones[i][4]);
+        if (full || memcmp(qt[i], enc.lastFullT[i], sizeof(qt[i])) != 0) tmask[i >> 6] |= 1ull << (i & 63);
+        if (full || qr[i] != enc.lastFullQ[i]) rmask[i >> 6] |= 1ull << (i & 63);
     }
     if (full) {
         memcpy(enc.lastFullT, qt, sizeof(int16_t) * 3 * nb);
+        memcpy(enc.lastFullQ, qr, sizeof(uint32_t) * nb);
+        memcpy(enc.lastFullIdx, s.boneIdx, nb);
         enc.lastFullCount = nb;
         enc.sinceFull = 0;
+        ++enc.fullId;
     }
     put(p, nb);
     put(p, static_cast<uint8_t>(full ? 1 : 0));
-    put(p, static_cast<uint16_t>(0));
-    put(p, mask);
-    for (uint8_t i = 0; i < nb; ++i) put(p, encodeQuat(&s.bones[i][4]));
+    put(p, static_cast<uint16_t>(nb ? enc.fullId : 0));
+    put(p, tmask[0]);
+    put(p, tmask[1]);
+    put(p, rmask[0]);
+    put(p, rmask[1]);
+    if (full) {
+        memcpy(p, s.boneIdx, nb);
+        p += nb;
+    }
     for (uint8_t i = 0; i < nb; ++i)
-        if (mask & (1u << i)) {
+        if (rmask[i >> 6] >> (i & 63) & 1) put(p, qr[i]);
+    for (uint8_t i = 0; i < nb; ++i)
+        if (tmask[i >> 6] >> (i & 63) & 1) {
             memcpy(p, qt[i], 6);
             p += 6;
         }
@@ -223,7 +238,7 @@ size_t writeState(char* buf, const Header& h, const PlayerState& input, Encoder&
 }
 
 void alignRotations(PlayerState& s, const PlayerState& prev) {
-    if (s.boneCount != prev.boneCount) return;
+    if (s.boneCount != prev.boneCount || memcmp(s.boneIdx, prev.boneIdx, s.boneCount) != 0) return;
     for (uint32_t i = 0; i < s.boneCount && i < kMaxPoseBones; ++i) {
         float* q = &s.bones[i][4];
         const float* p = &prev.bones[i][4];
@@ -504,50 +519,69 @@ bool readState(const char* payload, size_t n, const Decoder& dec, PlayerState& o
     const char* p = payload;
     const char* end = payload + n;
     uint8_t nb = 0, fl = 0;
-    uint16_t res = 0;
-    uint32_t mask = 0;
+    uint16_t base = 0;
+    uint64_t tmask[2] = {0, 0}, rmask[2] = {0, 0};
     if (!get(p, end, out.pos) || !get(p, end, out.yaw) || !get(p, end, out.flags) || !get(p, end, out.timeMs) || !get(p, end, nb) ||
-        !get(p, end, fl) || !get(p, end, res) || !get(p, end, mask))
+        !get(p, end, fl) || !get(p, end, base) || !get(p, end, tmask[0]) || !get(p, end, tmask[1]) || !get(p, end, rmask[0]) ||
+        !get(p, end, rmask[1]))
         return false;
     if (!sanePlacement(out)) return false;
     full = (fl & 1) != 0;
     out.boneCount = 0;
     // Unknown kState flags are cleared by limitPose below, not refused: older versions must keep
     // ignoring flags added later (as kStateTyping was).
-    if (res || (fl & ~1)) return false;
-    const uint32_t validMask = nb == 32 ? UINT32_MAX : nb < 32 ? ((1u << nb) - 1) : 0;
-    if ((mask & ~validMask) || (nb && full && mask != validMask)) return false;
-    if (nb == 0) return p == end && limitPose(out);
+    if (fl & ~1) return false;
+    if (nb == 0) return p == end && !base && !tmask[0] && !tmask[1] && !rmask[0] && !rmask[1] && limitPose(out);
     if (nb > kMaxPoseBones) return false;
-    const bool haveBase = full || dec.baseCount == nb;
-    // The rotations (4 bytes each) come first, the translations (6 bytes each, one per mask bit) after them.
-    if (end - p < static_cast<ptrdiff_t>(nb) * 4) return false;
-    const char* t = p + nb * 4;
+    // The bits of bones 0..nb-1, in two words.
+    const uint64_t valid[2] = {nb >= 64 ? ~0ull : (1ull << nb) - 1, nb <= 64 ? 0 : (1ull << (nb - 64)) - 1};
+    if ((tmask[0] & ~valid[0]) || (tmask[1] & ~valid[1]) || (rmask[0] & ~valid[0]) || (rmask[1] & ~valid[1])) return false;
+    if (full && (tmask[0] != valid[0] || tmask[1] != valid[1] || rmask[0] != valid[0] || rmask[1] != valid[1])) return false;
+    // A delta is only good against the very full packet it was made from.
+    const bool haveBase = full || (dec.baseCount == nb && dec.baseId == base);
+    if (full) {
+        if (end - p < nb) return false;
+        memcpy(out.boneIdx, p, nb);
+        p += nb;
+        out.poseBase = base;
+    } else {
+        memcpy(out.boneIdx, dec.baseIdx, nb);
+    }
     for (uint8_t i = 0; i < nb; ++i) {
-        uint32_t w = 0;
-        if (!get(p, end, w)) return false;
-        decodeQuat(w, &out.bones[i][4]);
-        if (mask & (1u << i)) {
-            int16_t tv[3];
-            if (end - t < 6) return false;
-            memcpy(tv, t, 6);
-            t += 6;
-            for (int j = 0; j < 3; ++j) out.bones[i][j] = tv[j] / kTransScale;
+        float* bone = out.bones[i];
+        if (rmask[i >> 6] >> (i & 63) & 1) {
+            uint32_t w = 0;
+            if (!get(p, end, w)) return false;
+            decodeQuat(w, &bone[4]);
         } else {
-            for (int j = 0; j < 3; ++j) out.bones[i][j] = dec.baseT[i][j];
+            for (int j = 0; j < 4; ++j) bone[4 + j] = haveBase ? dec.baseR[i][j] : (j == 3 ? 1.f : 0.f);
         }
-        out.bones[i][3] = 1.f;
+        bone[3] = 1.f;
+    }
+    for (uint8_t i = 0; i < nb; ++i) {
+        float* bone = out.bones[i];
+        if (tmask[i >> 6] >> (i & 63) & 1) {
+            int16_t tv[3];
+            if (!get(p, end, tv)) return false;
+            for (int j = 0; j < 3; ++j) bone[j] = tv[j] / kTransScale;
+        } else {
+            for (int j = 0; j < 3; ++j) bone[j] = dec.baseT[i][j];
+        }
     }
     // Validate the complete packet even without a delta base; only publish its
     // placement until a full pose arrives. This also bounds yaw on that path.
     out.boneCount = haveBase ? nb : 0;
-    return t == end && limitPose(out);
+    return p == end && limitPose(out);
 }
 
 void commitBase(Decoder& dec, const PlayerState& s) {
-    for (uint32_t i = 0; i < s.boneCount; ++i)
+    for (uint32_t i = 0; i < s.boneCount; ++i) {
         for (int j = 0; j < 3; ++j) dec.baseT[i][j] = s.bones[i][j];
+        for (int j = 0; j < 4; ++j) dec.baseR[i][j] = s.bones[i][4 + j];
+    }
+    memcpy(dec.baseIdx, s.boneIdx, s.boneCount);
     dec.baseCount = s.boneCount;
+    dec.baseId = s.poseBase;
 }
 
 

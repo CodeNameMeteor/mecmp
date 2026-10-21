@@ -5,6 +5,7 @@
 
 #include "core/log.h"
 #include "game/engine.h"
+#include "game/ghosts.h"
 #include "game/level.h"
 
 namespace mecmp::game::local_player {
@@ -32,6 +33,18 @@ bool capturePose(net::PlayerState& st, float& keyTime) {
     if (!base || !cap || stride < 0x30 || (stride - 0x10) % 0x20 != 0) return false;
     const uint32_t n = static_cast<uint32_t>((stride - 0x10) / 0x20);
     if (n == 0 || n > net::kMaxPoseBones) return false;
+    // The recorder's bone setup names the skeleton bone of each slot. Read again only when the recorder changes.
+    static uintptr_t setupOf = 0;
+    static level::BoneSetup setup;
+    if (rec != setupOf || setup.count != n) {
+        setupOf = rec;
+        setup.count = 0;
+        if (!level::readSetupAt(rec + Rec_Setup, setup) || setup.count != n) return false;
+        for (uint32_t i = 0; i < n; ++i)
+            if (setup.indices[i] > 255) return false;
+        const bool synced = level::noteRecorderSetup(setup);
+        MLOG("capture: local recorder has %u bones (%s)", n, synced ? "full sync set" : "vanilla set, the mod loaded after the level");
+    }
     uint32_t best = head % cap;
     const uint32_t prev = (head + cap - 1) % cap;
     if (mem::readOr<float>(base + prev * stride) > mem::readOr<float>(base + best * stride)) best = prev;
@@ -42,6 +55,8 @@ bool capturePose(net::PlayerState& st, float& keyTime) {
     if (!mem::read(slot, before) || !mem::read(slot + 0x10, st.bones, n * 0x20) || !mem::read(slot, after) || before != after)
         return false;
     keyTime = before;
+    for (uint32_t i = 0; i < n; ++i) st.boneIdx[i] = static_cast<uint8_t>(setup.indices[i]);
+    ghosts::noteOwnPose(st.bones, st.boneIdx, n);
     st.boneCount = n;
     return true;
 }

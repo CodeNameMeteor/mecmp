@@ -333,6 +333,23 @@ static void testPosesStayDeltas() {
     }
 }
 
+// A STATE older than one already forwarded (late, or sent twice) is dropped: it must not reach the others
+// or become the relay's pose base.
+static void testStaleStateDropped() {
+    Harness t;
+    auto hA = hello(1, "alice"), hB = hello(2, "bob");
+    t.deliver(A, hA, 0);
+    t.deliver(B, hB, 0);
+    t.sent.clear();
+    auto s5 = state(1, 5), s4 = state(1, 4), s6 = state(1, 6);
+    t.deliver(A, s5, 10);
+    t.deliver(A, s4, 20); // late
+    t.deliver(A, s5, 30); // repeated
+    CHECK(t.sentTo(B) == 1);
+    t.deliver(A, s6, 40);
+    CHECK(t.sentTo(B) == 2);
+}
+
 // Player sounds (type 15) are checked and forwarded like other session packets; 14 is the rendezvous.
 static void testAudioForwarded() {
     CHECK(proto::kTypeAudio != proto::kTypeRendezvous && proto::knownType(proto::kTypeAudio));
@@ -938,6 +955,7 @@ int main() {
     testMirror();
     testForwardsToOthers();
     testPosesStayDeltas();
+    testStaleStateDropped();
     testAudioForwarded();
     testReactForwarded();
     testSummonForwarded();

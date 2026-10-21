@@ -10,6 +10,7 @@
 
 #include "net/joincode.h"
 #include "net/pose_limits.h"
+#include "net/connection.h"
 #include "net/protocol.h"
 #include "net/summon_policy.h"
 
@@ -69,6 +70,7 @@ static void testReadState() {
     s.pos[0] = 1; s.pos[1] = 2; s.pos[2] = 3; s.yaw = 0.5f; s.timeMs = 1234;
     s.boneCount = 23;
     for (int i = 0; i < 23; ++i) { s.bones[i][3] = 1; s.bones[i][7] = 1; s.bones[i][0] = i * 0.01f; }
+    for (int i = 0; i < 23; ++i) s.boneIdx[i] = static_cast<uint8_t>(i * 3);
     char buf[protocol::kMaxPacket];
     const size_t n = protocol::writeState(buf, h, s, enc);
 
@@ -78,6 +80,120 @@ static void testReadState() {
     bool full = false;
     CHECK(protocol::readState(buf + sizeof(h), n - sizeof(h), dec, out, full));
     CHECK(out.boneCount == 23 && std::fabs(out.pos[2] - 3) < 1e-6f);
+    CHECK(out.boneIdx[22] == 66 && out.boneIdx[1] == 3); // the bone indices travel with a full pose
+
+    // The largest pose (96 bones) fits one packet and decodes with its bone indices.
+    {
+        PlayerState big = s;
+        big.boneCount = 96;
+        for (int i = 0; i < 96; ++i) {
+            big.bones[i][3] = 1; big.bones[i][7] = 1; big.bones[i][1] = i * 0.01f;
+            big.boneIdx[i] = static_cast<uint8_t>(255 - i);
+        }
+        protocol::Encoder encBig;
+        char bufBig[protocol::kMaxPacket];
+        const size_t nBig = protocol::writeState(bufBig, h, big, encBig);
+        CHECK(nBig > 0 && nBig <= protocol::kMaxPacket);
+        protocol::Decoder decBig;
+        PlayerState outBig;
+        bool fullBig = false;
+        CHECK(protocol::readState(bufBig + sizeof(h), nBig - sizeof(h), decBig, outBig, fullBig));
+        CHECK(fullBig && outBig.boneCount == 96 && std::fabs(outBig.bones[95][1] - 0.95f) < 1e-3f);
+        CHECK(outBig.boneIdx[0] == 255 && outBig.boneIdx[95] == 160);
+    }
+
+    // A delta sends only what changed since the last full pose, and decodes to the full pose.
+    {
+        PlayerState a = s;
+        a.boneCount = 80;
+        for (int i = 0; i < 80; ++i) {
+            a.bones[i][3] = 1; a.bones[i][7] = 1; a.bones[i][1] = i * 0.01f;
+            a.boneIdx[i] = static_cast<uint8_t>(i);
+        }
+        protocol::Encoder e;
+        protocol::Decoder d;
+        char b1[protocol::kMaxPacket], b2[protocol::kMaxPacket];
+        const size_t n1 = protocol::writeState(b1, h, a, e); // full
+        PlayerState o1, o2;
+        bool f1 = false, f2 = true;
+        CHECK(protocol::readState(b1 + sizeof(h), n1 - sizeof(h), d, o1, f1) && f1);
+        protocol::commitBase(d, o1);
+        PlayerState moved = a;
+        moved.bones[5][1] += 0.5f;                  // one translation
+        moved.bones[7][5] = 0.3826834f; moved.bones[7][7] = 0.9238795f; // one rotation
+        const size_t n2 = protocol::writeState(b2, h, moved, e); // delta
+        CHECK(n2 < n1 / 2);
+        CHECK(protocol::readState(b2 + sizeof(h), n2 - sizeof(h), d, o2, f2) && !f2);
+        CHECK(o2.boneCount == 80 && o2.boneIdx[79] == 79);
+        CHECK(std::fabs(o2.bones[5][1] - (a.bones[5][1] + 0.5f)) < 1e-3f);
+        CHECK(std::fabs(o2.bones[7][5] - 0.3826834f) < 2e-3f && std::fabs(o2.bones[3][1] - a.bones[3][1]) < 1e-3f);
+        // The same count with other bones goes out as a full pose again.
+        PlayerState other = moved;
+        other.boneIdx[0] = 200;
+        char b3[protocol::kMaxPacket];
+        PlayerState o3;
+        bool f3 = false;
+        const size_t n3 = protocol::writeState(b3, h, other, e);
+        CHECK(protocol::readState(b3 + sizeof(h), n3 - sizeof(h), d, o3, f3) && f3 && o3.boneIdx[0] == 200);
+        // A delta with no base is read for its placement only.
+        protocol::Decoder fresh;
+        PlayerState o4;
+        bool f4 = true;
+        PlayerState again = moved;
+        char b4[protocol::kMaxPacket];
+        protocol::Encoder e4;
+        protocol::writeState(b4, h, again, e4);
+        const size_t n4 = protocol::writeState(b4, h, again, e4); // second packet of this encoder: a delta
+        CHECK(protocol::readState(b4 + sizeof(h), n4 - sizeof(h), fresh, o4, f4) && !f4 && o4.boneCount == 0);
+    }
+
+    // A delta names its full packet: when that full packet was lost, a decoder still holding the one before
+    // (same bone count and bones) reads the delta for its placement only, never against the wrong base.
+    {
+        PlayerState a = s;
+        a.boneCount = 40;
+        for (int i = 0; i < 40; ++i) {
+            a.bones[i][3] = 1; a.bones[i][7] = 1; a.bones[i][1] = i * 0.01f;
+            a.boneIdx[i] = static_cast<uint8_t>(i);
+        }
+        protocol::Encoder e;
+        protocol::Decoder d;
+        char pk[protocol::kMaxPacket];
+        PlayerState o;
+        bool f = false;
+        size_t m = protocol::writeState(pk, h, a, e); // full #1: arrives
+        CHECK(protocol::readState(pk + sizeof(h), m - sizeof(h), d, o, f) && f);
+        protocol::commitBase(d, o);
+        PlayerState b = a;
+        for (int i = 0; i < 40; ++i) b.bones[i][1] += 0.25f; // the whole body moved
+        for (uint32_t k = 1; k < protocol::kFullEvery; ++k) protocol::writeState(pk, h, b, e); // deltas vs #1
+        m = protocol::writeState(pk, h, b, e); // full #2: lost
+        PlayerState c = b;
+        c.bones[3][1] += 0.1f;
+        m = protocol::writeState(pk, h, c, e); // a delta vs #2 (bone 3 only)
+        CHECK(protocol::readState(pk + sizeof(h), m - sizeof(h), d, o, f) && !f);
+        CHECK(o.boneCount == 0); // against #1 every other bone would sit 0.25 m off
+        // The next full packet is a base again.
+        for (uint32_t k = 2; k < protocol::kFullEvery; ++k) protocol::writeState(pk, h, c, e); // (the delta above was 1)
+        m = protocol::writeState(pk, h, c, e); // full #3
+        CHECK(protocol::readState(pk + sizeof(h), m - sizeof(h), d, o, f) && f && o.boneCount == 40);
+        protocol::commitBase(d, o);
+        m = protocol::writeState(pk, h, c, e);
+        CHECK(protocol::readState(pk + sizeof(h), m - sizeof(h), d, o, f) && !f && o.boneCount == 40);
+        CHECK(std::fabs(o.bones[3][1] - c.bones[3][1]) < 1e-3f);
+    }
+
+    // STATE sequence numbers: stale and repeated packets are refused, gaps counted, wrap handled.
+    {
+        StateSequence q;
+        CHECK(q.accepts(100) && q.commit(100) == 0);
+        CHECK(!q.accepts(100) && !q.accepts(99));
+        CHECK(q.accepts(103) && q.commit(103) == 2);
+        CHECK(!q.accepts(101)); // arrived late: an older pose
+        StateSequence w;
+        w.commit(0xFFFFFFFEu);
+        CHECK(w.accepts(1) && w.commit(1) == 2 && !w.accepts(0xFFFFFFFFu));
+    }
 
     // Non-finite or far-away positions are refused.
     for (float bad : {NAN, INFINITY, 1e30f}) {
@@ -108,7 +224,7 @@ static void testReadState() {
         std::vector<char> p(rng() % 200);
         for (char& c : p) c = static_cast<char>(rng());
         protocol::Decoder d;
-        d.baseCount = rng() % 33;
+        d.baseCount = rng() % (kMaxPoseBones + 1);
         PlayerState o;
         bool f = false;
         protocol::readState(p.data(), p.size(), d, o, f);
@@ -151,12 +267,17 @@ static void testAlignRotations() {
         CHECK(b.bones[0][4 + j] == q[j]);
         CHECK(b.bones[1][4 + j] == q[j]);
     }
-    // Different bone counts: left alone.
+    // Different bone counts, or other bones: left alone.
     PlayerState c = b;
     c.boneCount = 1;
     c.bones[0][4] = -q[0];
     protocol::alignRotations(c, a);
     CHECK(c.bones[0][4] == -q[0]);
+    PlayerState e = b;
+    e.bones[0][4] = -q[0];
+    e.boneIdx[0] = 9;
+    protocol::alignRotations(e, a);
+    CHECK(e.bones[0][4] == -q[0]);
 }
 
 static void testDelayEstimator() {
@@ -862,6 +983,8 @@ static void testLimitPose() {
     PlayerState s{};
     s.pos[0] = 100; s.pos[1] = 5; s.pos[2] = -40; s.yaw = 50.f; s.flags = kStateInLevel | 0x80;
     s.boneCount = 4;
+    const uint8_t idx4[4] = {0, 1, 4, 5}; // root, trajectory, hips, spine
+    memcpy(s.boneIdx, idx4, 4);
     for (int i = 0; i < 4; ++i) { s.bones[i][3] = 3.f; s.bones[i][7] = 2.f; }
     s.bones[2][1] = 5.f; // the hips: up to 2 m
     s.bones[3][0] = 3.f; // a limb: up to the reach

@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### Body pose
+- **Fingers, toes and wrists now move on other players' ghosts.** A ghost used to get only 23 bones of the player's
+  pose (head, spine, one hand bone, legs). Now the whole body goes out: fingers, toes and the arm and leg roll (twist)
+  bones, 85 of the skeleton's 182 bones (the face is left out). A fist, a raised finger or a turned wrist show as the
+  player makes them.
+- **Any animation works.** Every pose names its skeleton bones, so a new animation mod needs no change here, and the
+  sender and receiver need no shared table. Unchanged bones are not sent again until the next full pose.
+- **Protocol 8.** Everyone in a session must run this version (older ones are shown as "other version").
+- **If MECMP is loaded after the level was created** (for example the game is started straight into a level by a
+  launcher), the player's recorder is already built with the game's 23 bones. Ghosts then stay on 23 bones too, so
+  nothing breaks; reload a checkpoint to get the full body. A normal start (main menu first) is not affected.
+- **The game's own ghosts are left alone.** City and time-trial ghosts keep their recorded poses.
+- **Lost packets no longer bend the body.** A pose that changed only some bones is now marked with the full pose it
+  was made from. If that full pose was lost, the ghost keeps its last pose (still moving with the player) until
+  the next full pose, instead of mixing the new bones with old ones. Late or repeated poses are dropped by
+  hosts, servers and players alike, and the loss shown in the menu counts lost poses only.
+- **Ghosts no longer freeze after you open the map.** Opening the game's map made other players' ghosts stop taking
+  their pose until they were hidden and shown again (F12/F7). The mod now notices and sets them going again.
+- **`full_body_pose`** (`[player]`, on by default): 0 keeps the game's own 23-bone recording. The player's recorder
+  also records your runs, so this is the switch to use if a time trial or its uploaded ghost misbehaves. Takes
+  effect when a level loads.
 ### Off for now
 - **Hole punching is off by default** until there is a permanent server. Joining goes straight to the join code's
   address again (the host forwards the port or has UPnP, or everyone joins a dedicated server). To use it, set

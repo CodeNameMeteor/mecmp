@@ -24,15 +24,16 @@ inline bool limitPose(PlayerState& state, float reach = kClientBoneReach) {
         const float inv = static_cast<float>(1. / std::sqrt(norm));
         for (int j = 4; j < 8; ++j) bone[j] *= inv;
         bone[3] = 1.f;
-        if (b == 1) { // AITrajectory is the world anchor, not a limb.
+        const uint8_t bone_idx = state.boneIdx[b];
+        if (bone_idx == 1) { // AITrajectory is the world anchor, not a limb.
             for (int j = 0; j < 3; ++j) bone[j] = state.pos[j];
             continue;
         }
         const double length = std::sqrt(static_cast<double>(bone[0]) * bone[0] +
             static_cast<double>(bone[1]) * bone[1] + static_cast<double>(bone[2]) * bone[2]);
-        // Slot 2 is the animated body root above AITrajectory. Its hip offset
+        // Hips (bone 4) are the animated body root above AITrajectory. Its offset
         // changes during parkour; give it room without freeing limb lengths.
-        const float bound = b == 2 ? kClientBoneReach : reach;
+        const float bound = bone_idx == 4 ? kClientBoneReach : reach;
         if (length > bound) for (int j = 0; j < 3; ++j) bone[j] *= static_cast<float>(bound / length);
     }
     return true;

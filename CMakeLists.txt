@@ -54,6 +54,7 @@ add_library(mecmp SHARED
   src/game/fingerprint.cpp
   src/game/hooks.cpp
   src/game/level.cpp
+  src/game/doors.cpp
   src/game/ghosts.cpp
   src/game/models.cpp
   src/game/mumble_link.cpp

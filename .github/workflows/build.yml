@@ -26,6 +26,10 @@ jobs:
           cl /nologo /std:c++17 /EHsc /W4 /utf-8 /DNOMINMAX /DMECMP_DEBUG_KEYS=0 /DMECMP_VERBOSE_DEFAULT=0 /Isrc tests/door_host_test.cpp src/core/config.cpp src/core/log.cpp src/net/upnp.cpp src/net/joincode.cpp src/net/protocol.cpp src/net/doors.cpp /Fe:door_host_test.exe /link ws2_32.lib
           if errorlevel 1 exit /b 1
           door_host_test.exe
+          if errorlevel 1 exit /b 1
+          cl /nologo /std:c++17 /EHsc /W4 /utf-8 /DNOMINMAX /DMECMP_DEBUG_KEYS=0 /DMECMP_VERBOSE_DEFAULT=0 /Isrc tests/door_config_test.cpp src/core/config.cpp src/core/log.cpp src/net/protocol.cpp /Fe:door_config_test.exe
+          if errorlevel 1 exit /b 1
+          door_config_test.exe
 
   portable-tests:
     runs-on: ubuntu-24.04
@@ -41,6 +45,11 @@ jobs:
           g++ -std=c++17 -Wall -Wextra -Werror -Isrc -fsanitize=address,undefined -fno-sanitize-recover=undefined -g \
             tests/door_test.cpp src/net/doors.cpp -o door_test
           ./door_test
+      - name: Door target and observation policy (Linux, sanitizers)
+        run: |
+          g++ -std=c++17 -Wall -Wextra -Werror -Isrc -fsanitize=address,undefined -fno-sanitize-recover=undefined -g \
+            tests/door_policy_test.cpp -o door_policy_test
+          ./door_policy_test
       - name: Name-tag projection test (Linux, sanitizers)
         run: |
           g++ -std=c++17 -Wall -Wextra -Isrc -fsanitize=address,undefined -fno-sanitize-recover=undefined -g \

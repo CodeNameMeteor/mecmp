@@ -5,6 +5,28 @@ on:
   pull_request:
 
 jobs:
+  windows-door-tests:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Locate MSVC
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $installation = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $installation) { throw "MSVC x64 tools were not found" }
+          $devCmd = Join-Path $installation "Common7\Tools\VsDevCmd.bat"
+          if (-not (Test-Path -LiteralPath $devCmd)) { throw "VsDevCmd.bat was not found" }
+          "MSVC_DEV_CMD=$devCmd" >> $env:GITHUB_ENV
+      - name: Door packet handling (Windows)
+        shell: cmd
+        run: |
+          call "%MSVC_DEV_CMD%" -arch=x64 -host_arch=x64
+          if errorlevel 1 exit /b 1
+          cl /nologo /std:c++17 /EHsc /W4 /utf-8 /DNOMINMAX /DMECMP_DEBUG_KEYS=0 /DMECMP_VERBOSE_DEFAULT=0 /Isrc tests/door_host_test.cpp src/core/config.cpp src/core/log.cpp src/net/upnp.cpp src/net/joincode.cpp src/net/protocol.cpp src/net/doors.cpp /Fe:door_host_test.exe /link ws2_32.lib
+          if errorlevel 1 exit /b 1
+          door_host_test.exe
+
   portable-tests:
     runs-on: ubuntu-24.04
     steps:
@@ -14,6 +36,11 @@ jobs:
           g++ -std=c++17 -Wall -Wextra -Isrc -fsanitize=address,undefined -fno-sanitize-recover=undefined -g \
             tests/net_test.cpp src/net/protocol.cpp src/net/joincode.cpp -o net_test
           ./net_test
+      - name: Door state and delivery tests (Linux, sanitizers)
+        run: |
+          g++ -std=c++17 -Wall -Wextra -Werror -Isrc -fsanitize=address,undefined -fno-sanitize-recover=undefined -g \
+            tests/door_test.cpp src/net/doors.cpp -o door_test
+          ./door_test
       - name: Name-tag projection test (Linux, sanitizers)
         run: |
           g++ -std=c++17 -Wall -Wextra -Isrc -fsanitize=address,undefined -fno-sanitize-recover=undefined -g \
@@ -22,7 +49,7 @@ jobs:
       - name: Dedicated server tests (Linux, sanitizers)
         run: |
           g++ -std=c++17 -Wall -Wextra -Isrc -fsanitize=address,undefined -fno-sanitize-recover=undefined -g \
-            tests/server_test.cpp src/server/relay.cpp src/server/discord.cpp src/net/protocol.cpp -ldl -pthread -o server_test
+            tests/server_test.cpp src/server/relay.cpp src/server/discord.cpp src/net/protocol.cpp src/net/doors.cpp -ldl -pthread -o server_test
           ./server_test
       - name: Host send-limit tests (Linux, sanitizers)
         run: |

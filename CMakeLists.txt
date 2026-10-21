@@ -27,7 +27,7 @@ endif()
 # --- mecmp_server: dedicated server (Windows or Linux, no game needed) ---------------------------
 find_package(Threads REQUIRED)
 add_executable(mecmp_server tools/server/mecmp_server.cpp src/server/relay.cpp src/server/discord.cpp src/net/protocol.cpp
-               src/net/joincode.cpp)
+               src/net/joincode.cpp src/net/doors.cpp)
 target_include_directories(mecmp_server PRIVATE src)
 target_link_libraries(mecmp_server PRIVATE Threads::Threads)
 if(WIN32)
@@ -67,6 +67,7 @@ add_library(mecmp SHARED
   src/game/time_of_day.cpp
   src/game/raycast.cpp
   src/net/net.cpp
+  src/net/doors.cpp
   src/net/protocol.cpp
   src/net/upnp.cpp
   src/net/joincode.cpp

@@ -11,6 +11,7 @@
 #include <string>
 #include <vector>
 #include "net/player_audio.h"
+#include "net/doors.h"
 
 namespace mecmp::net {
 namespace protocol { struct Result; } // net/protocol.h
@@ -65,6 +66,10 @@ void shutdown(uint32_t routerWaitMs = 2000);
 
 // Game thread: newest local state (sent by the network thread).
 void publishLocal(const PlayerState& s);
+void publishDoorInterest(uint64_t world,const float pos[3],bool enabled);
+bool publishDoorOpened(const doors::Key& key);
+bool doorIsOpen(const doors::Key& key);
+bool doorSyncAvailable();
 void publishAudio(PlayerAudio sample);
 struct RemoteAudio { uint32_t peer = 0, receivedAt = 0, playAt = 0; PlayerAudio sample; };
 std::vector<RemoteAudio> takeAudio();

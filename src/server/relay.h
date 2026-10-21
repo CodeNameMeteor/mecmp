@@ -147,6 +147,7 @@ private:
     Config cfg_;
     uint32_t session_;
     uint32_t seq_ = 0;
+    net::doors::Authority doorAuthority_;
     uint8_t cookieKey_[16] = {}; // random per process: the cookies it hands out are only valid for it
     Send send_;
     Log log_;

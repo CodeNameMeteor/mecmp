@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "net/protocol.h"
+#include "net/doors.h"
 #include "server/discord.h"
 #include "server/relay.h"
 
@@ -934,7 +935,45 @@ static void testReconfigure() {
     CHECK(t.relay.members().size() == 1); // full at one player now
 }
 
+static void testDoorAuthority() {
+    namespace doors=net::doors;
+    server::Config cfg;cfg.mirror=true;
+    Harness h(cfg);const Addr a{0x7f000001,41001},b{0x7f000001,41002},stranger{0x7f000001,41003};
+    h.deliver(a,hello(100,"one"),0);h.deliver(b,hello(200,"two"),0);h.sent.clear();
+    auto packet=[](uint32_t session,const doors::Message& m) {
+        char buf[proto::kMaxPacket];const proto::Header head{proto::kMagic,proto::kProtocol,doors::kPacketType,session,50};
+        memcpy(buf,&head,sizeof(head));const auto n=doors::encode(m,buf+sizeof(head),sizeof(buf)-sizeof(head));
+        CHECK(n!=0);return std::vector<char>(buf,buf+sizeof(head)+n);
+    };
+    doors::Message interest;interest.id=1;interest.revision=1;interest.key.world=1;interest.enabled=true;
+    h.deliver(stranger,packet(300,interest),1);h.relay.tick(1);
+    for(const auto& sent:h.sent)CHECK(sent.to!=stranger);
+    h.sent.clear();h.deliver(a,packet(100,interest),10);h.deliver(b,packet(200,interest),10);h.relay.tick(10);
+    bool acknowledged=false;
+    for(const auto& sent:h.sent) {
+        proto::Header head;memcpy(&head,sent.data.data(),sizeof(head));
+        if(head.type!=doors::kPacketType)continue;
+        CHECK(head.session==h.relay.session());doors::Message decoded;
+        CHECK(doors::decode(sent.data.data()+sizeof(head),sent.data.size()-sizeof(head),decoded));
+        CHECK(decoded.op==doors::Op::Ack);acknowledged=true;
+    }
+    CHECK(acknowledged);
+    const float transform[16]={1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1};
+    doors::Message open;open.op=doors::Op::Open;open.id=2;CHECK(doors::makeKey(1,transform,open.key));
+    h.sent.clear();h.deliver(a,packet(100,open),20);h.relay.tick(110);
+    bool secondOpened=false;
+    for(const auto& sent:h.sent) {
+        proto::Header head;memcpy(&head,sent.data.data(),sizeof(head));if(head.type!=doors::kPacketType)continue;
+        CHECK(head.session==h.relay.session());doors::Message decoded;
+        CHECK(doors::decode(sent.data.data()+sizeof(head),sent.data.size()-sizeof(head),decoded));
+        CHECK(decoded.op!=doors::Op::Open);
+        if(sent.to==b&&decoded.op==doors::Op::State)secondOpened=true;
+    }
+    CHECK(secondOpened);
+}
+
 int main() {
+    testDoorAuthority();
     testReset();
     testReconfigure();
     testResultEvents();

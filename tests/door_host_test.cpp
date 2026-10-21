@@ -16,6 +16,11 @@ static std::vector<char> packet(uint32_t session,const doors::Message& message) 
 static doors::Key key(float x=0) {
     const float mat[16]={1,0,0,0,0,1,0,0,0,0,1,0,x,0,0,1};doors::Key k;CHECK(doors::makeKey(1,mat,k));return k;
 }
+static void hostHello(uint32_t session,uint32_t seq) {
+    char data[proto::kMaxPacket];const proto::Header h{proto::kMagic,proto::kProtocol,proto::kTypeHello,session,seq};
+    const auto n=proto::writeHello(data,h,"test host",0,proto::kHelloHost|proto::kHelloServer);
+    handlePacket(data,static_cast<int>(n),g_hostAddr);
+}
 int main() {
     WSADATA wsa{};CHECK(WSAStartup(MAKEWORD(2,2),&wsa)==0);
     g_sock=socket(AF_INET,SOCK_DGRAM,IPPROTO_UDP);CHECK(g_sock!=INVALID_SOCKET);
@@ -26,6 +31,10 @@ int main() {
     auto forged=packet(300,state);handlePacket(forged.data(),static_cast<int>(forged.size()),g_hostAddr);CHECK(!doorIsOpen(state.key));
     handlePacket(p.data(),static_cast<int>(p.size()),g_hostAddr);CHECK(doorIsOpen(state.key));CHECK(g_remotes.empty());
     publishDoorInterest(1,pos,false);CHECK(!doorIsOpen(state.key));
+    hostHello(200,10);hostHello(201,20);CHECK(g_hostSession==201);
+    publishDoorInterest(1,pos,true);
+    hostHello(200,11);CHECK(g_hostSession==201); // Delayed HELLO cannot revive the retired authority.
+    p=packet(200,state);handlePacket(p.data(),static_cast<int>(p.size()),g_hostAddr);CHECK(!doorIsOpen(state.key));
 
     g_doorClient.reset();g_doorAuthority.reset();g_role=Role::Host;g_hostSession=0;
     publishDoorInterest(1,pos,true);CHECK(publishDoorOpened(key()));sendDoors();

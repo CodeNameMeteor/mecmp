@@ -159,6 +159,7 @@ std::thread g_thread;
 SOCKET g_sock = INVALID_SOCKET;
 uint32_t g_session = 0;
 std::atomic<uint32_t> g_hostSession{0}; // JOIN: the host's session id, from its HELLO (0 until heard)
+std::vector<uint32_t> g_retiredHostSessions; // g_m; delayed HELLOs cannot restore a previous authority.
 // Time of day (game/time_of_day.h): ours, sent in our HELLO while we host a session; the host's, from its HELLO.
 std::atomic<float> g_myTimeOfDay{-1.f};
 std::atomic<float> g_hostTimeOfDay{-1.f};
@@ -939,6 +940,9 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
         }
         return;
     }
+    if (g_role==Role::Join&&std::find(g_retiredHostSessions.begin(),g_retiredHostSessions.end(),h.session)!=g_retiredHostSessions.end()) {
+        ++g_dropped;return;
+    }
     if(h.type==proto::kTypeDoor) {
         doors::Message message;
         if(g_role!=Role::Join||!g_hostSession.load()||h.session!=g_hostSession.load()||
@@ -1009,7 +1013,11 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
         r.asksVisit = (flags & proto::kHelloAskVisit) != 0;
         // Accepted only straight from the host (forwarded copies come from the host's address too, but have the flag cleared).
         if ((flags & proto::kHelloHost) && !own && g_role == Role::Join && sameAddr(from, g_hostAddr)) {
-            if(g_hostSession.load()&&g_hostSession.load()!=h.session)g_doorClient.reset();
+            if(g_hostSession.load()&&g_hostSession.load()!=h.session) {
+                if (g_retiredHostSessions.size()==64) g_retiredHostSessions.erase(g_retiredHostSessions.begin());
+                g_retiredHostSessions.push_back(g_hostSession.load());
+                g_doorClient.reset();
+            }
             g_hostSession = h.session;
             g_hostAllowsMembers = (flags & proto::kHelloMembersHard) != 0 && !(flags & proto::kHelloServer);
             // A dedicated server: not a player (it sends no state, so it never gets a ghost or a list entry).
@@ -1523,6 +1531,7 @@ bool startLocked(uint16_t port, const std::string& join, float loopbackOffset, c
         g_helloNow = false;
         g_heardFromHost = false;
         g_hostSession = 0;
+        g_retiredHostSessions.clear();
         g_hostTimeOfDayAt = 0;
         g_serverName.clear();
         g_joinCode.clear();

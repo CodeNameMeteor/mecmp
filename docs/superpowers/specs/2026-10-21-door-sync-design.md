@@ -57,11 +57,14 @@ Reports and state are retried, coalesced and bounded; periodic interest recovers
 after an interruption. State retained by a client can wait for the object to load.
 
 Authority logic is shared by the player host and dedicated relay. Limits: 8192
-remembered doors, 1024 tracked doors per peer, 128 outstanding local reports,
+remembered doors, 1024 unacknowledged door states per peer, 128 outstanding local reports,
 4 door packets per peer per 100 ms, 250 ms retry spacing and 10 s retry windows.
 Never silently evict a remembered opening and present it as closed. An exhausted
 limit rejects the new entry and is visible in diagnostics. Session reset clears
-authority state. Movement sequence numbers are unrelated to door delivery IDs.
+authority state. A 8192-bit delivered-record bitmap per peer lets the authority
+page later doors after ACKs free pending slots. Movement sequence numbers are
+unrelated to door delivery IDs. Interest has a generation and a monotonic heartbeat
+revision so delayed subscription packets cannot reverse a toggle or position.
 
 ## Verification
 

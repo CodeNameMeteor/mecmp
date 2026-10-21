@@ -122,7 +122,39 @@ static void reorderedInterestDoesNotReenable() {
     for(const auto& out:a.tick(700))if(out.peer==2&&out.message.op==Op::State)retry=true;
     CHECK(retry);
 }
+static void moreDoorsThanPendingSlots() {
+    Authority a;Client c;const float point[3]={0,0,0};
+    a.receive(1,interest(),0);std::vector<Key> keys;
+    for(unsigned i=0;i<kMaxPeerDoors+1;++i) {
+        auto key=door((i%64)*.1f);key.placement[11]=static_cast<int32_t>(i/64)*10;
+        keys.push_back(key);a.receive(1,opened(key,i+10),0);
+    }
+    CHECK(a.size()==keys.size());c.interest(1,point,true,0);
+    for(uint32_t now=0;now<60000;now+=100) {
+        for(const auto& m:c.tick(now))a.receive(2,m,now);
+        for(const auto& out:a.tick(now))if(out.peer==2)c.receive(out.message,now);
+    }
+    for(const auto& key:keys)CHECK(c.isOpen(key));
+    c.interest(1,point,false,60000);
+    for(const auto& m:c.tick(60000))a.receive(2,m,60000);
+    for(const auto& out:a.tick(60000))if(out.peer==2)c.receive(out.message,60000);
+    CHECK(c.tick(62000).empty());
+}
+static void pendingStateKeepsLeaveRadius() {
+    Authority a;const auto key=door();a.receive(1,interest(),0);a.receive(1,opened(key),0);a.tick(0);
+    a.receive(2,interest(1,199),100);a.tick(100);
+    auto moved=interest(1,220);moved.revision=2;a.receive(2,moved,110);a.tick(200);
+    bool kept=false;for(const auto& out:a.tick(400))if(out.peer==2&&out.message.op==Op::State)kept=true;
+    CHECK(kept);
+    moved.position[0]=251;moved.revision=3;a.receive(2,moved,410);a.tick(500);
+    for(const auto& out:a.tick(800))CHECK(out.peer!=2);
+    moved.position[0]=220;moved.revision=4;a.receive(2,moved,810);
+    for(const auto& out:a.tick(900))if(out.peer==2)CHECK(out.message.op!=Op::State);
+    moved.position[0]=199;moved.revision=5;a.receive(2,moved,910);
+    bool entered=false;for(const auto& out:a.tick(1000))if(out.peer==2&&out.message.op==Op::State)entered=true;
+    CHECK(entered);
+}
 int main() {
-    identityAndCodec();authorityAndHysteresis();lostReportAndLateArrival();repeatsLimitsAndWrap();reorderedInterestDoesNotReenable();
+    identityAndCodec();authorityAndHysteresis();lostReportAndLateArrival();repeatsLimitsAndWrap();reorderedInterestDoesNotReenable();moreDoorsThanPendingSlots();pendingStateKeepsLeaveRadius();
     std::printf("door tests: %d failure(s)\n",failures);return failures?1:0;
 }

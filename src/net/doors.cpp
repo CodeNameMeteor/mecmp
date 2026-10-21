@@ -102,7 +102,8 @@ void Authority::refresh(Peer& peer) {
     if(!peer.interest.enabled)return;
     for(const auto& item:doors_) {
         if(peer.watched.size()>=kMaxPeerDoors)break;
-        if(item.first.world!=peer.interest.key.world||peer.watched.count(item.first)||distance2(position(item.first),peer.interest.position)>kEnterRadius*kEnterRadius)continue;
+        const auto ordinal=item.second-1;
+        if((peer.delivered[ordinal/64]&(uint64_t(1)<<(ordinal%64)))||item.first.world!=peer.interest.key.world||peer.watched.count(item.first)||distance2(position(item.first),peer.interest.position)>kEnterRadius*kEnterRadius)continue;
         Pending pending;pending.message.op=Op::State;pending.message.key=item.first;pending.message.id=next(nextId_);pending.message.revision=item.second;
         peer.watched.emplace(item.first,pending);
     }
@@ -122,7 +123,7 @@ void Authority::receive(uint32_t id,const Message& message,uint32_t now) {
                 }
             }
         }
-        if(peer.interest.id!=message.id||peer.interest.key.world!=message.key.world||peer.interest.enabled!=message.enabled){peer.watched.clear();peer.control.clear();}
+        if(peer.interest.id!=message.id||peer.interest.key.world!=message.key.world||peer.interest.enabled!=message.enabled){peer.watched.clear();peer.control.clear();peer.delivered.fill(0);}
         peer.interest=message;peer.heard=now;refresh(peer);queue(peer.control,acknowledgment(message));return;
     }
     const auto found=peers_.find(id);if(found==peers_.end())return;
@@ -130,7 +131,11 @@ void Authority::receive(uint32_t id,const Message& message,uint32_t now) {
     if(!peer.interest.enabled||now-peer.heard>kPeerTimeoutMs||message.key.world!=peer.interest.key.world)return;
     if(message.op==Op::Ack&&message.ack==Op::State) {
         auto state=peer.watched.find(message.key);
-        if(!message.rejected&&state!=peer.watched.end()&&state->second.message.id==message.id&&state->second.message.revision==message.revision)state->second.acked=true;
+        if(!message.rejected&&state!=peer.watched.end()&&state->second.message.id==message.id&&state->second.message.revision==message.revision) {
+            const auto ordinal=message.revision-1;
+            peer.delivered[ordinal/64]|=uint64_t(1)<<(ordinal%64);
+            peer.watched.erase(state);refresh(peer);
+        }
         return;
     }
     if(message.op!=Op::Open||distance2(position(message.key),peer.interest.position)>144.f)return;
@@ -151,7 +156,7 @@ std::vector<Delivery> Authority::tick(uint32_t now) {
         for(auto& state:p.watched) {
             auto& pending=state.second;
             if(!p.budget)break;
-            if(pending.acked||pending.exhausted)continue;
+            if(pending.exhausted)continue;
             if(pending.sent&&now-pending.first>kRetryWindowMs){pending.exhausted=true;continue;}
             if(pending.sent&&now-pending.last<kRetryMs)continue;
             if(!pending.sent)pending.first=now;
@@ -179,8 +184,9 @@ bool Client::opened(const Key& key,uint32_t now) {
     reports_.emplace(key,report);return true;
 }
 void Client::receive(const Message& message,uint32_t now) {
-    if(!valid(message)||!interest_.enabled||message.key.world!=interest_.key.world)return;
+    if(!valid(message)||message.key.world!=interest_.key.world)return;
     if(message.op==Op::Ack&&message.ack==Op::Interest&&message.id==interest_.id){haveReply_=true;lastReply_=now;return;}
+    if(!interest_.enabled)return;
     if(message.op==Op::Ack&&message.ack==Op::Open) {
         const auto pending=reports_.find(message.key);
         if(pending==reports_.end()||pending->second.message.id!=message.id)return;
@@ -200,7 +206,7 @@ std::vector<Message> Client::tick(uint32_t now) {
     for(auto it=reports_.begin();it!=reports_.end();) {
         if(now-it->second.created>kRetryWindowMs){++failed_;it=reports_.erase(it);}else ++it;
     }
-    if(haveInterest_&&interest_.key.world&&budget_&&(interestDue_||now-lastInterest_>=kInterestMs)) {
+    if(haveInterest_&&interest_.key.world&&budget_&&(interest_.enabled||!haveReply_)&&(interestDue_||now-lastInterest_>=kInterestMs)) {
         next(interest_.revision);result.push_back(interest_);lastInterest_=now;interestDue_=false;--budget_;
     }
     while(budget_&&!acknowledgments_.empty()){result.push_back(acknowledgments_.front());acknowledgments_.pop_front();--budget_;}

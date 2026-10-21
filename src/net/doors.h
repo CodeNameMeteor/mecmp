@@ -51,7 +51,7 @@ private:
     struct Pending {
         Message message;
         uint32_t first=0,last=0;
-        bool sent=false,acked=false,exhausted=false;
+        bool sent=false,exhausted=false;
     };
     struct Peer {
         Message interest;
@@ -60,6 +60,8 @@ private:
         bool haveBudget=false;
         std::deque<Message> control;
         std::map<Key,Pending> watched;
+        // Open-only revisions are record ordinals 1..kMaxDoors for this session.
+        std::array<uint64_t,(kMaxDoors+63)/64> delivered{};
     };
     std::map<Key,uint32_t> doors_;
     std::map<uint32_t,Peer> peers_;

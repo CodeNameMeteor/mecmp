@@ -125,6 +125,14 @@ constexpr size_t Vtbl_SpawnerSpawn = 0xd0;     // ServerCharacterSpawnEntity::sp
 // nothing when the character is not in that list.
 constexpr size_t Vtbl_SpawnerUnspawn = 0x108;
 constexpr uintptr_t Fn_SpawnerUnspawn = 0x14338e4c0; // both spawner classes
+// Creating a server entity from its data, as the game does when a sublevel spawns its entities
+// (levelSublevel_spawnEntityGroup): creation info, create into a bus, init. MECMP makes its own character
+// spawner this way (level::ownGhostSpawner). Checked separately (fingerprint::checkOwnSpawner): a mismatch only
+// turns the own spawner off.
+constexpr uintptr_t Fn_ServerEntityCreationInfo_ctor = 0x14335cab0; // (ci[0x200], data, bus, const LinearTransform*)
+constexpr uintptr_t Fn_EntityCreator_spawnIntoBus = 0x14335e240;    // (ci, parentBus = 0) -> entity
+constexpr uintptr_t Fn_ServerEntityInitInfo_ctor = 0x14335cb50;     // (info[0x30], 0, 0)
+constexpr uintptr_t Fn_Entity_init = 0x1431661c0;                   // (entity, initInfo)
 constexpr size_t Vtbl_GetComponent = 0x108;    // character->getComponent(TypeInfo*)
 constexpr size_t Vtbl_ApplyCustomize = 0x340;  // PamServerCharacterEntity: apply CustomizeCharacterData
 constexpr size_t Vtbl_ClientSetVisible = 0x3d8; // PamClientCharacterEntity: setVisible(bool)
@@ -136,13 +144,20 @@ constexpr size_t ObjectBlueprint_Object = 0x40;   // EntityData* (type dump; val
 constexpr size_t Component_Collection = 0x08;     // fb::Component: owner's component collection; [0] = owner entity
 constexpr size_t CI_Bus = 0x10;           // EntityCreationInfo
 constexpr size_t CI_Data = 0xd0;          // EntityCreationInfo: the entity's data
+constexpr size_t Spawner_Bus = 0x28;      // the entity bus it lives in (characters it spawns get a child bus of it)
 constexpr size_t Spawner_Data = 0x30;     // CharacterSpawnReferenceObjectData
+constexpr size_t Spawner_BusCounter = 0xf4; // next child bus id when SpawnInfo::busId is -1 (& 0x7f)
 constexpr size_t Spawner_Spawned = 0x148; // vector<character*> begin/end
 constexpr size_t Spawner_Enabled = 0x2a4;
 constexpr size_t SpawnerData_Template = 0x198;   // -> CharacterSpawnTemplateData
 constexpr size_t Template_Customization = 0x18;  // -> CustomizeCharacterData
 constexpr size_t Character_Data = 0x30;          // PamCharacterEntityData
 constexpr size_t Character_Player = 0x250;
+// A character's own entity bus (server and client) and the bus's id within its parent: the id given at creation
+// is stored as (id + 0x1ffff80) & 0x1ffffff (entityObject_initWithParentTransform 0x1431411d0).
+constexpr size_t Character_Bus = 0x28;
+constexpr size_t Bus_Id = 0x58;
+constexpr uint32_t Bus_IdMask = 0x1ffffff;
 constexpr size_t CharData_GhostShader = 0xe8;    // PamCharacterEntityData::PamUseRunnersGhostShader
 constexpr size_t Entity_TransformSpace = 0x38;
 // ServerGameWorld -> its physics, as the ray cast entities' update reads it (0x143a1fd7a and the

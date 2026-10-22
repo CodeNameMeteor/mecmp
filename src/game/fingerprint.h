@@ -7,5 +7,7 @@ namespace mecmp::game::fingerprint {
 
 // Logs every mismatch. True when everything matches.
 bool check();
+// The entity-creation functions the own ghost spawner needs. False (logged) turns only that feature off.
+bool checkOwnSpawner();
 
 } // namespace mecmp::game::fingerprint

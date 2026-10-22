@@ -119,6 +119,12 @@ constexpr uintptr_t Fn_Arena_allocFromMember = 0x142a647d0;      // (&arenaMembe
 constexpr uintptr_t Fn_LocalClientCharacter = 0x1439655f0;       // () -> local PamClientCharacterEntity
 constexpr uintptr_t Fn_RbTreeIncrement = 0x142a34820;            // EASTL rbtree successor
 constexpr size_t Vtbl_SpawnerSpawn = 0xd0;     // ServerCharacterSpawnEntity::spawn(spawner, SpawnInfo*)
+// ServerCharacterSpawnEntity::unspawn(spawner, character, bool destroy, 0): what the game uses to take a replay
+// ghost away (PamServerReplayEntity on StopReplay, 0x1439741d0). Releases a player made for the character, takes it
+// out of the spawner's list (Spawner_Spawned) and destroys it (or keeps it for the spawner's next spawn). Does
+// nothing when the character is not in that list.
+constexpr size_t Vtbl_SpawnerUnspawn = 0x108;
+constexpr uintptr_t Fn_SpawnerUnspawn = 0x14338e4c0; // both spawner classes
 constexpr size_t Vtbl_GetComponent = 0x108;    // character->getComponent(TypeInfo*)
 constexpr size_t Vtbl_ApplyCustomize = 0x340;  // PamServerCharacterEntity: apply CustomizeCharacterData
 constexpr size_t Vtbl_ClientSetVisible = 0x3d8; // PamClientCharacterEntity: setVisible(bool)

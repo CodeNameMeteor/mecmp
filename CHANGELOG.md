@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Ghosts
+- **Unused ghosts are now despawned.** A ghost whose player left is still hidden and kept for the next player (a
+  player who reconnects gets theirs back), but one nobody has taken for 60 s is now taken away through its spawner,
+  the way the game removes a mission's replay ghost (the spawner's unspawn). Before, ghosts were never removed and
+  stayed hidden below the level until it changed. A ghost its spawner no longer lists (the city-ghost spawner
+  sometimes takes one back) is kept as before.
+- The build check also covers the spawner's unspawn.
+
 ### Body pose
 - **Fingers, toes and wrists now move on other players' ghosts.** A ghost used to get only 23 bones of the player's
   pose (head, spine, one hand bone, legs). Now the whole body goes out: fingers, toes and the arm and leg roll (twist)

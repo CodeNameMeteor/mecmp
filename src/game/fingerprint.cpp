@@ -23,6 +23,8 @@ const Slot kSlots[] = {
     {"PamClientCharacterEntity::getComponent", Vtbl_PamClientCharacterEntity, Vtbl_GetComponent, Fn_GetComponent},
     {"PamServerCharacterSpawnEntity::spawn", Vtbl_PamServerCharacterSpawnEntity, Vtbl_SpawnerSpawn, Fn_SpawnerSpawn},
     {"ServerCharacterSpawnEntity::spawn", Vtbl_ServerCharacterSpawnEntity, Vtbl_SpawnerSpawn, Fn_SpawnerSpawn},
+    {"PamServerCharacterSpawnEntity::unspawn", Vtbl_PamServerCharacterSpawnEntity, Vtbl_SpawnerUnspawn, Fn_SpawnerUnspawn},
+    {"ServerCharacterSpawnEntity::unspawn", Vtbl_ServerCharacterSpawnEntity, Vtbl_SpawnerUnspawn, Fn_SpawnerUnspawn},
 };
 
 // The first instructions of functions the mod calls directly. Only position-independent bytes

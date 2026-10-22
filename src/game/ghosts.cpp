@@ -3,6 +3,7 @@
 #include <atomic>
 #include <cstring>
 #include <map>
+#include <unordered_map>
 #include <mutex>
 #include <vector>
 
@@ -31,10 +32,12 @@ constexpr DWORD kMinSpawnGapMs = 200;
 constexpr DWORD kClaimWindowMs = 1500;  // client objects created this soon after our spawn are ours
 constexpr uint64_t kSettleTicks = 90;   // ~3 s after a level starts before spawning
 constexpr uint64_t kPlayerSettleTicks = 45; // ~1.5 s after the player's character appears (see tick)
-// Ghost entities are never destroyed by the mod (no known safe despawn call): a ghost whose player
-// left is hidden and handed to the next player that needs one. So the level holds at most as many
-// ghosts as players were ever there at the same time, and never more than this.
+// A ghost whose player left is hidden and handed to the next player that needs one (a player who
+// reconnects gets theirs back). One that nobody has taken for kDespawnAfterMs is despawned through its
+// spawner, as the game takes a replay ghost away (see despawnGhost). The level never holds more than
+// kMaxGhosts.
 constexpr size_t kMaxGhosts = 15;
+constexpr DWORD kDespawnAfterMs = 60000;
 // Hiding the client character leaves its hair drawn (a separate mesh setVisible does not reach).
 // So a ghost being hidden is also moved this far below where it was, for long enough to replicate.
 constexpr float kParkDepth = 1000.f;
@@ -94,6 +97,9 @@ net::PlayerState parkedState(const Ghost& g) {
 
 std::mutex g_m;               // guards g_ghosts (client hooks read/write the client fields)
 std::vector<Ghost> g_ghosts;
+// Since when each ghost's player has been away (by character; g_m). 0: it could not be despawned (no longer in
+// its spawner's list): it stays, hidden, for the next player.
+std::unordered_map<void*, DWORD> g_freeSince;
 std::atomic<uint32_t> g_pendingPeer{0};
 std::atomic<DWORD> g_pendingAt{0};
 std::atomic<uintptr_t> g_ghostCharData{0}; // the ghost blueprint's PamCharacterEntityData (of the current spawner)
@@ -591,6 +597,30 @@ const char* inSpawnerList(void* spawner, void* ch) {
     return "not in its spawner's list";
 }
 
+// Whether `ch` is in its spawner's list of spawned characters (Spawner_Spawned). Server game thread.
+bool spawnerHolds(void* spawner, void* ch) {
+    uintptr_t list[2] = {};
+    if (!spawner || !mem::read(reinterpret_cast<uintptr_t>(spawner) + Spawner_Spawned, list, sizeof(list)) || list[1] < list[0] ||
+        (list[1] - list[0]) / 8 > 64)
+        return false;
+    for (uintptr_t it = list[0]; it < list[1]; it += 8)
+        if (mem::readOr<uintptr_t>(it) == reinterpret_cast<uintptr_t>(ch)) return true;
+    return false;
+}
+
+// Takes a ghost away the way the game takes away a replay ghost: PamServerReplayEntity, on StopReplay,
+// calls its character spawner's unspawn (vtable +0x108) with (spawner, character, 1, 0) from its update
+// (0x1439724d0 -> 0x1439741d0). Only for a character still in the spawner's list (otherwise the call does
+// nothing). Server game thread. True when the character left the list.
+bool despawnGhost(void* spawner, void* ch) {
+    if (!level::spawnerAlive(spawner) || !spawnerHolds(spawner, ch)) return false;
+    const uintptr_t vt = mem::readOr<uintptr_t>(reinterpret_cast<uintptr_t>(spawner));
+    if (!vt || mem::readOr<uintptr_t>(vt + Vtbl_SpawnerUnspawn) != rva(Fn_SpawnerUnspawn)) return false;
+    using UnspawnFn = void (*)(void*, void*, bool, void*);
+    reinterpret_cast<UnspawnFn>(rva(Fn_SpawnerUnspawn))(spawner, ch, true, nullptr);
+    return !spawnerHolds(spawner, ch);
+}
+
 // Diagnostic: why a ghost counts as gone (it is then spawned again).
 void logLostGhost(const Ghost& g, uintptr_t expectedData) {
     const uintptr_t ch = reinterpret_cast<uintptr_t>(g.character);
@@ -849,6 +879,48 @@ void tick(uint64_t tick, uint64_t ticksInLevel) {
         }
     }
 
+    // Despawn ghosts nobody has driven for kDespawnAfterMs (not while ghosts are paused: F12 hides them all,
+    // and F7 should bring the same ones back). The entry goes first, so no hook uses the character after it.
+    if (!g_paused) {
+        std::vector<Ghost> going;
+        {
+            std::lock_guard<std::mutex> lock(g_m);
+            const DWORD now = GetTickCount();
+            for (size_t i = 0; i < g_ghosts.size();) {
+                Ghost& g = g_ghosts[i];
+                if (!g.character || isPresent(players, g.peer)) {
+                    g_freeSince.erase(g.character);
+                    ++i;
+                    continue;
+                }
+                auto it = g_freeSince.find(g.character);
+                if (it == g_freeSince.end()) {
+                    g_freeSince[g.character] = now ? now : 1;
+                    ++i;
+                    continue;
+                }
+                const bool due = it->second != 0 && now - it->second >= kDespawnAfterMs && g.hidden && !parking(g);
+                if (!due) {
+                    ++i;
+                    continue;
+                }
+                if (!spawnerHolds(g.spawner, g.character)) { // the spawner took it back: the call would do nothing
+                    it->second = 0;                          // kept, hidden, for the next player
+                    ++i;
+                    continue;
+                }
+                going.push_back(g);
+                g_freeSince.erase(it);
+                g_ghosts.erase(g_ghosts.begin() + static_cast<long>(i));
+            }
+        }
+        for (const Ghost& g : going) {
+            const bool ok = despawnGhost(g.spawner, g.character);
+            MLOG("ghost: ghost of player %08x %s after %lu s unused", g.peer, ok ? "despawned" : "could not be despawned",
+                 static_cast<unsigned long>(kDespawnAfterMs / 1000));
+        }
+    }
+
     // The game deletes a ghost spawned in the first moments after the player's own character appears
     // (seen 0.6 s after it, every level load; the next spawn stays). Wait a little after that (1.5 s; a ghost the
     // game deletes anyway is found gone and spawned again).
@@ -1022,6 +1094,7 @@ void tick(uint64_t tick, uint64_t ticksInLevel) {
 void levelChanged() {
     std::lock_guard<std::mutex> lock(g_m);
     g_ghosts.clear();
+    g_freeSince.clear();
     g_pendingAt = 0;
     g_lastSpawnAt = 0;
     g_lastSpawnFailed = false;

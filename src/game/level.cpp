@@ -11,6 +11,7 @@
 
 #include "core/config.h"
 #include "core/log.h"
+#include "game/fingerprint.h"
 #include "game/models.h"
 
 namespace mecmp::game::level {
@@ -33,6 +34,16 @@ constexpr int kMaxSpawnFails = 3;
 std::mutex g_patchM;
 std::vector<std::pair<uintptr_t, uintptr_t>> g_playerPatched;
 bool g_playerPatchOff = false;
+// The ghost spawner MECMP made for itself (ownGhostSpawner): a copy of the city-ghost spawner (same data, same
+// bus), so ghosts no longer come from the spawner whose last character is the game's "Your Echo". Server game
+// thread only, except the hook check (g_makingOwn is only true inside that thread's own creation call).
+void* g_ownSpawner = nullptr;
+void* g_ownFrom = nullptr;          // the city-ghost spawner it was copied from
+uintptr_t g_ownFromData = 0;
+DWORD g_ownFailedAt = 0;            // last failed creation (retried after kOwnRetryMs)
+bool g_ownOff = false;              // gave no character: ghosts use the city-ghost spawner until the level changes
+thread_local bool g_makingOwn = false;
+constexpr DWORD kOwnRetryMs = 30000;
 
 bool clientCompAlive(uintptr_t c) {
     uintptr_t vt = 0;
@@ -177,6 +188,9 @@ void considerSpawner(void* entity, uintptr_t data, bool fromScan) {
 
 void onSpawnerCreated(void* ci, void* entity) {
     if (!ci || !entity) return;
+    // Our own spawner shares the city-ghost spawner's data: as a candidate it would make that one look pooled
+    // (chooseGhostSpawner prefers a spawner whose data is its own).
+    if (g_makingOwn) return;
     considerSpawner(entity, mem::readOr<uintptr_t>(reinterpret_cast<uintptr_t>(ci) + CI_Data), false);
 }
 
@@ -184,6 +198,11 @@ void onForeignClientReplayComp(void* comp) {
     std::lock_guard<std::mutex> lock(g_m);
     if (g_clientComps.size() >= 64) g_clientComps.erase(g_clientComps.begin());
     g_clientComps.push_back(comp);
+}
+
+void forgetClientReplayComp(void* comp) {
+    std::lock_guard<std::mutex> lock(g_m);
+    g_clientComps.erase(std::remove(g_clientComps.begin(), g_clientComps.end(), comp), g_clientComps.end());
 }
 
 bool complete() {
@@ -225,7 +244,13 @@ void scanForMissing() {
     // Ghost spawners: prefer one whose data is unique (the level's city-ghost spawner) over the
     // pooled replay-marker spawners that share one data object.
     std::vector<std::pair<uintptr_t, uintptr_t>> ghosts; // entity, data
+    void* own = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(g_m);
+        own = g_ownSpawner;
+    }
     for (uintptr_t e : spawners) {
+        if (reinterpret_cast<void*>(e) == own) continue;
         const uintptr_t data = mem::readOr<uintptr_t>(e + Spawner_Data);
         const uintptr_t bp = data ? mem::readOr<uintptr_t>(data + ReferenceObjectData_Blueprint) : 0;
         std::string name;
@@ -350,6 +375,11 @@ void reset() {
         g_ghostChosen = false;
         g_spawnFails.clear();
         g_badSpawners.clear();
+        g_ownSpawner = nullptr; // level data: the level's buses (ours lives in one) go with it
+        g_ownFrom = nullptr;
+        g_ownFromData = 0;
+        g_ownFailedAt = 0;
+        g_ownOff = false;
     }
     models::reset();
 }
@@ -390,6 +420,73 @@ void* playerSpawner() {
 void* ghostSpawner() {
     std::lock_guard<std::mutex> lock(g_m);
     return g_ghostSpawner;
+}
+
+void* ownGhostSpawner() {
+    static const bool codeOk = fingerprint::checkOwnSpawner();
+    if (!codeOk || !config::get()->ownSpawner) return nullptr;
+    void* city = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(g_m);
+        if (g_ownOff) return nullptr;
+        city = g_ghostSpawner;
+        // Still the copy of the current city-ghost spawner (same object, same data: memory is reused)?
+        if (g_ownSpawner && g_ownFrom == city && spawnerAliveUnlocked(g_ownSpawner) &&
+            mem::readOr<uintptr_t>(reinterpret_cast<uintptr_t>(g_ownSpawner) + Spawner_Data) == g_ownFromData)
+            return g_ownSpawner;
+        if (g_ownFailedAt && GetTickCount() - g_ownFailedAt < kOwnRetryMs) return nullptr;
+    }
+    if (!spawnerAlive(city)) return nullptr;
+    const uintptr_t c = reinterpret_cast<uintptr_t>(city);
+    const uintptr_t data = mem::readOr<uintptr_t>(c + Spawner_Data), bus = mem::readOr<uintptr_t>(c + Spawner_Bus);
+    auto fail = [&](const char* why) -> void* {
+        MLOG("level: own ghost spawner not made (%s; data %p, bus %p): ghosts come from the city-ghost spawner %p", why,
+             reinterpret_cast<void*>(data), reinterpret_cast<void*>(bus), city);
+        std::lock_guard<std::mutex> lock(g_m);
+        g_ownFailedAt = GetTickCount() ? GetTickCount() : 1;
+        return nullptr;
+    };
+    if (!data || !bus) return fail("the city-ghost spawner's data or bus is unknown");
+    // As the game creates a sublevel's entities (levelSublevel_spawnEntityGroup): creation info, create into the
+    // city spawner's bus (the data picks the creator: the spawner factory), init.
+    alignas(16) uint8_t ci[0x200] = {};
+    LinearTransform t{};
+    t.right[0] = t.up[1] = t.forward[2] = t.trans[3] = 1.f;
+    reinterpret_cast<void (*)(uint8_t*, uintptr_t, uintptr_t, const LinearTransform*)>(rva(Fn_ServerEntityCreationInfo_ctor))(ci, data, bus, &t);
+    g_makingOwn = true;
+    void* const e = reinterpret_cast<void* (*)(uint8_t*, uintptr_t)>(rva(Fn_EntityCreator_spawnIntoBus))(ci, 0);
+    g_makingOwn = false;
+    if (!e) return fail("the game created nothing (entity spawning off?)");
+    if (!spawnerAlive(e) || mem::readOr<uintptr_t>(reinterpret_cast<uintptr_t>(e) + Spawner_Data) != data)
+        return fail("the created entity is not a spawner with that data"); // left as it is: not ours to destroy
+    alignas(16) uint8_t init[0x40] = {};
+    reinterpret_cast<void (*)(uint8_t*, uint64_t, uint64_t)>(rva(Fn_ServerEntityInitInfo_ctor))(init, 0, 0);
+    reinterpret_cast<void (*)(void*, uint8_t*)>(rva(Fn_Entity_init))(e, init);
+    poke<uint8_t>(reinterpret_cast<uintptr_t>(e) + Spawner_Enabled, 1); // ours: always enabled, nothing else uses it
+    uintptr_t list[2] = {};
+    mem::read(reinterpret_cast<uintptr_t>(e) + Spawner_Spawned, list, sizeof(list));
+    MLOG("level: own ghost spawner %p made from city-ghost spawner %p (data %p, bus %p; holds %llu after init)", e, city,
+         reinterpret_cast<void*>(data), reinterpret_cast<void*>(bus),
+         static_cast<unsigned long long>(list[1] >= list[0] ? (list[1] - list[0]) / 8 : 0));
+    std::lock_guard<std::mutex> lock(g_m);
+    g_ownSpawner = e;
+    g_ownFrom = city;
+    g_ownFromData = data;
+    g_ownFailedAt = 0;
+    return e;
+}
+
+void* madeOwnGhostSpawner() {
+    std::lock_guard<std::mutex> lock(g_m);
+    return spawnerAliveUnlocked(g_ownSpawner) ? g_ownSpawner : nullptr;
+}
+
+void ownSpawnerFailed(void* spawner) {
+    std::lock_guard<std::mutex> lock(g_m);
+    if (!spawner || spawner != g_ownSpawner || g_ownOff) return;
+    g_ownOff = true;
+    MLOG("level: own ghost spawner %p gave no character; ghosts come from the city-ghost spawner until the level changes",
+         spawner);
 }
 
 bool spawnerAlive(void* spawner) {

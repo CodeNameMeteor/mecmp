@@ -49,6 +49,20 @@ const Code kCode[] = {
     {"rbtree increment", Fn_RbTreeIncrement, 3, {0x48, 0x8B, 0x09, 0x48, 0x85, 0xC9, 0x74, 0x19}, 8},
 };
 
+// The functions the own ghost spawner is made with (level::ownGhostSpawner). Not part of check(): a mismatch
+// only turns that feature off, ghosts then come from the city-ghost spawner as before.
+const Code kOwnSpawnerCode[] = {
+    // mov rbx,r9; mov r9d,90C3A20Fh (the creation info's base ctor argument)
+    {"ServerEntityCreationInfo ctor", Fn_ServerEntityCreationInfo_ctor, 0x19, {0x49, 0x8B, 0xD9, 0x41, 0xB9, 0x0F, 0xA2, 0xC3, 0x90}, 9},
+    // mov rax,rsp; push rdi; sub rsp,70h; mov qword [rax-48h],-2
+    {"entityCreator spawnIntoBus", Fn_EntityCreator_spawnIntoBus, 0,
+     {0x48, 0x8B, 0xC4, 0x57, 0x48, 0x83, 0xEC, 0x70, 0x48, 0xC7, 0x40, 0xB8, 0xFE, 0xFF, 0xFF, 0xFF}, 16},
+    // (after lea rax,[vtable]) mov [rcx+8],rdx; mov [rcx+10h],r8; mov [rcx],rax
+    {"ServerEntityInitInfo ctor", Fn_ServerEntityInitInfo_ctor, 7, {0x48, 0x89, 0x51, 0x08, 0x4C, 0x89, 0x41, 0x10, 0x48, 0x89, 0x01}, 11},
+    // mov r8d,[rcx+18h]; mov eax,r8d; shr eax,3; test al,1; jnz +12h
+    {"Entity init", Fn_Entity_init, 0, {0x44, 0x8B, 0x41, 0x18, 0x41, 0x8B, 0xC0, 0xC1, 0xE8, 0x03, 0xA8, 0x01, 0x75, 0x12}, 14},
+};
+
 std::string hex(const unsigned char* b, size_t n) {
     std::string s;
     char t[4];
@@ -78,6 +92,19 @@ bool check() {
     }
     if (!bad) MLOG("build check: %llu functions and vtable slots match",
                    static_cast<unsigned long long>(sizeof(kSlots) / sizeof(kSlots[0]) + sizeof(kCode) / sizeof(kCode[0])));
+    return bad == 0;
+}
+
+bool checkOwnSpawner() {
+    int bad = 0;
+    for (const Code& c : kOwnSpawnerCode) {
+        unsigned char got[16] = {};
+        if (!mem::read(rva(c.fn) + c.skip, got, c.n) || memcmp(got, c.bytes, c.n) != 0) {
+            MLOG("build check: %s starts with %s, expected %s (own ghost spawner off)", c.what, hex(got, c.n).c_str(),
+                 hex(c.bytes, c.n).c_str());
+            ++bad;
+        }
+    }
     return bad == 0;
 }
 

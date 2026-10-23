@@ -300,10 +300,13 @@ static void testDelayEstimator() {
 
 static void testLossWindow() {
     protocol::LossWindow w;
+    CHECK(!w.hasSamples(0));
     CHECK(w.percent(0) == 0.f);
     for (int i = 0; i < 90; ++i) w.add(10000 + i * 33.0, i % 10 == 9 ? 1 : 0); // 1 in 10 missed
     CHECK(std::fabs(w.percent(13000) - 100.f * 9 / 99) < 0.01f);
+    CHECK(w.hasSamples(13000));
     CHECK(w.percent(20000) == 0.f); // old seconds no longer count
+    CHECK(!w.hasSamples(20000));
     for (int i = 0; i < 10; ++i) w.add(20000 + i * 33.0, 0);
     CHECK(w.percent(20500) == 0.f);
 }
@@ -1072,7 +1075,99 @@ static void testHelloTimeOfDay() {
     CHECK(t < 0.f);
 }
 
+static void testConnectionMetrics() {
+    StateSequence sequence;
+    CHECK(sequence.accepts(UINT32_MAX - 1));
+    CHECK(sequence.commit(UINT32_MAX - 1) == 0);
+    CHECK(!sequence.accepts(UINT32_MAX - 1) && !sequence.accepts(UINT32_MAX - 2));
+    CHECK(sequence.accepts(1) && sequence.commit(1) == 2);
+    CHECK(!sequence.accepts(UINT32_MAX));
+    Heartbeat heartbeat;
+    CHECK(!heartbeat.connected(0));
+    heartbeat.receive(UINT32_MAX - 100);
+    CHECK(heartbeat.connected(100));
+    CHECK(!heartbeat.connected(kConnectionTimeoutMs));
+    heartbeat.receive(kConnectionTimeoutMs);
+    CHECK(heartbeat.connected(kConnectionTimeoutMs));
+    RoundTrip rtt;
+    CHECK(rtt.value(0) == -1);
+    CHECK(rtt.due(0));
+    rtt.request(7, UINT32_MAX - 20);
+    CHECK(!rtt.due(279));
+    CHECK(!rtt.reply(8, 30));
+    CHECK(rtt.reply(7, 30) && rtt.value(30) == 51);
+    CHECK(!rtt.due(280));
+    CHECK(rtt.due(2000));
+    CHECK(!rtt.reply(7, 40));
+    CHECK(rtt.value(30 + kProbeFreshMs) == -1);
+    rtt.request(9, 100);
+    CHECK(!rtt.reply(9, 100 + kProbeFreshMs + 1));
+}
+
+static void testConnectionPackets() {
+    char buf[protocol::kMaxPacket];
+    const protocol::Header h{protocol::kMagic, protocol::kProtocol, protocol::kTypeProbe, 1, 1};
+    protocol::Probe probe;
+    size_t n = protocol::writeProbe(buf, h, {2, 9, false});
+    CHECK(protocol::readProbe(buf + sizeof(h), n - sizeof(h), probe));
+    CHECK(probe.target == 2 && probe.id == 9 && !probe.reply);
+    for (size_t cut = 0; cut < n - sizeof(h); ++cut)
+        CHECK(!protocol::readProbe(buf + sizeof(h), cut, probe));
+    CHECK(!protocol::readProbe(buf + sizeof(h), n - sizeof(h) + 1, probe));
+    buf[n - 1] = 2;
+    CHECK(!protocol::readProbe(buf + sizeof(h), n - sizeof(h), probe));
+    protocol::Departure departure;
+    for (const auto reason : {protocol::DepartureReason::Left, protocol::DepartureReason::TimedOut,
+                              protocol::DepartureReason::Kicked, protocol::DepartureReason::Banned,
+                              protocol::DepartureReason::SessionClosed}) {
+        n = protocol::writeDeparture(buf, h, {2, reason});
+        CHECK(protocol::readDeparture(buf + sizeof(h), n - sizeof(h), departure));
+        CHECK(departure.player == 2 && departure.reason == reason);
+        CHECK(!protocol::readDeparture(buf + sizeof(h), n - sizeof(h) - 1, departure));
+        CHECK(!protocol::readDeparture(buf + sizeof(h), n - sizeof(h) + 1, departure));
+    }
+    buf[n - 1] = 99;
+    CHECK(!protocol::readDeparture(buf + sizeof(h), n - sizeof(h), departure));
+}
+
+static void testPresenceCodecAndDepartureRetries() {
+    char buf[protocol::kMaxPacket];
+    const protocol::Header h{protocol::kMagic, protocol::kProtocol, protocol::kTypePresence, 1, 2};
+    uint32_t player = 0;
+    const size_t n = protocol::writePresence(buf, h, 7);
+    CHECK(protocol::readPresence(buf + sizeof(h), n - sizeof(h), player) && player == 7);
+    CHECK(!protocol::readPresence(buf + sizeof(h), n - sizeof(h) - 1, player));
+    CHECK(!protocol::readPresence(buf + sizeof(h), n - sizeof(h) + 1, player));
+    protocol::writePresence(buf, h, 0);
+    CHECK(!protocol::readPresence(buf + sizeof(h), n - sizeof(h), player));
+    protocol::Departure departure;
+    const size_t d = protocol::writeDeparture(buf, h, {7, protocol::DepartureReason::SessionReset});
+    CHECK(protocol::readDeparture(buf + sizeof(h), d - sizeof(h), departure));
+    CHECK(departure.reason == protocol::DepartureReason::SessionReset);
+    DepartureQueue<int> queue;
+    const char packet = 'x';
+    queue.add(1, &packet, 1, UINT32_MAX - 50);
+    int sends = 0;
+    const auto send = [&](int to, const char* bytes, size_t size) { CHECK(to == 1 && size == 1 && *bytes == 'x'); ++sends; };
+    queue.pump(48, send);
+    CHECK(sends == 0);
+    queue.pump(49, send);
+    CHECK(sends == 1);
+    queue.pump(148, send);
+    CHECK(sends == 1);
+    queue.pump(149, send);
+    CHECK(sends == 2 && queue.size() == 0);
+    for (size_t i = 0; i <= queue.kLimit; ++i) queue.add(static_cast<int>(i), &packet, 1, 0);
+    CHECK(queue.size() == queue.kLimit);
+    queue.pump(1000, [&](int, const char*, size_t) { ++sends; });
+    CHECK(queue.size() == 0 && sends == 2);
+}
+
 int main() {
+    testPresenceCodecAndDepartureRetries();
+    testConnectionMetrics();
+    testConnectionPackets();
+
     testRendezvous();
     testResult();
     testActivity();

@@ -727,6 +727,12 @@ int serverMain(int argc, char** argv) {
         }
     }
     logLine("server stopping");
+    relay.shutdown();
+    const uint32_t stopAt = nowMs();
+    while (relay.pendingDepartures() && nowMs() - stopAt < 300) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        relay.tick(nowMs());
+    }
     if (webhook.enabled()) webhook.setStatus(liveStatus(o, nullptr));
     if (webhook.enabled() && webhook.config().status)
         webhook.post(u8"\U0001F534 **" + dc::escapeMarkdown(o.relay.name) + "** is offline");

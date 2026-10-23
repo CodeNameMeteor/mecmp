@@ -21,8 +21,8 @@
   server character when only one ghost is waiting for one; that value is the same for every ghost of a spawner, so
   with several waiting the time window decides as before.
 - **Opening the map no longer takes a ghost.** The map plays your echo on the last character of a client spawner,
-  which could be another player's ghost: it stopped and disappeared while the map was open. The game's own character
-  is now kept last in those lists too, as on the server.
+  and that was often another player's ghost (the only one in the list): it stopped and disappeared while the map was
+  open. Ghosts are now kept out of those lists, which then hold only the game's own characters, as without the mod.
 
 ### Body pose
 - **Fingers, toes and wrists now move on other players' ghosts.** A ghost used to get only 23 bones of the player's

@@ -843,15 +843,19 @@ void onClientCharacter(void* ent) {
 void setCharacterDataType(uintptr_t runtimeTypeInfo) { g_tiCharData = runtimeTypeInfo; }
 
 // The map's echo: when the map opens, a client replay entity takes the *last* client character of its client
-// character spawner and plays its recording on it (PamClientReplayEntity on CharacterSpawned, 0x14394ab60). A ghost's
-// client character can be in that list (it was last), and the map then took it: it stopped taking our poses and
-// disappeared while the map was open. Like keepGameCharacterLast on the server: in every client spawner list that
-// holds one of our ghosts and a character of the game's, ours go first and the game's stay last, in their order.
-// Only pointers inside the list move. Client game thread (the replay updater), at most every 0.5 s.
-static void keepGameClientCharactersLast() {
+// character spawner and plays its recording on it (PamClientReplayEntity on CharacterSpawned, 0x14394ab60 ->
+// 0x14394b1d0 -> 0x1432a60e0). Our ghosts' client characters end up in the city-ghost spawner's client list (the
+// client spawner adds every character spawned for it, vtable +0xf8 -> 0x143239bb0), often as its only entry, and the
+// map then took our ghost: it stopped taking our poses and disappeared while the map was open. Reordering could not
+// help when ours was the only one. So our client characters are taken out of every client spawner list, the way the
+// spawner itself removes one (vtable +0x100, 0x143234e20: swap with the last, shorten, +0xd0 = the new last one's bus
+// or 0) but without telling its listeners (our ghost is not going anywhere). That list then holds only the game's
+// characters, as without the mod. Its removal on a real despawn finds nothing and does nothing. Client game thread
+// (the replay updater, where the map's replay runs), at most every 0.25 s.
+static void keepGhostsOutOfClientSpawners() {
     static DWORD lastAt = 0;
     const DWORD now = GetTickCount();
-    if (now - lastAt < 500) return;
+    if (now - lastAt < 250) return;
     lastAt = now;
     std::vector<uintptr_t> mine;
     {
@@ -860,55 +864,34 @@ static void keepGameClientCharactersLast() {
             if (g.clientChar) mine.push_back(reinterpret_cast<uintptr_t>(g.clientChar));
     }
     if (mine.empty()) return;
-    // Diagnostic, once per client character: which client spawner list holds it (the map takes the last one).
-    static std::vector<uintptr_t> noted;
-    std::vector<uintptr_t> found;
-    const auto spawners = level::clientSpawners();
-    for (void* sp : spawners) {
+    for (void* sp : level::clientSpawners()) {
+        const uintptr_t s = reinterpret_cast<uintptr_t>(sp);
         uintptr_t list[2] = {};
-        if (!mem::read(reinterpret_cast<uintptr_t>(sp) + ClientSpawner_Spawned, list, sizeof(list)) || list[1] <= list[0] ||
+        if (!mem::read(s + ClientSpawner_Spawned, list, sizeof(list)) || list[1] <= list[0] || (list[1] - list[0]) % 8 ||
             (list[1] - list[0]) / 8 > 64)
             continue;
-        const size_t n = (list[1] - list[0]) / 8;
+        size_t n = (list[1] - list[0]) / 8;
         uintptr_t items[64];
         if (!mem::read(list[0], items, n * 8)) continue;
-        std::vector<uintptr_t> ours, theirs;
-        for (size_t i = 0; i < n; ++i)
-            (std::find(mine.begin(), mine.end(), items[i]) != mine.end() ? ours : theirs).push_back(items[i]);
-        for (size_t i = 0; i < n; ++i)
-            if (std::find(mine.begin(), mine.end(), items[i]) != mine.end() &&
-                std::find(noted.begin(), noted.end(), items[i]) == noted.end()) {
-                MLOG("ghost: client character %p is in client spawner %p (%llu of %llu)", reinterpret_cast<void*>(items[i]), sp,
-                     static_cast<unsigned long long>(i + 1), static_cast<unsigned long long>(n));
-                found.push_back(items[i]);
-            }
-        if (ours.empty()) continue;
-        if (theirs.empty()) {
-            static DWORD lastNote = 0;
-            if (noteDue(lastNote, 60000))
-                VLOG("ghost: client spawner %p holds only our ghosts (%llu): the map's echo may take one", sp,
-                     static_cast<unsigned long long>(n));
-            continue;
+        size_t removed = 0;
+        for (size_t i = 0; i < n;) {
+            if (std::find(mine.begin(), mine.end(), items[i]) == mine.end()) { ++i; continue; }
+            MLOG("ghost: client character %p taken out of client spawner %p (%llu of %llu), so the map's echo cannot take it",
+                 reinterpret_cast<void*>(items[i]), sp, static_cast<unsigned long long>(i + 1), static_cast<unsigned long long>(n));
+            items[i] = items[n - 1]; // as the game's own removal: the last one takes its place
+            --n;
+            ++removed;
         }
-        if (std::find(ours.begin(), ours.end(), items[n - 1]) == ours.end()) continue; // the game's is last already
-        std::vector<uintptr_t> order = ours;
-        order.insert(order.end(), theirs.begin(), theirs.end());
-        poke(list[0], order.data(), n * 8);
-        MLOG("ghost: client spawner %p list reordered: the game's own character is last again", sp);
+        if (!removed) continue;
+        poke(list[0], items, n * 8);
+        poke<uintptr_t>(s + ClientSpawner_Spawned + 8, list[0] + n * 8);
+        poke<uintptr_t>(s + ClientSpawner_LastBus, n ? mem::readOr<uintptr_t>(items[n - 1] + Character_Bus) : 0);
     }
-    for (uintptr_t c : mine)
-        if (std::find(noted.begin(), noted.end(), c) == noted.end()) {
-            if (std::find(found.begin(), found.end(), c) == found.end())
-                MLOG("ghost: client character %p is in none of the %llu client spawner lists", reinterpret_cast<void*>(c),
-                     static_cast<unsigned long long>(spawners.size()));
-            if (noted.size() > 256) noted.erase(noted.begin());
-            noted.push_back(c);
-        }
 }
 
 void beforeClientReplayUpdate() {
     ++g_updaterCalls;
-    keepGameClientCharactersLast();
+    keepGhostsOutOfClientSpawners();
     renderFrame();
 }
 

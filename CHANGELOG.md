@@ -23,6 +23,8 @@
 - **Opening the map no longer takes a ghost.** The map plays your echo on the last character of a client spawner,
   and that was often another player's ghost (the only one in the list): it stopped and disappeared while the map was
   open. Ghosts are now kept out of those lists, which then hold only the game's own characters, as without the mod.
+- **Ghosts come back after the "Your Echo" screen.** Closing it left other players' ghosts invisible until F7. When a
+  game menu closes, ghosts are now shown again and their look re-applied, as F7 does.
 
 ### Body pose
 - **Fingers, toes and wrists now move on other players' ghosts.** A ghost used to get only 23 bones of the player's

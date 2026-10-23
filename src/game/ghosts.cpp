@@ -11,6 +11,7 @@
 #include "core/config.h"
 #include "core/log.h"
 #include "game/engine.h"
+#include "game/hooks.h"
 #include "game/level.h"
 #include "game/models.h"
 #include "game/motion_stats.h"
@@ -1030,6 +1031,28 @@ void tick(uint64_t tick, uint64_t ticksInLevel) {
     (void)tick;
     const double t0 = nowUs();
     handleRequests();
+    // The "Your Echo" screen (in the map / pause menu) leaves other players' ghosts invisible when it closes (seen
+    // 2026-10-23: the ghost stayed gone until F7, which shows ghosts again and re-applies their look). So when a game
+    // menu closes, each ghost that should be seen is shown again and its look applied again, as F7 does.
+    {
+        static bool menuWas = false;
+        const bool menu = hooks::gameMenuOpen();
+        if (menuWas && !menu) {
+            size_t n = 0;
+            {
+                std::lock_guard<std::mutex> lock(g_m);
+                for (auto& g : g_ghosts)
+                    if (!g.hidden && g.character) {
+                        g.visibleCalls = 0;
+                        g.lookKey.clear();
+                        g.lookTriedAt = 0;
+                        ++n;
+                    }
+            }
+            if (n) MLOG("ghost: a game menu closed: %llu ghost(s) shown again and their look re-applied", static_cast<unsigned long long>(n));
+        }
+        menuWas = menu;
+    }
     std::vector<Present> players; // present now
     for (const auto& r : net::remotes(kHideAfterMs))
         if (r.ageMs < kHideAfterMs) players.push_back({r.id, r.name, r.ageMs, r.look, r.outfit});

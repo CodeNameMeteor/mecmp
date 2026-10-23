@@ -846,6 +846,13 @@ static void testDiscordFormatting() {
     CHECK(dc::messageId("{\"message\": \"Unknown Webhook\"}").empty());
     CHECK(dc::messageId("{\"id\": \"12a\"}").empty());
     CHECK(dc::isMessageId("123") && !dc::isMessageId("") && !dc::isMessageId("1 2"));
+    // The live message moves to the bottom after 10 of our posts, or after 5 minutes with any below it.
+    CHECK(!dc::statusBumpDue(0, 60, 10, 5));     // nothing below it: still the newest, however long ago
+    CHECK(!dc::statusBumpDue(3, 1, 10, 5));
+    CHECK(dc::statusBumpDue(10, 0, 10, 5));      // enough posts
+    CHECK(dc::statusBumpDue(1, 5, 10, 5));       // long enough with one post below
+    CHECK(!dc::statusBumpDue(50, 60, 0, 0));     // both off
+    CHECK(!dc::statusBumpDue(9, 60, 10, 0) && dc::statusBumpDue(10, 0, 10, 0));
     CHECK(dc::withPath("https://discord.com/api/webhooks/1/abc", "/messages/9") == "https://discord.com/api/webhooks/1/abc/messages/9");
     CHECK(dc::withPath("https://discord.com/api/webhooks/1/abc?thread_id=5", "/messages/9") ==
           "https://discord.com/api/webhooks/1/abc/messages/9?thread_id=5");

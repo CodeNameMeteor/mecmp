@@ -63,6 +63,10 @@ public_address=play.example.com:47800
 ; (kept across restarts: its id is saved in webhook_status_id_file, next to the log)
 webhook_live=1
 webhook_status_id_file=webhook_status_id.txt
+; the live message moves back to the bottom of the channel (posted again, the old one deleted) once this many
+; of the server's own posts are below it, or after this many minutes with any of them below it (0 = never)
+webhook_live_bump_after=10
+webhook_live_bump_minutes=5
 ; posts (0 turns one off): players joining and leaving, server online / offline, finished dashes and
 ; time trials (with the time the player's game reports)
 webhook_joins=1

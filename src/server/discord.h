@@ -31,6 +31,11 @@ struct Config {
     bool results = true;          // finished dashes and time trials (as players report them)
     bool live = true;             // one status message (who is online), edited in place as players come and go
     std::string statusIdFile;     // where that message's id is kept, so a restart edits the same one
+    // The live message is moved back to the bottom of the channel (posted again, the old one deleted) once this
+    // many of our own posts are below it (0 = never for that reason)...
+    int statusBumpAfter = 10;
+    // ...or once this many minutes have passed with at least one of our posts below it (0 = never for that reason).
+    int statusBumpMinutes = 5;
     // Where the ids of this session's posts (joins, leaves, finished runs) are kept until the server is empty
     // again and they are deleted, so a restart (or a stop with Discord slow to answer) still cleans them up.
     std::string trackFile;
@@ -49,6 +54,9 @@ double retryAfter(const std::string& body, double fallback);
 // Splits queued lines into posts of at most `limit` characters (lines longer than that are cut).
 std::deque<std::string> pack(std::deque<std::string> lines, size_t limit = 1900);
 bool isMessageId(const std::string& id);         // a Discord snowflake: digits only
+// Is the live status message due to move back to the bottom? `below`: our posts since it was posted;
+// `minutes`: how long ago it was posted. A webhook cannot see other people's messages, so only ours count.
+bool statusBumpDue(int below, double minutes, int bumpAfter, int bumpMinutes);
 std::string messageId(const std::string& body);  // the "id" of a posted message (?wait=true answer); "" if none
 std::string withPath(const std::string& url, const std::string& more);   // inserted before any ?query
 std::string withQuery(const std::string& url, const std::string& param); // ?param or &param
@@ -96,7 +104,10 @@ private:
     void run();
     // Edits the live message; false if it was not sent (retry later), including when a rate limit would wait
     // past `deadline`.
-    bool sendStatus(const std::string& text, clock::time_point& nextPost, clock::time_point deadline);
+    // `bump`: post the text as a new message at the bottom and delete the old one, instead of editing it.
+    bool sendStatus(const std::string& text, clock::time_point& nextPost, clock::time_point deadline, bool bump = false);
+    bool bumpDue(clock::time_point now) const;
+    clock::time_point bumpAt() const; // when bumpDue() turns true by time alone (max() if it cannot)
     // Posts `posts` in order; with `track`, the id of each posted message goes to activity_.
     void sendPosts(std::deque<std::string> posts, bool track, clock::time_point& nextPost, clock::time_point giveUp);
     // Deletes the messages in toDelete_ (those left over are kept for the next pass, unless stopping).
@@ -117,6 +128,10 @@ private:
     std::string statusText_;
     bool statusDirty_ = false;
     std::string statusId_; // the status message (worker thread only)
+    // Our posts below the status message (worker thread only): lines that stay, and session activity (deleted at
+    // endSession, so it stops counting then), and when the status message was posted.
+    int linesBelowStatus_ = 0, activityBelowStatus_ = 0;
+    clock::time_point statusPostedAt_ = clock::now();
     bool stop_ = false;
     bool running_ = false;
     std::thread thread_;

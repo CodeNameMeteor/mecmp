@@ -5,6 +5,8 @@
 
 namespace gd = mecmp::game::doors;
 namespace net = mecmp::net;
+static bool aimAvailable = false;
+static float aimX = 0;
 namespace mecmp::game::level {
 uintptr_t serverWorld() {
     return 0;
@@ -17,13 +19,21 @@ bool inFrontEnd() {
 }
 } // namespace mecmp::game::level
 namespace mecmp::game::camera {
-bool read(CameraView&) {
-    return false;
+bool read(CameraView& out) {
+    out.pos[0] = 1.15f;
+    out.pos[1] = 1.6f;
+    out.pos[2] = 2;
+    out.forward[2] = 1;
+    return aimAvailable;
 }
 } // namespace mecmp::game::camera
 namespace mecmp::game::raycast {
-bool cast(const float*, const float*, Hit&) {
-    return false;
+bool cast(const float*, const float*, Hit& out) {
+    out.pos[0] = aimX;
+    out.pos[1] = 1.6f;
+    out.pos[2] = .05f;
+    out.normal[2] = 1;
+    return aimAvailable;
 }
 } // namespace mecmp::game::raycast
 
@@ -190,6 +200,59 @@ int main() {
     gd::levelChanged();
     CHECK(gd::g_work.empty() && gd::g_pendingReads == 0 && gd::g_keys.empty());
     CHECK(gd::g_indexWorld == 0);
+    alignas(16) char secondDriver[256]{}, secondAnt[512]{}, secondParent[32]{}, secondActor[128]{}, secondReader[256]{};
+    memcpy(secondDriver, driver, sizeof(driver));
+    put(secondDriver, 0x38, reinterpret_cast<uintptr_t>(secondAnt) + 0x60);
+    float secondPlacement[16];
+    memcpy(secondPlacement, placement, sizeof(placement));
+    secondPlacement[12] = 2.3f;
+    memcpy(secondDriver + 0x90, secondPlacement, sizeof(secondPlacement));
+    put(secondAnt, 0, mecmp::mem::rva(gd::kAnt));
+    put(secondAnt, 0x158, reinterpret_cast<uintptr_t>(secondParent));
+    put(secondParent, 0x10, reinterpret_cast<uintptr_t>(secondActor));
+    uintptr_t secondHolder = reinterpret_cast<uintptr_t>(secondAnt) + 8;
+    put(secondReader, 0, mecmp::mem::rva(gd::kReader));
+    put(secondReader, 0x88, reinterpret_cast<uintptr_t>(&secondHolder));
+    put(secondReader, 0x30, reinterpret_cast<uintptr_t>(binding));
+    gd::Driver second;
+    CHECK(gd::snapshot(reinterpret_cast<uintptr_t>(secondDriver), second));
+    gd::g_world = net::doors::worldId("test level");
+    gd::g_indexWorld = gd::g_world;
+    gd::g_readyAt = 0;
+    gd::indexDriver(live);
+    gd::indexDriver(second);
+    gd::g_drivers.emplace(second.ant, second);
+    auto& other = gd::g_drivers.at(second.ant);
+    live.closed = other.closed = true;
+    live.sampled = other.sampled = GetTickCount64();
+    gd::g_target = live.key;
+    gd::g_targetAt = GetTickCount64();
+    aimAvailable = true;
+    aimX = 2.3f;
+    const auto writesBeforeAimChange = writes;
+    gd::requestOpen();
+    CHECK(gd::g_request);
+    gd::tick();
+    CHECK(gd::g_work.count(second.ant) && !gd::g_work.at(second.ant).manual);
+    index = 0;
+    gd::readClosed(nullptr, secondReader + 0x30, &index, &property, secondActor + 0x40);
+    CHECK(writes == writesBeforeAimChange);
+    aimX = 0;
+    live.sampled = GetTickCount64();
+    gd::g_target = live.key;
+    gd::g_targetAt = GetTickCount64();
+    gd::requestOpen();
+    gd::tick();
+    CHECK(gd::g_work.count(live.ant) && gd::g_work.at(live.ant).manual);
+    index = 0;
+    gd::readClosed(nullptr, reader + 0x30, &index, &property, actor + 0x40);
+    CHECK(writes == writesBeforeAimChange + 1);
+    gd::requestOpen();
+    CHECK(gd::g_request);
+    Sleep(310);
+    gd::tick();
+    CHECK(!gd::g_work.count(live.ant) || !gd::g_work.at(live.ant).manual);
+    CHECK(writes == writesBeforeAimChange + 1);
     VirtualFree(allocation, 0, MEM_RELEASE);
     net::g_run = false;
     std::printf("door adapter tests: %d failure(s)\n", failures);

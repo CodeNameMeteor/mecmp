@@ -153,7 +153,6 @@ void sessionSection() {
         else ImGui::TextColored(ImVec4(1.f, 0.5f, 0.3f, 1.f), "no connection to host");
     }
     if (running) {
-        ImGui::SameLine();
         if (ImGui::SmallButton("Leave")) net::leave();
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Stop this session and go offline");
     }

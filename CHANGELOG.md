@@ -10,6 +10,8 @@
 - The You tab has a saved **Sync doors** switch, an **Open door ahead** button for one ordinary door
   within 3 metres, and an optional keyboard binding. Turning sync off keeps changes local in both
   directions. Open doors stay open; turning sync back on requests nearby state.
+- Manual requests keep the selected door's identity. Changing aim before the request is processed
+  cancels it instead of opening another door; queued requests expire after 300 ms.
 - Remote openings and the open button are paused during time trials and other runs. Normal game
   interactions still work. A door that refuses an applied pulse gets at most three attempts per loaded
   object. A heap scan is only used if MECMP attached to an already-loaded level.
@@ -24,6 +26,7 @@
   (`webhook_live_bump_after`, `webhook_live_bump_minutes`; 0 turns either off). A webhook cannot see other people's
   messages, so chat alone does not move it.
 ### Connection and players
+- The Leave button stays on its own line when hosting diagnostics wrap, so it remains visible.
 - Timeouts and server resets keep clients reconnecting. Host-confirmed re-admission restores players
   after a missed kick or an unban; older departure packets cannot undo a newer admission.
 - Departure retries are spaced over separate ticks, lifecycle notices are written to the log, and

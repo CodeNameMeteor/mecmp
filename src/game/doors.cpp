@@ -57,6 +57,8 @@ std::atomic<bool> g_installed{false}, g_bankReady{false}, g_request{false};
 std::atomic<uint64_t> g_world{0}, g_readyAt{0}, g_targetAt{0};
 door_policy::Lifecycle g_lifecycle;
 Key g_target;
+Key g_requestedTarget;
+uint64_t g_requestedAt = 0;
 std::atomic<uintptr_t> g_manager{0}, g_table{0}, g_closed{0}, g_pulse{0};
 uint32_t g_closedId = 0, g_pulseId = 0;
 InitFn g_init = nullptr;
@@ -423,6 +425,7 @@ void levelChanged() {
     g_readyAt = GetTickCount64() + 2000;
     g_targetAt = 0;
     g_request = false;
+    g_requestedAt = 0;
     g_work.clear();
     g_pendingReads = 0;
     g_keys.clear();
@@ -456,13 +459,15 @@ void tick() {
     if (now - checked < 100 && !g_request.load())
         return;
     checked = now;
-    const bool requested = g_request.exchange(false) && !inRun;
     raycast::Hit hit{};
     float to[3];
     for (int i = 0; i < 3; ++i)
         to[i] = camera.pos[i] - 3.f * camera.forward[i];
     const bool haveHit = ready && !inRun && raycast::cast(camera.pos, to, hit);
     std::lock_guard<std::mutex> lock(g_mutex);
+    const bool requested = g_request.exchange(false) && !inRun && GetTickCount64() - g_requestedAt <= 300;
+    const Key requestedTarget = g_requestedTarget;
+    g_requestedAt = 0;
     if (g_indexWorld != world) {
         g_indexWorld = world;
         g_keys.clear();
@@ -520,7 +525,7 @@ void tick() {
             if (d.closed && d.sampled && now - d.sampled < 500) {
                 g_target = d.key;
                 g_targetAt = now;
-                if (requested)
+                if (requested && d.key == requestedTarget)
                     g_work[d.ant] = {true, true, false};
             }
             if (!g_work.count(d.ant))
@@ -552,8 +557,14 @@ bool canOpen() {
     return !g_inRun && at && GetTickCount64() - at < 250;
 }
 void requestOpen() {
-    if (canOpen() && !net::inRun())
-        g_request = true;
+    if (net::inRun())
+        return;
+    std::lock_guard<std::mutex> lock(g_mutex);
+    if (!canOpen())
+        return;
+    g_requestedTarget = g_target;
+    g_requestedAt = GetTickCount64();
+    g_request = true;
 }
 std::string status() {
     if (!g_installed)

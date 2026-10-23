@@ -154,7 +154,10 @@ std::atomic<uint32_t> g_look{0};
 std::atomic<uint8_t> g_outfit{0};
 
 std::atomic<bool> g_run{false};
-std::thread g_thread;
+// Never destroyed: a std::thread destroyed while it still holds a thread calls std::terminate() (abort()). The game can
+// exit without the window message that stops this thread (shutdown()), and then the runtime would destroy it at exit,
+// after Windows has already ended the thread. Debug builds showed that as an "abort() has been called" box on exit.
+std::thread& g_thread = *new std::thread;
 SOCKET g_sock = INVALID_SOCKET;
 uint32_t g_session = 0;
 std::atomic<uint32_t> g_hostSession{0}; // JOIN: the host's session id, from its HELLO (0 until heard)

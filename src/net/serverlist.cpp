@@ -26,7 +26,10 @@ std::vector<std::string> g_wanted; // guarded by g_m
 std::vector<Entry> g_entries;      // parallel to g_wanted; guarded by g_m
 bool g_active = false;             // guarded by g_m
 std::atomic<bool> g_run{false}, g_refresh{false};
-std::thread g_thread;
+// Never destroyed: a std::thread destroyed while it still holds a thread calls std::terminate() (abort()). The game can
+// exit without the window message that stops this thread (shutdown()), and then the runtime would destroy it at exit,
+// after Windows has already ended the thread. Debug builds showed that as an "abort() has been called" box on exit.
+std::thread& g_thread = *new std::thread;
 
 struct Probe {
     std::string address;

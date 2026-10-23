@@ -94,6 +94,13 @@ void startSession(const std::string& join) {
     config::change([name, join](config::Settings& c) { c.name = name; c.join = join; });
 }
 
+void updateServerQueries(bool active) {
+    auto addresses = net::servers::split(config::get()->servers);
+    if (std::find(addresses.begin(), addresses.end(), kMainServerAddress) == addresses.end())
+        addresses.emplace_back(kMainServerAddress);
+    net::servers::update(addresses, active);
+}
+
 void quickJoinSection() {
     const bool joining = net::running() && !net::hosting() && config::get()->join == kMainServerAddress;
     const bool connected = joining && net::connectedToHost();
@@ -108,6 +115,20 @@ void quickJoinSection() {
     ImGui::EndDisabled();
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
         ImGui::SetTooltip("%s", kMainServerAddress);
+    const auto entries = net::servers::snapshot();
+    const auto server = std::find_if(entries.begin(), entries.end(), [](const auto& e) {
+        return e.address == kMainServerAddress;
+    });
+    if (server != entries.end() && server->answered) {
+        if (server->pingMs >= 0)
+            ImGui::TextWrapped("Players: %d/%d | Ping: %d ms", server->players, server->maxPlayers, server->pingMs);
+        else
+            ImGui::TextWrapped("Players: %d/%d | Ping: n/a", server->players, server->maxPlayers);
+        if (server->protocol != net::protocol::kProtocol)
+            ImGui::TextWrapped("This server uses a different MECMP version.");
+    } else {
+        ImGui::TextWrapped("Players: n/a | Ping: n/a (no recent reply)");
+    }
     ImGui::Spacing();
 }
 
@@ -221,8 +242,10 @@ void serversSection() {
     ImGui::SeparatorText("Servers");
     const auto cfg = config::get();
     std::vector<std::string> saved = net::servers::split(cfg->servers);
-    net::servers::update(saved, true);
-    const auto entries = net::servers::snapshot();
+    auto entries = net::servers::snapshot();
+    entries.erase(std::remove_if(entries.begin(), entries.end(), [&saved](const auto& e) {
+        return std::find(saved.begin(), saved.end(), e.address) == saved.end();
+    }), entries.end());
     std::string remove;
     if (entries.empty()) ImGui::TextDisabled("No servers saved yet: add one by its address below.");
     if (!entries.empty() &&
@@ -1773,7 +1796,7 @@ void draw(bool open) {
         g_hintUntil = GetTickCount() + 10000;
     }
     static bool wasOpen = false;
-    if (wasOpen && !open) net::servers::update(net::servers::split(config::get()->servers), false); // stop asking
+    if (wasOpen && !open) updateServerQueries(false);
     wasOpen = open;
     if (!open) {
         // A short hint after start-up, top-left.
@@ -1787,6 +1810,7 @@ void draw(bool open) {
         }
         return;
     }
+    updateServerQueries(true);
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + vp->WorkSize.y * 0.5f),
                             ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));

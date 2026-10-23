@@ -26,7 +26,9 @@
   (`webhook_live_bump_after`, `webhook_live_bump_minutes`; 0 turns either off). A webhook cannot see other people's
   messages, so chat alone does not move it.
 ### Connection and players
-- The top of the multiplayer menu has a quick-connect button for MECMP server (`34.27.13.116:47800`).
+- The top of the multiplayer menu has a quick-connect button for MECMP server (`34.27.13.116:47800`),
+  with the current player count, player limit and measured ping. Missing replies show `n/a`. Queries
+  share the server browser's polling and stop when the menu closes.
 - The Leave button stays on its own line when hosting diagnostics wrap, so it remains visible.
 - Timeouts and server resets keep clients reconnecting. Host-confirmed re-admission restores players
   after a missed kick or an unban; older departure packets cannot undo a newer admission.

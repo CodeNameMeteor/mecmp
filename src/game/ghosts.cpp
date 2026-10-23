@@ -62,6 +62,7 @@ struct Ghost {
     // The server character's bus id (Character_Bus -> Bus_Id): the client character that has the same one is this
     // ghost's (claimed at once, without the claim window). 0: not known.
     uint32_t serverBusId = 0;
+    int32_t givenBusId = -1;    // the child bus id our own spawner was asked for (SpawnInfo::busId); -1: none
     void* clientChar = nullptr; // client PamClientCharacterEntity
     void* clientComp = nullptr; // client PamClientReplayPlayerComponent
     DWORD spawnedAt = 0;
@@ -528,8 +529,7 @@ int32_t nextBusId(void* spawner) {
         {
             std::lock_guard<std::mutex> lock(g_m);
             for (const auto& g : g_ghosts)
-                used = used || (g.spawner == spawner && g.character &&
-                                g.serverBusId == ((static_cast<uint32_t>(id) + 0x1ffff80u) & Bus_IdMask));
+                used = used || (g.spawner == spawner && g.character && g.givenBusId == id);
         }
         if (!used) return id;
     }
@@ -571,6 +571,7 @@ void* spawnGhost(uint32_t peer, const std::string& name, uint32_t look, uint8_t 
         g.name = name;
         g.spawner = spawner;
         g.ownSpawner = fromOwn;
+        g.givenBusId = info.busId;
         g.spawnedAt = GetTickCount();
         g_ghosts.push_back(g);
     }
@@ -738,8 +739,8 @@ void noteOwnPose(const float (*bones)[8], const uint8_t* idx, uint32_t n) {
 // Client objects are matched to ghosts definitely where that is possible, and by the claim window otherwise:
 // - a client character whose bus id equals a ghost's server character's (serverBusId) is that ghost's;
 // - a replay component belongs to the ghost whose client character owns it (componentOwner).
-// The bus-id match is not confirmed in game yet (the log shows both ids); while it does not match, the claim window
-// (kClaimWindowMs after our spawn) takes the client objects as before.
+// The bus-id match was confirmed in game (2026-10-23: same id on both sides, both objects claimed at once). The claim
+// window (kClaimWindowMs after our spawn) stays as the fallback when it does not match.
 constexpr DWORD kBusIdClaimMs = 15000; // a client character this long after the spawn is no longer matched by id
 
 bool onClientReplayComp(void* comp) {

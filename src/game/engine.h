@@ -94,6 +94,15 @@ constexpr uintptr_t Slot_ClientCharacterFactory = 0x141c3cd80;
 constexpr uintptr_t Slot_CustomizeProjectionFactory = 0x141c7eb40;
 constexpr uintptr_t Fn_CustomizeProjectionCreate = 0x143a83490;
 constexpr uintptr_t Fn_ClientCharacterFactory = 0x143910d20;
+// ClientCharacterSpawnEntity's creator slot and create function (the client side of a character spawner). Its
+// spawned client characters are a vector at +0xb0/+0xb8; the client replay entity (the map's echo) takes the last
+// one (0x1432a60e0 <- 0x14394b1d0, on CharacterSpawned 0xa29c98e6) and starts its replay on that character. Add:
+// vtable +0xf8 (0x143239bb0); remove: vtable +0x100 (0x143234e20).
+constexpr uintptr_t Slot_ClientCharacterSpawnFactory = 0x141b2ad88;
+constexpr uintptr_t Fn_ClientCharacterSpawnFactory = 0x1432a67c0;
+constexpr uintptr_t Vtbl_ClientCharacterSpawnEntity = 0x141b2ac20;
+constexpr size_t ClientSpawner_Spawned = 0xb0;
+constexpr size_t ClientSpawner_LastBus = 0xd0; // the last spawned character's bus (kept by the spawner's add/remove)
 constexpr uintptr_t Slot_ServerWorldPostUpdate = 0x141b42d28; // ServerGameWorld vtable +0x28
 constexpr uintptr_t Fn_ServerWorldPostUpdate = 0x143341ee0;
 
@@ -119,6 +128,20 @@ constexpr uintptr_t Fn_Arena_allocFromMember = 0x142a647d0;      // (&arenaMembe
 constexpr uintptr_t Fn_LocalClientCharacter = 0x1439655f0;       // () -> local PamClientCharacterEntity
 constexpr uintptr_t Fn_RbTreeIncrement = 0x142a34820;            // EASTL rbtree successor
 constexpr size_t Vtbl_SpawnerSpawn = 0xd0;     // ServerCharacterSpawnEntity::spawn(spawner, SpawnInfo*)
+// ServerCharacterSpawnEntity::unspawn(spawner, character, bool destroy, 0): what the game uses to take a replay
+// ghost away (PamServerReplayEntity on StopReplay, 0x1439741d0). Releases a player made for the character, takes it
+// out of the spawner's list (Spawner_Spawned) and destroys it (or keeps it for the spawner's next spawn). Does
+// nothing when the character is not in that list.
+constexpr size_t Vtbl_SpawnerUnspawn = 0x108;
+constexpr uintptr_t Fn_SpawnerUnspawn = 0x14338e4c0; // both spawner classes
+// Creating a server entity from its data, as the game does when a sublevel spawns its entities
+// (levelSublevel_spawnEntityGroup): creation info, create into a bus, init. MECMP makes its own character
+// spawner this way (level::ownGhostSpawner). Checked separately (fingerprint::checkOwnSpawner): a mismatch only
+// turns the own spawner off.
+constexpr uintptr_t Fn_ServerEntityCreationInfo_ctor = 0x14335cab0; // (ci[0x200], data, bus, const LinearTransform*)
+constexpr uintptr_t Fn_EntityCreator_spawnIntoBus = 0x14335e240;    // (ci, parentBus = 0) -> entity
+constexpr uintptr_t Fn_ServerEntityInitInfo_ctor = 0x14335cb50;     // (info[0x30], 0, 0)
+constexpr uintptr_t Fn_Entity_init = 0x1431661c0;                   // (entity, initInfo)
 constexpr size_t Vtbl_GetComponent = 0x108;    // character->getComponent(TypeInfo*)
 constexpr size_t Vtbl_ApplyCustomize = 0x340;  // PamServerCharacterEntity: apply CustomizeCharacterData
 constexpr size_t Vtbl_ClientSetVisible = 0x3d8; // PamClientCharacterEntity: setVisible(bool)
@@ -130,13 +153,21 @@ constexpr size_t ObjectBlueprint_Object = 0x40;   // EntityData* (type dump; val
 constexpr size_t Component_Collection = 0x08;     // fb::Component: owner's component collection; [0] = owner entity
 constexpr size_t CI_Bus = 0x10;           // EntityCreationInfo
 constexpr size_t CI_Data = 0xd0;          // EntityCreationInfo: the entity's data
+constexpr size_t Spawner_Bus = 0x28;      // the entity bus it lives in (characters it spawns get a child bus of it)
 constexpr size_t Spawner_Data = 0x30;     // CharacterSpawnReferenceObjectData
+constexpr size_t Spawner_BusCounter = 0xf4; // next child bus id when SpawnInfo::busId is -1 (& 0x7f)
 constexpr size_t Spawner_Spawned = 0x148; // vector<character*> begin/end
 constexpr size_t Spawner_Enabled = 0x2a4;
 constexpr size_t SpawnerData_Template = 0x198;   // -> CharacterSpawnTemplateData
 constexpr size_t Template_Customization = 0x18;  // -> CustomizeCharacterData
 constexpr size_t Character_Data = 0x30;          // PamCharacterEntityData
 constexpr size_t Character_Player = 0x250;
+// A character's own entity bus (server and client) and the u32 at bus +0x58 (& 0x1ffffff). The server and client
+// characters have the same value, but it is not unique per character: every ghost from one spawner has the same
+// one (the low bits of the spawner's data pointer, seen in game 2026-10-23). It only says "a ghost of this kind".
+constexpr size_t Character_Bus = 0x28;
+constexpr size_t Bus_Id = 0x58;
+constexpr uint32_t Bus_IdMask = 0x1ffffff;
 constexpr size_t CharData_GhostShader = 0xe8;    // PamCharacterEntityData::PamUseRunnersGhostShader
 constexpr size_t Entity_TransformSpace = 0x38;
 // ServerGameWorld -> its physics, as the ray cast entities' update reads it (0x143a1fd7a and the

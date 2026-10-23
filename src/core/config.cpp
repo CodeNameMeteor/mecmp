@@ -137,6 +137,9 @@ constexpr const char* kDefaultIniTail =
     "[ghost]\r\n"
     "; spawn other players' ghosts automatically when their packets arrive\r\n"
     "auto_spawn=1\r\n"
+    "; experimental: 1 = ghosts come from a spawner of the mod's own (the map's echo then takes them); 0 = from the\r\n"
+    ";     level's city-ghost spawner\r\n"
+    "own_spawner=0\r\n"
     "\r\n"
     "[voice]\r\n"
     "; 1 = positional voice through Mumble: players in the same session hear each other from where they\r\n"
@@ -464,6 +467,7 @@ void load(const std::wstring& dir) {
     if (s.name.empty()) s.name = "Runner";
     s.name.resize(net::protocol::utf8PrefixLength(s.name, net::protocol::kMaxNameBytes)); // what goes on the wire
     s.autoSpawn = readInt(ini, L"ghost", L"auto_spawn", 1) != 0;
+    s.ownSpawner = readInt(ini, L"ghost", L"own_spawner", 0) != 0;
     s.look = readString(ini, L"player", L"look", "faith");
     s.lastGhost = readString(ini, L"player", L"last_ghost", "");
     if (lookHash(s.lastGhost) == 0) s.lastGhost.clear();

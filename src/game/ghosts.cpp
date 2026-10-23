@@ -1,14 +1,17 @@
 #include "game/ghosts.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cstring>
 #include <map>
+#include <unordered_map>
 #include <mutex>
 #include <vector>
 
 #include "core/config.h"
 #include "core/log.h"
 #include "game/engine.h"
+#include "game/hooks.h"
 #include "game/level.h"
 #include "game/models.h"
 #include "game/motion_stats.h"
@@ -31,10 +34,12 @@ constexpr DWORD kMinSpawnGapMs = 200;
 constexpr DWORD kClaimWindowMs = 1500;  // client objects created this soon after our spawn are ours
 constexpr uint64_t kSettleTicks = 90;   // ~3 s after a level starts before spawning
 constexpr uint64_t kPlayerSettleTicks = 45; // ~1.5 s after the player's character appears (see tick)
-// Ghost entities are never destroyed by the mod (no known safe despawn call): a ghost whose player
-// left is hidden and handed to the next player that needs one. So the level holds at most as many
-// ghosts as players were ever there at the same time, and never more than this.
+// A ghost whose player left is hidden and handed to the next player that needs one (a player who
+// reconnects gets theirs back). One that nobody has taken for kDespawnAfterMs is despawned through its
+// spawner, as the game takes a replay ghost away (see despawnGhost). The level never holds more than
+// kMaxGhosts.
 constexpr size_t kMaxGhosts = 15;
+constexpr DWORD kDespawnAfterMs = 60000;
 // Hiding the client character leaves its hair drawn (a separate mesh setVisible does not reach).
 // So a ghost being hidden is also moved this far below where it was, for long enough to replicate.
 constexpr float kParkDepth = 1000.f;
@@ -54,6 +59,11 @@ struct Ghost {
     void* character = nullptr;  // server PamServerCharacterEntity
     uintptr_t charData = 0;     // its PamCharacterEntityData when spawned: how it is recognised later
     void* spawner = nullptr;
+    bool ownSpawner = false;    // spawned from the mod's own spawner (level::ownGhostSpawner)
+    // The server character's bus id (Character_Bus -> Bus_Id): the client character that has the same one is this
+    // ghost's (claimed at once, without the claim window). 0: not known.
+    uint32_t serverBusId = 0;
+    int32_t givenBusId = -1;    // the child bus id our own spawner was asked for (SpawnInfo::busId); -1: none
     void* clientChar = nullptr; // client PamClientCharacterEntity
     void* clientComp = nullptr; // client PamClientReplayPlayerComponent
     DWORD spawnedAt = 0;
@@ -94,6 +104,9 @@ net::PlayerState parkedState(const Ghost& g) {
 
 std::mutex g_m;               // guards g_ghosts (client hooks read/write the client fields)
 std::vector<Ghost> g_ghosts;
+// Since when each ghost's player has been away (by character; g_m). 0: it could not be despawned (no longer in
+// its spawner's list): it stays, hidden, for the next player.
+std::unordered_map<void*, DWORD> g_freeSince;
 std::atomic<uint32_t> g_pendingPeer{0};
 std::atomic<DWORD> g_pendingAt{0};
 std::atomic<uintptr_t> g_ghostCharData{0}; // the ghost blueprint's PamCharacterEntityData (of the current spawner)
@@ -138,6 +151,16 @@ void closeClaimIfDone(const Ghost& g) { // under g_m
          static_cast<unsigned long>(GetTickCount() - g_pendingAt.load()));
     g_pendingAt = 0; // nothing the game creates from now on is taken for this ghost's
 }
+// A replay component whose owner (a ghost-data client character) was not claimed yet when it was created: taken by
+// that ghost when its client character is claimed (g_m). The time window may claim it first; then it is dropped.
+struct EarlyComp { uintptr_t owner; void* comp; DWORD at; };
+std::vector<EarlyComp> g_earlyComps;
+// Child bus ids our own spawner gives its characters (SpawnInfo::busId): high in the 7-bit range the game counts
+// in (Spawner_BusCounter & 0x7f), so they do not repeat the ids of the city-ghost spawner's characters, which live
+// in the same parent bus.
+constexpr int32_t kFirstBusId = 0x40, kLastBusId = 0x7f;
+int32_t g_nextBusId = kFirstBusId; // game thread
+std::atomic<DWORD> g_refreshAt1{0}, g_refreshAt2{0}; // gameScreenClosed: when to show ghosts again (0: not asked)
 std::atomic<bool> g_paused{false};
 std::atomic<bool> g_enabled{true};
 std::mutex g_motionM;                  // guards g_motion (written by the game thread, read by status())
@@ -158,6 +181,13 @@ bool clientCharIsGhost(void* ent) {
     uintptr_t vt = 0, data = 0;
     return e && mem::read(e, vt) && vt == rva(Vtbl_PamClientCharacterEntity) && mem::read(e + Character_Data, data) &&
            (!g_ghostCharData.load() || knownCharData(data));
+}
+
+// An entity's bus id within its parent bus (Bus_Id of its own bus at Character_Bus); 0 when unreadable.
+uint32_t busIdOf(uintptr_t ent) {
+    const uintptr_t bus = ent ? mem::readOr<uintptr_t>(ent + Character_Bus) : 0;
+    uint32_t id = 0;
+    return bus && mem::read(bus + Bus_Id, id) ? id & Bus_IdMask : 0;
 }
 
 // The entity a component belongs to: Component +0x08 = the owner's component collection, whose
@@ -491,12 +521,33 @@ void keepGameCharacterLast(void* spawner) {
     }
 }
 
+// A child bus id for the next ghost of our own spawner: the next of kFirstBusId..kLastBusId that no ghost of ours
+// from that spawner has. Game thread.
+int32_t nextBusId(void* spawner) {
+    for (int n = 0; n <= kLastBusId - kFirstBusId; ++n) {
+        const int32_t id = g_nextBusId;
+        g_nextBusId = id >= kLastBusId ? kFirstBusId : id + 1;
+        bool used = false;
+        {
+            std::lock_guard<std::mutex> lock(g_m);
+            for (const auto& g : g_ghosts)
+                used = used || (g.spawner == spawner && g.character && g.givenBusId == id);
+        }
+        if (!used) return id;
+    }
+    return -1; // all taken (more ghosts than kMaxGhosts allows): the spawner's own count
+}
+
 void* spawnGhost(uint32_t peer, const std::string& name, uint32_t look, uint8_t outfit, const net::PlayerState& st) {
-    void* spawner = level::ghostSpawner();
-    if (!level::spawnerAlive(spawner)) {
+    void* const city = level::ghostSpawner();
+    if (!level::spawnerAlive(city)) {
         MLOG("ghost: no ghost spawner to spawn %08x from (not in a level, or not found yet)", peer);
         return nullptr;
     }
+    // Our own spawner when there is one (a copy of the city-ghost spawner), else the city-ghost spawner itself.
+    void* const own = level::ownGhostSpawner();
+    void* const spawner = level::spawnerAlive(own) ? own : city;
+    const bool fromOwn = spawner == own;
     // The data the ghosts are recognised by; put back if this spawner gives no character (a failed spawn from
     // another spawner made every ghost look destroyed: they froze where they were).
     const uintptr_t dataBefore = g_ghostCharData.load();
@@ -511,15 +562,18 @@ void* spawnGhost(uint32_t peer, const std::string& name, uint32_t look, uint8_t 
     SpawnInfo info;
     info.transform = transformFromYaw(st.pos, st.yaw);
     info.useTransform = 1;
+    if (fromOwn) info.busId = nextBusId(spawner);
     uint8_t* enabled = static_cast<uint8_t*>(spawner) + Spawner_Enabled;
     const uint8_t oldEnabled = *enabled;
-    *enabled = 1; // the spawner refuses while disabled; enable it for this one call
+    *enabled = 1; // the spawner refuses while disabled; enable the city one for this one call (ours stays enabled)
     {   // register first: the client objects may be created while spawn() runs
         std::lock_guard<std::mutex> lock(g_m);
         Ghost g;
         g.peer = peer;
         g.name = name;
         g.spawner = spawner;
+        g.ownSpawner = fromOwn;
+        g.givenBusId = info.busId;
         g.spawnedAt = GetTickCount();
         g_ghosts.push_back(g);
     }
@@ -527,20 +581,29 @@ void* spawnGhost(uint32_t peer, const std::string& name, uint32_t look, uint8_t 
     g_pendingAt = GetTickCount();
     using SpawnFn = void* (*)(void*, SpawnInfo*);
     void* ch = (*reinterpret_cast<SpawnFn**>(spawner))[Vtbl_SpawnerSpawn / 8](spawner, &info);
-    *enabled = oldEnabled;
+    if (!fromOwn) *enabled = oldEnabled;
+    const uint32_t busId = ch ? busIdOf(reinterpret_cast<uintptr_t>(ch)) : 0;
     {
         std::lock_guard<std::mutex> lock(g_m);
         for (size_t i = 0; i < g_ghosts.size(); ++i)
             if (g_ghosts[i].peer == peer && !g_ghosts[i].character) {
-                if (ch) g_ghosts[i].character = ch;
-                else g_ghosts.erase(g_ghosts.begin() + static_cast<long>(i));
+                if (ch) {
+                    g_ghosts[i].character = ch;
+                    g_ghosts[i].serverBusId = busId;
+                } else {
+                    g_ghosts.erase(g_ghosts.begin() + static_cast<long>(i));
+                }
                 break;
             }
     }
-    level::spawnResult(spawner, ch != nullptr);
+    if (fromOwn) {
+        if (!ch) level::ownSpawnerFailed(spawner); // the next spawn uses the city-ghost spawner
+    } else {
+        level::spawnResult(spawner, ch != nullptr);
+    }
     if (!ch) {
         g_ghostCharData = dataBefore;
-        MLOG("ghost: the spawner returned no character for %08x", peer);
+        MLOG("ghost: the %s spawner returned no character for %08x", fromOwn ? "own" : "city-ghost", peer);
         return nullptr;
     }
     VLOG("ghost: spawned %p for %08x (look %08x, outfit %u)", ch, peer, look, outfit);
@@ -555,7 +618,7 @@ void* spawnGhost(uint32_t peer, const std::string& name, uint32_t look, uint8_t 
             if (g.character == ch) g.charData = d;
     }
     setTransform(ch, info.transform);
-    keepGameCharacterLast(spawner);
+    if (!fromOwn) keepGameCharacterLast(spawner); // our own spawner holds only our ghosts
     std::string used;
     const std::string key = desiredLook(look, outfit);
     const bool done = applyLook(ch, key, &used);
@@ -574,9 +637,10 @@ void* spawnGhost(uint32_t peer, const std::string& name, uint32_t look, uint8_t 
     if (used.empty()) MLOG("ghost: no look could be applied (the ghost may be invisible)");
     uintptr_t list[2] = {};
     mem::read(reinterpret_cast<uintptr_t>(spawner) + Spawner_Spawned, list, sizeof(list));
-    MLOG("ghost: spawned for player %08x as '%s' (character %p, spawner %p holds %llu, count %d)", peer, used.c_str(), ch,
-         spawner, static_cast<unsigned long long>(list[1] >= list[0] ? (list[1] - list[0]) / 8 : 0),
-         mem::readOr<int32_t>(reinterpret_cast<uintptr_t>(spawner) + 0xf4));
+    MLOG("ghost: spawned for player %08x as '%s' (character %p, bus id %x; %s spawner %p holds %llu, count %d)", peer,
+         used.c_str(), ch, busId, fromOwn ? "own" : "city-ghost", spawner,
+         static_cast<unsigned long long>(list[1] >= list[0] ? (list[1] - list[0]) / 8 : 0),
+         mem::readOr<int32_t>(reinterpret_cast<uintptr_t>(spawner) + Spawner_BusCounter));
     return ch;
 }
 
@@ -589,6 +653,30 @@ const char* inSpawnerList(void* spawner, void* ch) {
     for (uintptr_t it = list[0]; it < list[1]; it += 8)
         if (mem::readOr<uintptr_t>(it) == reinterpret_cast<uintptr_t>(ch)) return "still in its spawner's list";
     return "not in its spawner's list";
+}
+
+// Whether `ch` is in its spawner's list of spawned characters (Spawner_Spawned). Server game thread.
+bool spawnerHolds(void* spawner, void* ch) {
+    uintptr_t list[2] = {};
+    if (!spawner || !mem::read(reinterpret_cast<uintptr_t>(spawner) + Spawner_Spawned, list, sizeof(list)) || list[1] < list[0] ||
+        (list[1] - list[0]) / 8 > 64)
+        return false;
+    for (uintptr_t it = list[0]; it < list[1]; it += 8)
+        if (mem::readOr<uintptr_t>(it) == reinterpret_cast<uintptr_t>(ch)) return true;
+    return false;
+}
+
+// Takes a ghost away the way the game takes away a replay ghost: PamServerReplayEntity, on StopReplay,
+// calls its character spawner's unspawn (vtable +0x108) with (spawner, character, 1, 0) from its update
+// (0x1439724d0 -> 0x1439741d0). Only for a character still in the spawner's list (otherwise the call does
+// nothing). Server game thread. True when the character left the list.
+bool despawnGhost(void* spawner, void* ch) {
+    if (!level::spawnerAlive(spawner) || !spawnerHolds(spawner, ch)) return false;
+    const uintptr_t vt = mem::readOr<uintptr_t>(reinterpret_cast<uintptr_t>(spawner));
+    if (!vt || mem::readOr<uintptr_t>(vt + Vtbl_SpawnerUnspawn) != rva(Fn_SpawnerUnspawn)) return false;
+    using UnspawnFn = void (*)(void*, void*, bool, void*);
+    reinterpret_cast<UnspawnFn>(rva(Fn_SpawnerUnspawn))(spawner, ch, true, nullptr);
+    return !spawnerHolds(spawner, ch);
 }
 
 // Diagnostic: why a ghost counts as gone (it is then spawned again).
@@ -650,49 +738,156 @@ void noteOwnPose(const float (*bones)[8], const uint8_t* idx, uint32_t n) {
     g_ownN = n;
 }
 
+// Client objects are matched to ghosts definitely where that is possible, and by the claim window otherwise:
+// - a client character whose bus id equals a ghost's server character's (serverBusId) is that ghost's;
+// - a replay component belongs to the ghost whose client character owns it (componentOwner).
+// The bus value is the same on both sides (seen 2026-10-23) but not unique: every ghost from one spawner has the same
+// one. So it only decides when exactly one ghost is waiting for its client character (the normal case: spawns wait
+// for the last one's claim); otherwise the claim window (kClaimWindowMs after our spawn) decides, as before.
+constexpr DWORD kBusIdClaimMs = 15000; // a client character this long after the spawn is no longer matched by id
+
 bool onClientReplayComp(void* comp) {
-    if (!comp || !claimWindowOpen()) return false;
-    // Only a component whose owner is a ghost character (B-3). The owner is normally known when the
-    // factory returns; if it is not, fall back to the claim window alone, as before.
+    if (!comp) return false;
     const uintptr_t owner = componentOwner(reinterpret_cast<uintptr_t>(comp));
+    // Only a component whose owner is a ghost character (B-3). The owner is normally known when the factory
+    // returns; if it is not, fall back to the claim window alone, as before.
     if (owner && !clientCharIsGhost(reinterpret_cast<void*>(owner))) return false;
-    const uint32_t peer = g_pendingPeer.load();
     std::lock_guard<std::mutex> lock(g_m);
-    for (auto& g : g_ghosts)
-        if (g.peer == peer && !g.clientComp) {
-            if (owner && g.clientChar && reinterpret_cast<uintptr_t>(g.clientChar) != owner) continue;
-            g.clientComp = comp;
-            MLOG("ghost: player %08x claimed clientComp %p", g.peer, comp);
-            if (!owner) MLOG("ghost: claimed replay component %p without a known owner", comp);
-            closeClaimIfDone(g);
-            return true;
-        }
+    if (owner) { // definite: the ghost whose client character this is
+        for (auto& g : g_ghosts)
+            if (reinterpret_cast<uintptr_t>(g.clientChar) == owner) {
+                if (g.clientComp == comp) return true;
+                if (g.clientComp) break; // already has one: not ours to replace
+                g.clientComp = comp;
+                MLOG("ghost: player %08x claimed clientComp %p (by its owner)", g.peer, comp);
+                closeClaimIfDone(g);
+                return true;
+            }
+    }
+    if (claimWindowOpen()) {
+        const uint32_t peer = g_pendingPeer.load();
+        for (auto& g : g_ghosts)
+            if (g.peer == peer && !g.clientComp) {
+                if (owner && g.clientChar && reinterpret_cast<uintptr_t>(g.clientChar) != owner) continue;
+                g.clientComp = comp;
+                MLOG("ghost: player %08x claimed clientComp %p (claim window)", g.peer, comp);
+                if (!owner) MLOG("ghost: claimed replay component %p without a known owner", comp);
+                closeClaimIfDone(g);
+                return true;
+            }
+    }
+    // A ghost-data character's component that came before the character was claimed: kept for it.
+    if (owner) {
+        const DWORD now = GetTickCount();
+        g_earlyComps.erase(std::remove_if(g_earlyComps.begin(), g_earlyComps.end(),
+                                          [&](const EarlyComp& e) { return now - e.at > kBusIdClaimMs || e.owner == owner; }),
+                           g_earlyComps.end());
+        if (g_earlyComps.size() < 32) g_earlyComps.push_back({owner, comp, now});
+    }
     return false;
 }
 
 void onClientCharacter(void* ent) {
-    if (!ent || !claimWindowOpen()) return;
+    if (!ent) return;
     const uintptr_t data = mem::readOr<uintptr_t>(reinterpret_cast<uintptr_t>(ent) + Character_Data);
-    if (!data || data != g_ghostCharData.load()) return;
-    const uint32_t peer = g_pendingPeer.load();
+    if (!data || !knownCharData(data)) return;
+    const uint32_t clientId = busIdOf(reinterpret_cast<uintptr_t>(ent));
+    bool claimed = false;
     {
         std::lock_guard<std::mutex> lock(g_m);
-        for (auto& g : g_ghosts)
-            if (g.peer == peer && !g.clientChar) {
-                g.clientChar = ent;
-                g.clientCharAt = GetTickCount();
-                setGhostShader(g, g.ghostShader);
-                closeClaimIfDone(g);
-                break;
-            }
+        const DWORD now = GetTickCount();
+        Ghost* pick = nullptr;
+        const char* how = "";
+        if (clientId) { // the one ghost waiting for its client character whose server character has this bus value
+            int matches = 0;
+            for (auto& g : g_ghosts)
+                if (!g.clientChar && g.character && g.serverBusId == clientId && now - g.spawnedAt < kBusIdClaimMs) {
+                    if (!matches++) pick = &g;
+                }
+            if (matches > 1) pick = nullptr; // not unique (same spawner): the claim window decides
+            else if (pick) how = "bus id";
+        }
+        if (!pick && claimWindowOpen() && data == g_ghostCharData.load()) {
+            const uint32_t peer = g_pendingPeer.load();
+            for (auto& g : g_ghosts)
+                if (g.peer == peer && !g.clientChar) {
+                    pick = &g;
+                    how = "claim window";
+                    break;
+                }
+        }
+        if (pick) {
+            Ghost& g = *pick;
+            g.clientChar = ent;
+            g.clientCharAt = now;
+            claimed = true;
+            MLOG("ghost: player %08x claimed client character %p by %s (client bus id %x, server bus id %x%s)", g.peer, ent, how,
+                 clientId, g.serverBusId, clientId == g.serverBusId ? "" : ": differ");
+            for (size_t i = 0; i < g_earlyComps.size(); ++i)
+                if (g_earlyComps[i].owner == reinterpret_cast<uintptr_t>(ent)) {
+                    if (!g.clientComp) {
+                        g.clientComp = g_earlyComps[i].comp;
+                        level::forgetClientReplayComp(g.clientComp);
+                        MLOG("ghost: player %08x claimed clientComp %p (created before its character)", g.peer, g.clientComp);
+                    }
+                    g_earlyComps.erase(g_earlyComps.begin() + static_cast<long>(i));
+                    break;
+                }
+            setGhostShader(g, g.ghostShader);
+            closeClaimIfDone(g);
+        } else if (clientId) {
+            VLOG("ghost: client character %p with ghost data (bus id %x) is not one of ours", ent, clientId);
+        }
     }
-    setClientVisible(ent, true);
+    if (claimed) setClientVisible(ent, true);
 }
 
 void setCharacterDataType(uintptr_t runtimeTypeInfo) { g_tiCharData = runtimeTypeInfo; }
 
+// The map's echo and the "Your Echo" screen: a client replay entity takes the *last* client character of its client
+// character spawner and plays its recording on it (PamClientReplayEntity on CharacterSpawned, 0x14394ab60 ->
+// 0x14394b1d0 -> 0x1432a60e0). Our ghosts' client characters are added to the city-ghost spawner's client list after
+// the game's echo (vtable +0xf8, 0x143239bb0), so the map took our ghost: it stopped taking our poses, and the echo
+// screen showed it. Like keepGameCharacterLast on the server: in every client spawner list that holds one of our
+// ghosts and a character of the game's, ours go first and the game's stay last, in their order. Only pointers inside
+// the list move, and +0xd0 (the last one's bus) stays right because the last one does not change. Client game thread
+// (the replay updater, where the map's replay runs), at most every 0.25 s.
+static void keepGameClientCharactersLast() {
+    static DWORD lastAt = 0;
+    const DWORD now = GetTickCount();
+    if (now - lastAt < 250) return;
+    lastAt = now;
+    std::vector<uintptr_t> mine;
+    {
+        std::lock_guard<std::mutex> lock(g_m);
+        for (const auto& g : g_ghosts)
+            if (g.clientChar) mine.push_back(reinterpret_cast<uintptr_t>(g.clientChar));
+    }
+    if (mine.empty()) return;
+    for (void* sp : level::clientSpawners()) {
+        uintptr_t list[2] = {};
+        if (!mem::read(reinterpret_cast<uintptr_t>(sp) + ClientSpawner_Spawned, list, sizeof(list)) || list[1] <= list[0] ||
+            (list[1] - list[0]) % 8 || (list[1] - list[0]) / 8 > 64)
+            continue;
+        const size_t n = (list[1] - list[0]) / 8;
+        uintptr_t items[64];
+        if (!mem::read(list[0], items, n * 8)) continue;
+        std::vector<uintptr_t> ours, theirs;
+        for (size_t i = 0; i < n; ++i)
+            (std::find(mine.begin(), mine.end(), items[i]) != mine.end() ? ours : theirs).push_back(items[i]);
+        if (ours.empty() || theirs.empty()) continue;
+        if (std::find(ours.begin(), ours.end(), items[n - 1]) == ours.end()) continue; // the game's is last already
+        std::vector<uintptr_t> order = ours;
+        order.insert(order.end(), theirs.begin(), theirs.end());
+        poke(list[0], order.data(), n * 8);
+        poke<uintptr_t>(reinterpret_cast<uintptr_t>(sp) + ClientSpawner_LastBus, mem::readOr<uintptr_t>(order.back() + Character_Bus));
+        MLOG("ghost: client spawner %p list reordered: the game's own character is last again", sp);
+    }
+}
+
 void beforeClientReplayUpdate() {
     ++g_updaterCalls;
+    keepGameClientCharactersLast();
     renderFrame();
 }
 
@@ -831,6 +1026,61 @@ void tick(uint64_t tick, uint64_t ticksInLevel) {
     (void)tick;
     const double t0 = nowUs();
     handleRequests();
+    // The "Your Echo" screen (in the map / pause menu) leaves other players' ghosts invisible when it closes (seen
+    // 2026-10-23: the ghost stayed gone until F7, which shows ghosts again and re-applies their look). So when a game
+    // menu closes, each ghost that should be seen is shown again and its look applied again, as F7 does.
+    {
+        static bool menuWas = false;
+        const bool menu = hooks::gameMenuOpen();
+        // The map is not a game menu here (gameMenuOpen stays false for it): its OnHideMap message asks for the same,
+        // at once and again 1 s later (the ghost was seen to vanish just after the map closed).
+        const DWORD now = GetTickCount();
+        bool screenClosed = false;
+        for (auto* due : {&g_refreshAt1, &g_refreshAt2}) {
+            const DWORD at = due->load();
+            if (at && static_cast<int32_t>(now - at) >= 0) {
+                *due = 0;
+                screenClosed = true;
+            }
+        }
+        if ((menuWas && !menu) || screenClosed) {
+            size_t n = 0;
+            {
+                std::lock_guard<std::mutex> lock(g_m);
+                for (auto& g : g_ghosts)
+                    if (!g.hidden && g.character) {
+                        g.visibleCalls = 0;
+                        g.lookKey.clear();
+                        g.lookTriedAt = 0;
+                        ++n;
+                    }
+            }
+            if (n) MLOG("ghost: %s closed: %llu ghost(s) shown again and their look re-applied", screenClosed ? "the map" : "a game menu",
+                        static_cast<unsigned long long>(n));
+        }
+        menuWas = menu;
+    }
+    {   // Diagnostic: the city-ghost spawner's list (the game's echo lives there), on change.
+        static std::string lastText;
+        static void* lastSp = nullptr;
+        void* const city = level::ghostSpawner();
+        uintptr_t list[2] = {};
+        if (level::spawnerAlive(city) && mem::read(reinterpret_cast<uintptr_t>(city) + Spawner_Spawned, list, sizeof(list)) &&
+            list[1] >= list[0] && (list[1] - list[0]) / 8 <= 64) {
+            std::string text;
+            for (uintptr_t it = list[0]; it < list[1]; it += 8) {
+                char b[32];
+                snprintf(b, sizeof(b), " %p", reinterpret_cast<void*>(mem::readOr<uintptr_t>(it)));
+                text += b;
+            }
+            if (city != lastSp || text != lastText) {
+                VLOG("trace: city-ghost spawner %p holds %llu:%s%s", city, static_cast<unsigned long long>((list[1] - list[0]) / 8),
+                     text.c_str(), hooks::gameMenuOpen() ? " [game menu open]" : "");
+                lastSp = city;
+                lastText = text;
+            }
+        }
+    }
     std::vector<Present> players; // present now
     for (const auto& r : net::remotes(kHideAfterMs))
         if (r.ageMs < kHideAfterMs) players.push_back({r.id, r.name, r.ageMs, r.look, r.outfit});
@@ -846,6 +1096,77 @@ void tick(uint64_t tick, uint64_t ticksInLevel) {
             if (!g_ghosts[i].character || level::characterExists(g_ghosts[i].character, own)) { ++i; continue; }
             logLostGhost(g_ghosts[i], own);
             g_ghosts.erase(g_ghosts.begin() + static_cast<long>(i));
+        }
+    }
+
+    // Despawn ghosts nobody has driven for kDespawnAfterMs (not while ghosts are paused: F12 hides them all,
+    // and F7 should bring the same ones back). The entry goes first, so no hook uses the character after it.
+    if (!g_paused) {
+        std::vector<Ghost> going;
+        {
+            std::lock_guard<std::mutex> lock(g_m);
+            const DWORD now = GetTickCount();
+            for (size_t i = 0; i < g_ghosts.size();) {
+                Ghost& g = g_ghosts[i];
+                if (!g.character || isPresent(players, g.peer)) {
+                    g_freeSince.erase(g.character);
+                    ++i;
+                    continue;
+                }
+                auto it = g_freeSince.find(g.character);
+                if (it == g_freeSince.end()) {
+                    g_freeSince[g.character] = now ? now : 1;
+                    ++i;
+                    continue;
+                }
+                const bool due = it->second != 0 && now - it->second >= kDespawnAfterMs && g.hidden && !parking(g);
+                if (!due) {
+                    ++i;
+                    continue;
+                }
+                if (!spawnerHolds(g.spawner, g.character)) { // the spawner took it back: the call would do nothing
+                    it->second = 0;                          // kept, hidden, for the next player
+                    ++i;
+                    continue;
+                }
+                going.push_back(g);
+                g_freeSince.erase(it);
+                g_ghosts.erase(g_ghosts.begin() + static_cast<long>(i));
+            }
+        }
+        for (const Ghost& g : going) {
+            const bool ok = despawnGhost(g.spawner, g.character);
+            MLOG("ghost: ghost of player %08x %s after %lu s unused", g.peer, ok ? "despawned" : "could not be despawned",
+                 static_cast<unsigned long>(kDespawnAfterMs / 1000));
+        }
+    }
+
+    // Our own spawner holds only our ghosts. A character in it that is not one (one the spawner made by itself when it
+    // was initialised, if its data asks for that) is taken away at once, so it neither shows nor stays.
+    {
+        static DWORD lastSweep = 0;
+        void* const own = level::madeOwnGhostSpawner();
+        if (own && GetTickCount() - lastSweep >= 2000) {
+            lastSweep = GetTickCount();
+            uintptr_t list[2] = {};
+            uintptr_t items[64] = {};
+            size_t n = 0;
+            if (mem::read(reinterpret_cast<uintptr_t>(own) + Spawner_Spawned, list, sizeof(list)) && list[1] >= list[0] &&
+                (list[1] - list[0]) / 8 <= 64) {
+                n = (list[1] - list[0]) / 8;
+                if (n && !mem::read(list[0], items, n * 8)) n = 0;
+            }
+            for (size_t i = 0; i < n; ++i) {
+                bool mine = false;
+                {
+                    std::lock_guard<std::mutex> lock(g_m);
+                    for (const auto& g : g_ghosts) mine = mine || reinterpret_cast<uintptr_t>(g.character) == items[i];
+                }
+                if (mine) continue;
+                const bool ok = despawnGhost(own, reinterpret_cast<void*>(items[i]));
+                MLOG("ghost: own spawner %p held character %p that is not a ghost of ours: %s", own,
+                     reinterpret_cast<void*>(items[i]), ok ? "despawned" : "could not be despawned");
+            }
         }
     }
 
@@ -1022,6 +1343,8 @@ void tick(uint64_t tick, uint64_t ticksInLevel) {
 void levelChanged() {
     std::lock_guard<std::mutex> lock(g_m);
     g_ghosts.clear();
+    g_freeSince.clear();
+    g_earlyComps.clear();
     g_pendingAt = 0;
     g_lastSpawnAt = 0;
     g_lastSpawnFailed = false;
@@ -1032,6 +1355,11 @@ void levelChanged() {
 void requestSpawnOrRefresh() { g_reqSpawn = true; }
 void lookListArrived() { retryLooksNow(); }
 void requestHideAll() { g_reqHide = true; }
+void gameScreenClosed() {
+    const DWORD now = GetTickCount();
+    g_refreshAt1 = now ? now : 1;
+    g_refreshAt2 = (now + 1000) ? now + 1000 : 1;
+}
 
 
 uintptr_t clientCharacter(uint32_t peer) {

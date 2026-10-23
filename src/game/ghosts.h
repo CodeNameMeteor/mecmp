@@ -42,6 +42,9 @@ void levelChanged(); // forget ghosts of the old level
 // Requests (executed on the next tick).
 void requestSpawnOrRefresh(); // F7: spawn missing ghosts now / re-apply the look; resumes auto spawning
 void requestHideAll();        // F12: hide all ghosts and pause auto spawning
+// The map closed (OnHideMap; any thread): ghosts are shown again and their look re-applied, as F7 does, at once and
+// once more a moment later.
+void gameScreenClosed();
 // Looks: each ghost shows its player's own look (sent with their name). Changes are picked up by the
 // tick and tried at once. Call this when the echo look list was found: looks that waited for it are
 // tried on the next ticks instead of after the slow retry. Any thread.

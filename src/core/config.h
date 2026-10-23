@@ -98,6 +98,7 @@ struct Settings {
     float playerAudioDistance = 80.f;
     // [ghost]
     bool autoSpawn = true;
+    bool ownSpawner = false;              // experimental: ghosts from a spawner of the mod's own (level::ownGhostSpawner)
     // [ui]
     std::string menuKey = "INSERT";       // any key (ui::keyName's names) or MOUSE3 / MOUSE4 / MOUSE5
     std::string menuPad = "LS+RS";        // gamepad buttons held together, e.g. LS+RS or BACK+Y; empty = none

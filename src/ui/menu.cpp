@@ -18,6 +18,7 @@
 #include "core/config.h"
 #include "game/mumble_link.h"
 #include "game/player_audio.h"
+#include "game/doors.h"
 #include "game/ghosts.h"
 #include "game/ping_point.h"
 #include "game/raycast.h"
@@ -37,6 +38,7 @@
 namespace mecmp::ui::menu {
 namespace {
 
+constexpr const char* kMainServerAddress = "34.27.13.116:47800";
 char g_name[net::protocol::kMaxNameBytes + 1] = {}; // what fits on the wire
 char g_code[64] = {};
 char g_label[config::kWheels][config::kPingSlots][net::protocol::kMaxPingLabelBytes + 1] = {}; // the marker wheels' titles
@@ -45,7 +47,7 @@ char g_reactLabel[config::kPingSlots][net::protocol::kMaxPingLabelBytes + 1] = {
 bool g_inited = false;
 bool g_keyCapture = false; // waiting for a new menu key
 int g_bindCapture = -1;        // which key of the Controls tab is being recorded (see kKeyBinds; -1 = none)
-std::string g_bindNote[11];    // why the last key was refused (empty = nothing to say)
+std::string g_bindNote[12];    // why the last key was refused (empty = nothing to say)
 std::string g_menuKeyNote;     // the same for the menu key
 std::string g_padNote[static_cast<int>(gamepad::Action::Count)]; // the same for each gamepad combination
 gamepad::Action g_padCapture = gamepad::Action::Count; // which gamepad binding is being recorded (Count = none)
@@ -90,6 +92,44 @@ void startSession(const std::string& join) {
     const std::string name = enteredName();
     net::startAsync(cfg->port, join, cfg->loopbackOffset, name);
     config::change([name, join](config::Settings& c) { c.name = name; c.join = join; });
+}
+
+void updateServerQueries(bool active) {
+    auto addresses = net::servers::split(config::get()->servers);
+    if (std::find(addresses.begin(), addresses.end(), kMainServerAddress) == addresses.end())
+        addresses.emplace_back(kMainServerAddress);
+    net::servers::update(addresses, active);
+}
+
+void quickJoinSection() {
+    const bool joining = net::running() && !net::hosting() && config::get()->join == kMainServerAddress;
+    const bool connected = joining && net::connectedToHost();
+    const char* label = connected ? "MECMP server (connected)###mainserver"
+                       : joining ? "MECMP server (connecting...)###mainserver"
+                                 : "Join MECMP server###mainserver";
+    ImGui::BeginDisabled(net::starting() || joining);
+    if (ImGui::Button(label)) {
+        snprintf(g_code, sizeof(g_code), "%s", kMainServerAddress);
+        startSession(kMainServerAddress);
+    }
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip("%s", kMainServerAddress);
+    const auto entries = net::servers::snapshot();
+    const auto server = std::find_if(entries.begin(), entries.end(), [](const auto& e) {
+        return e.address == kMainServerAddress;
+    });
+    if (server != entries.end() && server->answered) {
+        if (server->pingMs >= 0)
+            ImGui::TextWrapped("Players: %d/%d | Ping: %d ms", server->players, server->maxPlayers, server->pingMs);
+        else
+            ImGui::TextWrapped("Players: %d/%d | Ping: n/a", server->players, server->maxPlayers);
+        if (server->protocol != net::protocol::kProtocol)
+            ImGui::TextWrapped("This server uses a different MECMP version.");
+    } else {
+        ImGui::TextWrapped("Players: n/a | Ping: n/a (no recent reply)");
+    }
+    ImGui::Spacing();
 }
 
 void sessionSection() {
@@ -152,7 +192,6 @@ void sessionSection() {
         else ImGui::TextColored(ImVec4(1.f, 0.5f, 0.3f, 1.f), "no connection to host");
     }
     if (running) {
-        ImGui::SameLine();
         if (ImGui::SmallButton("Leave")) net::leave();
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Stop this session and go offline");
     }
@@ -203,8 +242,10 @@ void serversSection() {
     ImGui::SeparatorText("Servers");
     const auto cfg = config::get();
     std::vector<std::string> saved = net::servers::split(cfg->servers);
-    net::servers::update(saved, true);
-    const auto entries = net::servers::snapshot();
+    auto entries = net::servers::snapshot();
+    entries.erase(std::remove_if(entries.begin(), entries.end(), [&saved](const auto& e) {
+        return std::find(saved.begin(), saved.end(), e.address) == saved.end();
+    }), entries.end());
     std::string remove;
     if (entries.empty()) ImGui::TextDisabled("No servers saved yet: add one by its address below.");
     if (!entries.empty() &&
@@ -607,6 +648,17 @@ void privacySection() {
     if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Sends your EA online id and profile name to the players in your session, so their map\n"
                           "shows your Runner Tag where you are. Off: you are not on their maps.");
+    bool doors = cfg->syncDoors;
+    if (ImGui::Checkbox("Sync doors", &doors))
+        config::change([doors](config::Settings& c) { c.syncDoors = doors; });
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Share ordinary door openings with nearby players.\n"
+                          "Off: your openings stay local and other players cannot open your doors.\n"
+                          "Doors already open stay open. Turning this on restores nearby shared state.");
+    ImGui::BeginDisabled(!game::doors::canOpen());
+    if (ImGui::Button("Open door ahead")) game::doors::requestOpen();
+    ImGui::EndDisabled();
+    ImGui::TextDisabled("%s", game::doors::status().c_str());
     bool tod = cfg->syncTimeOfDay;
     if (ImGui::Checkbox("Use the host's time of day", &tod))
         config::change([tod](config::Settings& c) { c.syncTimeOfDay = tod; });
@@ -872,7 +924,7 @@ struct KeyBind {
     bool (*set)(const std::string&);
     int mouse;  // 0 = the keyboard only, 1 = also the middle button and Mouse 4 / 5
 };
-const KeyBind kKeyBinds[11] = {
+const KeyBind kKeyBinds[12] = {
     {"Tap to place a marker. Hold to open the marker wheel.", &config::Settings::pingKey, &ui::setPingKey, 1},
     {"Tap twice to remove the marker you look at (or stand at). Hold for a moment to remove all your markers.",
      &config::Settings::pingClearKey, &ui::setPingClearKey, 1},
@@ -898,6 +950,7 @@ const KeyBind kKeyBinds[11] = {
     {"Hold to open the players panel: right click a player to go to them, click players to pick them and summon "
      "them with the button below (or everyone), 1-9 go to that player. Letting go of the key only closes it.",
      &config::Settings::playersKey, &ui::setPlayersKey, 1},
+    {"Open the ordinary door ahead, within 3 metres.", &config::Settings::doorKey, &ui::setDoorKey, 0},
 };
 
 void keyRow(const config::Settings& cfg, int which) {
@@ -1569,6 +1622,7 @@ void controlsSection() {
         padRow("Gamepad:", gamepad::Action::React, cfg->reactPad, &config::Settings::reactPad,
                "The same on a gamepad: tap sends your last answer, hold opens the answers wheel.");
     }
+    if (ImGui::CollapsingHeader("Doors")) keyRow(*cfg, 11);
     if (ImGui::CollapsingHeader("Chat")) keyRow(*cfg, 2);
     if (ImGui::CollapsingHeader("Overlay")) {
         ImGui::TextUnformatted("Hide / show names, markers, arrows, notices and chat (hold)");
@@ -1742,7 +1796,7 @@ void draw(bool open) {
         g_hintUntil = GetTickCount() + 10000;
     }
     static bool wasOpen = false;
-    if (wasOpen && !open) net::servers::update(net::servers::split(config::get()->servers), false); // stop asking
+    if (wasOpen && !open) updateServerQueries(false);
     wasOpen = open;
     if (!open) {
         // A short hint after start-up, top-left.
@@ -1756,6 +1810,7 @@ void draw(bool open) {
         }
         return;
     }
+    updateServerQueries(true);
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + vp->WorkSize.y * 0.5f),
                             ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
@@ -1765,6 +1820,7 @@ void draw(bool open) {
     char title[64];
     snprintf(title, sizeof(title), "MECMP %s###mecmp", app::kVersion);
     ImGui::Begin(title, nullptr, ImGuiWindowFlags_NoCollapse);
+    quickJoinSection();
     if (ImGui::BeginTabBar("##tabs")) {
         if (ImGui::BeginTabItem("Session")) {
             sessionSection();

@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+### Doors
+- Ordinary doors opened by kicking, barging or pushing can share their open state through a player host
+  or dedicated server. Players receive nearby updates within 200 metres, with a 250-metre leave radius,
+  acknowledgments and bounded retries. The optional door message uses type 19; the protocol-8 pose format
+  and presence message (type 18) are unchanged. Older hosts do not relay doors.
+- The You tab has a saved **Sync doors** switch, an **Open door ahead** button for one ordinary door
+  within 3 metres, and an optional keyboard binding. Turning sync off keeps changes local in both
+  directions. Open doors stay open; turning sync back on requests nearby state.
+- Manual requests keep the selected door's identity. Changing aim before the request is processed
+  cancels it instead of opening another door; queued requests expire after 300 ms.
+- Remote openings and the open button are paused during time trials and other runs. Normal game
+  interactions still work. A door that refuses an applied pulse gets at most three attempts per loaded
+  object. A heap scan is only used if MECMP attached to an already-loaded level.
+- Shared openings last until the host session ends or the dedicated server resets, including across
+  checkpoint reloads. Closing, automatic and mission-specific doors are not supported. Only the two
+  recorded animation-bank fingerprints are recognised; other banks show a waiting message.
+
 ### Dedicated server
 - **The Discord live message stays in sight.** On a busy day the joins, leaves and finished runs pushed the "who is
   online" message out of view. It now moves back to the bottom of the channel (posted again, the old one deleted)
@@ -9,6 +26,10 @@
   (`webhook_live_bump_after`, `webhook_live_bump_minutes`; 0 turns either off). A webhook cannot see other people's
   messages, so chat alone does not move it.
 ### Connection and players
+- The top of the multiplayer menu has a quick-connect button for MECMP server (`34.27.13.116:47800`),
+  with the current player count, player limit and measured ping. Missing replies show `n/a`. Queries
+  share the server browser's polling and stop when the menu closes.
+- The Leave button stays on its own line when hosting diagnostics wrap, so it remains visible.
 - Timeouts and server resets keep clients reconnecting. Host-confirmed re-admission restores players
   after a missed kick or an unban; older departure packets cannot undo a newer admission.
 - Departure retries are spaced over separate ticks, lifecycle notices are written to the log, and

@@ -21,8 +21,9 @@
   play your echo on the last character of the city-ghost spawner's client list, and that was another player's ghost
   (added after the game's echo): it stopped and disappeared, and the screen showed it. The game's own character is
   now kept last in those lists too, as on the server.
-- **Ghosts come back after the "Your Echo" screen.** Closing it left other players' ghosts invisible until F7. When a
-  game menu closes, ghosts are now shown again and their look re-applied, as F7 does.
+- **Ghosts come back after the map and the "Your Echo" screen.** Closing them could leave other players' ghosts
+  invisible (until F7, or for a moment). When a game menu or the map closes, ghosts are now shown again and their
+  look re-applied, as F7 does (for the map at once and again a second later).
 
 ### Body pose
 - **Fingers, toes and wrists now move on other players' ghosts.** A ghost used to get only 23 bones of the player's

@@ -160,6 +160,7 @@ std::vector<EarlyComp> g_earlyComps;
 // in the same parent bus.
 constexpr int32_t kFirstBusId = 0x40, kLastBusId = 0x7f;
 int32_t g_nextBusId = kFirstBusId; // game thread
+std::atomic<DWORD> g_refreshAt1{0}, g_refreshAt2{0}; // gameScreenClosed: when to show ghosts again (0: not asked)
 std::atomic<bool> g_paused{false};
 std::atomic<bool> g_enabled{true};
 std::mutex g_motionM;                  // guards g_motion (written by the game thread, read by status())
@@ -1031,7 +1032,18 @@ void tick(uint64_t tick, uint64_t ticksInLevel) {
     {
         static bool menuWas = false;
         const bool menu = hooks::gameMenuOpen();
-        if (menuWas && !menu) {
+        // The map is not a game menu here (gameMenuOpen stays false for it): its OnHideMap message asks for the same,
+        // at once and again 1 s later (the ghost was seen to vanish just after the map closed).
+        const DWORD now = GetTickCount();
+        bool screenClosed = false;
+        for (auto* due : {&g_refreshAt1, &g_refreshAt2}) {
+            const DWORD at = due->load();
+            if (at && static_cast<int32_t>(now - at) >= 0) {
+                *due = 0;
+                screenClosed = true;
+            }
+        }
+        if ((menuWas && !menu) || screenClosed) {
             size_t n = 0;
             {
                 std::lock_guard<std::mutex> lock(g_m);
@@ -1043,7 +1055,8 @@ void tick(uint64_t tick, uint64_t ticksInLevel) {
                         ++n;
                     }
             }
-            if (n) MLOG("ghost: a game menu closed: %llu ghost(s) shown again and their look re-applied", static_cast<unsigned long long>(n));
+            if (n) MLOG("ghost: %s closed: %llu ghost(s) shown again and their look re-applied", screenClosed ? "the map" : "a game menu",
+                        static_cast<unsigned long long>(n));
         }
         menuWas = menu;
     }
@@ -1342,6 +1355,11 @@ void levelChanged() {
 void requestSpawnOrRefresh() { g_reqSpawn = true; }
 void lookListArrived() { retryLooksNow(); }
 void requestHideAll() { g_reqHide = true; }
+void gameScreenClosed() {
+    const DWORD now = GetTickCount();
+    g_refreshAt1 = now ? now : 1;
+    g_refreshAt2 = (now + 1000) ? now + 1000 : 1;
+}
 
 
 uintptr_t clientCharacter(uint32_t peer) {

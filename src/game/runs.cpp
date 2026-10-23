@@ -9,6 +9,7 @@
 
 #include "core/log.h"
 #include "game/engine.h"
+#include "game/ghosts.h"
 #include "net/net.h"
 #include "net/protocol.h"
 
@@ -369,6 +370,8 @@ void onMessage(Listener* self, const void* message) {
     memcpy(&type, m + Msg_Type, 4);
     if (category != kCategorySocialPlay) return;
     dumpMessage(m, type);
+    // The map (and its "Your Echo" screen) can leave other players' ghosts invisible when it closes.
+    if (type == 0x5b61f030) ghosts::gameScreenClosed(); // OnHideMap
     if (type == kTypeFinished) onFinished(m);
     else if (type == kTypeChallengeFinished) onTimeTrialFinished(m);
     else if (type == kTypeStarted) onStarted(m);

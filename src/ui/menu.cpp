@@ -38,6 +38,7 @@
 namespace mecmp::ui::menu {
 namespace {
 
+constexpr const char* kMainServerAddress = "34.27.13.116:47800";
 char g_name[net::protocol::kMaxNameBytes + 1] = {}; // what fits on the wire
 char g_code[64] = {};
 char g_label[config::kWheels][config::kPingSlots][net::protocol::kMaxPingLabelBytes + 1] = {}; // the marker wheels' titles
@@ -91,6 +92,23 @@ void startSession(const std::string& join) {
     const std::string name = enteredName();
     net::startAsync(cfg->port, join, cfg->loopbackOffset, name);
     config::change([name, join](config::Settings& c) { c.name = name; c.join = join; });
+}
+
+void quickJoinSection() {
+    const bool joining = net::running() && !net::hosting() && config::get()->join == kMainServerAddress;
+    const bool connected = joining && net::connectedToHost();
+    const char* label = connected ? "MECMP server (connected)###mainserver"
+                       : joining ? "MECMP server (connecting...)###mainserver"
+                                 : "Join MECMP server###mainserver";
+    ImGui::BeginDisabled(net::starting() || joining);
+    if (ImGui::Button(label)) {
+        snprintf(g_code, sizeof(g_code), "%s", kMainServerAddress);
+        startSession(kMainServerAddress);
+    }
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip("%s", kMainServerAddress);
+    ImGui::Spacing();
 }
 
 void sessionSection() {
@@ -1778,6 +1796,7 @@ void draw(bool open) {
     char title[64];
     snprintf(title, sizeof(title), "MECMP %s###mecmp", app::kVersion);
     ImGui::Begin(title, nullptr, ImGuiWindowFlags_NoCollapse);
+    quickJoinSection();
     if (ImGui::BeginTabBar("##tabs")) {
         if (ImGui::BeginTabItem("Session")) {
             sessionSection();

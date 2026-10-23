@@ -1,0 +1,40 @@
+name: MinGW-w64
+description: >
+  The MinGW-w64 cross compiler (g++-mingw-w64-x86-64) on an Ubuntu runner. Its .deb files are kept in the Actions
+  cache, so a normal run installs them with dpkg and never waits for Ubuntu's package mirrors (apt-get update there
+  sometimes stalls for half an hour). apt is only used when the cache is empty or out of date, with timeouts.
+  CMake and Ninja are already on GitHub's Ubuntu images.
+runs:
+  using: composite
+  steps:
+    - uses: actions/cache@v4
+      with:
+        path: ~/mingw-debs
+        # Bump the suffix to rebuild the cache (e.g. after the runner image changes the compiler's version).
+        key: mingw-debs-${{ runner.os }}-${{ runner.arch }}-v1
+    - name: Install MinGW-w64
+      shell: bash
+      run: |
+        set -u
+        have() { command -v x86_64-w64-mingw32-g++-posix >/dev/null 2>&1; }
+        mkdir -p "$HOME/mingw-debs"
+        if compgen -G "$HOME/mingw-debs/*.deb" >/dev/null; then
+          echo "Installing MinGW-w64 from the cache"
+          sudo dpkg -i "$HOME"/mingw-debs/*.deb >/dev/null 2>&1 || echo "The cached packages did not install; using apt"
+        fi
+        if ! have; then
+          apt=(sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20
+               -o DPkg::Lock::Timeout=120)
+          sudo rm -f /var/cache/apt/archives/*.deb
+          # The image's package lists are usually recent enough; only refresh them (with a time limit) if not.
+          if ! "${apt[@]}" install -y --no-install-recommends g++-mingw-w64-x86-64; then
+            timeout 300 "${apt[@]}" update
+            "${apt[@]}" install -y --no-install-recommends g++-mingw-w64-x86-64
+          fi
+          rm -f "$HOME"/mingw-debs/*.deb
+          cp /var/cache/apt/archives/*.deb "$HOME/mingw-debs/" 2>/dev/null || true
+        fi
+        have || { echo "MinGW-w64 is not installed"; exit 1; }
+        x86_64-w64-mingw32-g++-posix --version | head -n 1
+        cmake --version | head -n 1
+        ninja --version

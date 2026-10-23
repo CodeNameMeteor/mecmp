@@ -72,10 +72,10 @@ jobs:
 
   windows-build:
     runs-on: ubuntu-24.04
+    timeout-minutes: 15 # a stalled package mirror fails the job instead of holding it for hours
     steps:
       - uses: actions/checkout@v7.0.1
-      - name: Install MinGW-w64 and CMake
-        run: sudo apt-get update && sudo apt-get install -y g++-mingw-w64-x86-64 cmake ninja-build
+      - uses: ./.github/actions/mingw
       - name: Configure and build (x64, Release)
         run: |
           cmake -S . -B build -G Ninja \

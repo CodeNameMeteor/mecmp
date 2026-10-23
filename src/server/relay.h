@@ -114,6 +114,8 @@ public:
     // `reset`: every player is dropped (each leave is reported), and the session-id reservations, pending notices,
     // server chat and counters start again. Bans stay, and so do kick blocks (they run out by themselves).
     void reset();
+    void shutdown();
+    bool pendingDepartures() const { return departures_.size() != 0; }
     // The settings read again (`reset`): players stay connected; a lower limit only refuses new ones.
     void reconfigure(Config cfg);
 
@@ -137,7 +139,8 @@ private:
     bool blocked(const Addr& a, uint32_t nowMs);
     // A player's lines in the log: a few per window, so one player cannot fill the log.
     bool logAllowed(Member& m, uint32_t nowMs);
-    void drop(size_t index, const char* why);
+    void drop(size_t index, const char* why, net::protocol::DepartureReason reason);
+    void announceDeparture(uint32_t player, net::protocol::DepartureReason reason);
     void sendHello();
     void sendHelloTo(const Addr& to);
     // A short chat line to an address that is not let in (full, banned): at most one per 15 s each.
@@ -147,6 +150,9 @@ private:
     Config cfg_;
     uint32_t session_;
     uint32_t seq_ = 0;
+    uint32_t nowMs_ = 0;
+    bool stopping_ = false;
+    net::DepartureQueue<Addr> departures_;
     uint8_t cookieKey_[16] = {}; // random per process: the cookies it hands out are only valid for it
     Send send_;
     Log log_;

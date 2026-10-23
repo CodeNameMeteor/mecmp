@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Connection and players
+- Timeouts and server resets keep clients reconnecting. Host-confirmed re-admission restores players
+  after a missed kick or an unban; older departure packets cannot undo a newer admission.
+- Departure retries are spaced over separate ticks, lifecycle notices are written to the log, and
+  switching sessions clears pending outgoing chat.
+- The Players list includes you without travel or summon controls on your own row. Separate Ping and Loss
+  columns show measured round-trip times and missing incoming movement snapshots; unknown values show `n/a`.
+- Connection status expires after ten seconds without valid host traffic and recovers when traffic resumes.
+- Session notices distinguish voluntary exits, timeouts, dedicated-server kicks and bans, and session closure.
+  Loading a level no longer counts as leaving. A timeout reports lost contact without guessing the cause.
+- The protocol-8 pose format is unchanged. Older peers ignore the optional RTT and departure messages.
+- Build and release workflows use current stable Actions. Windows CI checks hosting status and session handling.
+
 ### Hosting status
 - The Session tab now shows the listening UDP port, UPnP setup result and external-address lookup separately.
   If no internet join code can be obtained, the menu explains the result instead of showing

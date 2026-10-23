@@ -48,6 +48,9 @@ struct RemoteInfo {
     uint32_t runMs = 0;     // how long that run has been going, counted on to now
     std::string runTitle;   // its name
     bool asksVisit = false; // they want to be asked before anyone goes to them (VISIT, protocol.h)
+    bool self = false;
+    int pingMs = -1;
+    bool lossKnown = false;
 };
 
 // join: empty = host; otherwise a join code or ip:port of the host. Calling it again switches
@@ -72,6 +75,8 @@ std::vector<RemoteAudio> takeAudio();
 bool localState(PlayerState& out);
 // Remote players heard from in the last `maxAgeMs`.
 std::vector<RemoteInfo> remotes(uint32_t maxAgeMs = 5000);
+std::vector<RemoteInfo> players();
+std::vector<std::string> takeConnectionNotices();
 
 // Text chat. sendChat shows the message here at once and sends it to everyone (any thread).
 struct ChatLine {
@@ -204,7 +209,7 @@ bool remoteState(uint32_t id, PlayerState& out, uint32_t& ageMs);
 
 bool running();
 bool hosting();
-bool connectedToHost();   // joiner: the host has answered
+bool connectedToHost();   // joiner: session traffic arrived within the connection timeout
 std::string serverName(); // joiner: the dedicated server's name; empty when a player hosts (or not heard yet)
 // The same number for everyone in a session (the host's session id); 0 while not known (e.g. solo test).
 uint32_t sessionKey();

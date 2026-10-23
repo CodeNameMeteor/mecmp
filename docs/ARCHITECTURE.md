@@ -327,9 +327,24 @@ UDP, one socket. Sessions have one host and any number of joiners (up to 16).
   drop a STATE older than one already taken, so a late full packet never becomes the delta base.
 - Receivers buffer 16 snapshots per player and show them 120 ms in the past, blended. The sender's
   32-bit millisecond clock is unwrapped (`protocol::ClockUnwrap`), so a 49-day uptime wrap is harmless. Positions and angles outside a sane range are dropped.
-- Packet loss per player (`protocol::LossWindow`): gaps in their STATE sequence numbers over the last 5 s;
-  shown in the menu's player list. Join/leave notices (`ui/notices.cpp`) come from the same player
-  list: a named player appearing, or silent for 5 s (as for their ghost).
+- Packet loss per player (`protocol::LossWindow`) counts gaps in STATE sequence numbers over the last 5 s.
+  Late snapshots rejected by StateSequence count as missing. Type 16 PROBE measures round-trip time through
+  the host/server, routed only to its target. A client sends at most four requests per second, rotating
+  through peers; its host probe is normally due every 2 s. Large sessions refresh individual peers less often.
+  The local row shows host RTT; upload loss is unknown. The host's own row shows `local`.
+- Type 17 DEPARTURE carries a player id and an explicit reason. Members may report only their own voluntary
+  exit; only the host/server announces departures to clients. Notices are sent immediately and retried twice
+  at 100 ms intervals, with a bounded queue (512 recipients, 1 s expiry). Graceful shutdown drains the queue
+  for up to 300 ms. Packets can still be lost over UDP. Without a notice, 10 s of silence produces a timeout.
+  HELLO keeps membership alive during loading, independently from movement/ghost visibility.
+- Type 18 PRESENCE carries an admitted player id and is authored only by the host/server. It is sent with
+  periodic host HELLOs, including the listen host's own player and the server mirror when enabled. PRESENCE
+  and DEPARTURE use the same host sequence: a newer presence can revive a departed player, while an older
+  presence/departure cannot undo the latest decision. Each order is scoped to the host session id.
+  A self timeout and the explicit SessionReset reason keep the network worker alive for admission retries;
+  kick/ban/host closure still stop it. With an older host, HELLO remains the timeout recovery fallback.
+- Optional packet types do not change protocol 8's pose codec. Older peers ignore them: RTT is unavailable,
+  and exit notices fall back to timeout. `Relay::drop` takes the wire reason separately from log wording.
 - At most 64 player entries are kept; an entry silent for 2 minutes is forgotten. Packets of unknown
   type are dropped before anything is stored or forwarded.
 

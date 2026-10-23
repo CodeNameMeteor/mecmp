@@ -1,7 +1,6 @@
 #pragma once
 // Short notices at the top of the screen: a player joins or leaves, or places a marker (render
-// thread, inside the ImGui frame). Players come and go as net::remotes() sees them; the solo-test
-// mirror is left out.
+// thread, inside the ImGui frame). Session events distinguish exits from connection timeouts.
 
 #include <string>
 

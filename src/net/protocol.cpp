@@ -63,6 +63,53 @@ constexpr float kMaxCoord = 100000.f;
 bool sanePlacement(const PlayerState& s) { return sanePosition(s.pos) && std::isfinite(s.yaw); }
 } // namespace
 
+size_t writeProbe(char* buf, const Header& h, const Probe& probe) {
+    char* p = buf;
+    put(p, h); put(p, probe.target); put(p, probe.id); put(p, static_cast<uint8_t>(probe.reply));
+    return static_cast<size_t>(p - buf);
+}
+
+bool readProbe(const char* payload, size_t n, Probe& out) {
+    const char* p = payload;
+    const char* end = p + n;
+    Probe probe;
+    uint8_t reply = 0;
+    if (!get(p, end, probe.target) || !get(p, end, probe.id) || !get(p, end, reply) || p != end || reply > 1 || !probe.id)
+        return false;
+    probe.reply = reply != 0;
+    out = probe;
+    return true;
+}
+
+size_t writeDeparture(char* buf, const Header& h, const Departure& departure) {
+    char* p = buf;
+    put(p, h); put(p, departure.player); put(p, static_cast<uint8_t>(departure.reason));
+    return static_cast<size_t>(p - buf);
+}
+
+bool readDeparture(const char* payload, size_t n, Departure& out) {
+    const char* p = payload;
+    const char* end = p + n;
+    Departure departure;
+    uint8_t reason = 0;
+    if (!get(p, end, departure.player) || !get(p, end, reason) || p != end ||
+        reason > static_cast<uint8_t>(DepartureReason::SessionClosed)) return false;
+    departure.reason = static_cast<DepartureReason>(reason);
+    out = departure;
+    return true;
+}
+
+const char* departureText(DepartureReason reason) {
+    switch (reason) {
+    case DepartureReason::Left: return "left the session";
+    case DepartureReason::TimedOut: return "lost connection (timed out)";
+    case DepartureReason::Kicked: return "was kicked";
+    case DepartureReason::Banned: return "was banned";
+    case DepartureReason::SessionClosed: return "left (session closed)";
+    }
+    return "left the session";
+}
+
 bool sanePosition(const float pos[3]) {
     for (int i = 0; i < 3; ++i)
         if (!std::isfinite(pos[i]) || std::fabs(pos[i]) > kMaxCoord) return false;

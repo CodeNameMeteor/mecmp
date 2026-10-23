@@ -934,7 +934,104 @@ static void testReconfigure() {
     CHECK(t.relay.members().size() == 1); // full at one player now
 }
 
+static std::vector<char> departurePacket(uint32_t sender, uint32_t player, proto::DepartureReason reason) {
+    char buf[proto::kMaxPacket];
+    const proto::Header h{proto::kMagic, proto::kProtocol, proto::kTypeDeparture, sender, 1};
+    const size_t n = proto::writeDeparture(buf, h, {player, reason});
+    return {buf, buf + n};
+}
+
+static bool hasDeparture(const Harness& t, const Addr& to, uint32_t player, proto::DepartureReason reason) {
+    for (const auto& sent : t.sent) {
+        proto::Header h{};
+        if (sent.to != to || sent.data.size() < sizeof(h)) continue;
+        memcpy(&h, sent.data.data(), sizeof(h));
+        proto::Departure departure;
+        if (h.type == proto::kTypeDeparture && h.session == t.relay.session() &&
+            proto::readDeparture(sent.data.data() + sizeof(h), sent.data.size() - sizeof(h), departure) &&
+            departure.player == player && departure.reason == reason) return true;
+    }
+    return false;
+}
+
+static void testDepartures() {
+    Harness t;
+    t.deliver(A, hello(1, "alice"), 100);
+    t.deliver(B, hello(2, "bob"), 100);
+    t.sent.clear();
+    t.deliver(A, departurePacket(1, 2, proto::DepartureReason::Left), 200);
+    t.deliver(A, departurePacket(1, 1, proto::DepartureReason::Kicked), 210);
+    CHECK(t.relay.members().size() == 2 && t.sent.empty());
+    t.deliver(B, departurePacket(2, 2, proto::DepartureReason::Left), 220);
+    CHECK(t.relay.members().size() == 1);
+    CHECK(hasDeparture(t, A, 2, proto::DepartureReason::Left));
+    t.sent.clear();
+    t.deliver(C, hello(3, "charlie"), 300);
+    t.deliver(A, hello(1, "alice"), 10500);
+    t.sent.clear();
+    t.relay.tick(10501);
+    CHECK(hasDeparture(t, A, 3, proto::DepartureReason::TimedOut));
+    t.deliver(B, hello(4, "bob"), 10600);
+    t.sent.clear();
+    CHECK(t.relay.kick("bob", 10700));
+    CHECK(hasDeparture(t, A, 4, proto::DepartureReason::Kicked));
+    t.deliver(C, hello(5, "dave"), 10800);
+    t.sent.clear();
+    CHECK(t.relay.ban("dave") != 0);
+    CHECK(hasDeparture(t, A, 5, proto::DepartureReason::Banned));
+    t.sent.clear();
+    t.relay.shutdown();
+    CHECK(hasDeparture(t, A, t.relay.session(), proto::DepartureReason::SessionClosed));
+}
+
+static void testProbeRouting() {
+    Harness t;
+    t.deliver(A, hello(1, "alice"), 100);
+    t.deliver(B, hello(2, "bob"), 100);
+    t.deliver(C, hello(3, "charlie"), 100);
+    char buf[proto::kMaxPacket];
+    const proto::Header h{proto::kMagic, proto::kProtocol, proto::kTypeProbe, 1, 500};
+    size_t n = proto::writeProbe(buf, h, {2, 11, false});
+    t.sent.clear();
+    t.deliver(A, {buf, buf + n}, 200);
+    CHECK(t.sentTo(B) == 1 && t.sentTo(A) == 0 && t.sentTo(C) == 0);
+    n = proto::writeProbe(buf, h, {t.relay.session(), 12, false});
+    t.sent.clear();
+    t.deliver(A, {buf, buf + n}, 210);
+    CHECK(t.sentTo(A) == 1 && t.sentTo(B) == 0 && t.sentTo(C) == 0);
+    proto::Probe reply;
+    CHECK(proto::readProbe(t.sent[0].data.data() + sizeof(h), t.sent[0].data.size() - sizeof(h), reply));
+    CHECK(reply.reply && reply.target == 1 && reply.id == 12);
+    n = proto::writeProbe(buf, h, {999, 13, false});
+    t.sent.clear();
+    t.deliver(A, {buf, buf + n}, 220);
+    CHECK(t.sent.empty());
+}
+
+static void testStateOrder() {
+    Harness t;
+    t.deliver(A, hello(1, "alice"), 100);
+    t.deliver(B, hello(2, "bob"), 100);
+    t.sent.clear();
+    t.deliver(A, state(1, UINT32_MAX - 1), 200);
+    CHECK(t.sentTo(B) == 1);
+    t.sent.clear();
+    t.deliver(A, state(1, UINT32_MAX - 2), 210);
+    CHECK(t.sentTo(B) == 0);
+    t.deliver(A, state(1, UINT32_MAX - 1), 220);
+    CHECK(t.sentTo(B) == 0);
+    t.deliver(A, state(1, 0), 230);
+    CHECK(t.sentTo(B) == 1);
+    t.sent.clear();
+    t.deliver(A, state(1, UINT32_MAX), 240);
+    CHECK(t.sentTo(B) == 0);
+}
+
 int main() {
+    testDepartures();
+    testProbeRouting();
+    testStateOrder();
+
     testReset();
     testReconfigure();
     testResultEvents();

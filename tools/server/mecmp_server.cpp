@@ -720,6 +720,7 @@ int serverMain(int argc, char** argv) {
         }
     }
     logLine("server stopping");
+    relay.shutdown();
     if (webhook.enabled()) webhook.setStatus(liveStatus(o, nullptr));
     if (webhook.enabled() && webhook.config().status)
         webhook.post(u8"\U0001F534 **" + dc::escapeMarkdown(o.relay.name) + "** is offline");

@@ -23,6 +23,7 @@
 
 #include "net/connection.h"
 #include "net/protocol.h"
+#include "net/connection.h"
 
 namespace mecmp::server {
 
@@ -114,6 +115,7 @@ public:
     // `reset`: every player is dropped (each leave is reported), and the session-id reservations, pending notices,
     // server chat and counters start again. Bans stay, and so do kick blocks (they run out by themselves).
     void reset();
+    void shutdown();
     // The settings read again (`reset`): players stay connected; a lower limit only refuses new ones.
     void reconfigure(Config cfg);
 
@@ -137,7 +139,8 @@ private:
     bool blocked(const Addr& a, uint32_t nowMs);
     // A player's lines in the log: a few per window, so one player cannot fill the log.
     bool logAllowed(Member& m, uint32_t nowMs);
-    void drop(size_t index, const char* why);
+    void drop(size_t index, const char* why, net::protocol::DepartureReason reason);
+    void announceDeparture(uint32_t player, net::protocol::DepartureReason reason);
     void sendHello();
     void sendHelloTo(const Addr& to);
     // A short chat line to an address that is not let in (full, banned): at most one per 15 s each.

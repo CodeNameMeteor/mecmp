@@ -153,8 +153,8 @@ constexpr size_t SpawnerData_Template = 0x198;   // -> CharacterSpawnTemplateDat
 constexpr size_t Template_Customization = 0x18;  // -> CustomizeCharacterData
 constexpr size_t Character_Data = 0x30;          // PamCharacterEntityData
 constexpr size_t Character_Player = 0x250;
-// A character's own entity bus (server and client) and the bus's id within its parent: the id given at creation
-// is stored as (id + 0x1ffff80) & 0x1ffffff (entityObject_initWithParentTransform 0x1431411d0).
+// A character's own entity bus (server and client) and its id (& 0x1ffffff). The server character's and the client
+// character's are the same (seen in game 2026-10-23); ghosts are paired by it.
 constexpr size_t Character_Bus = 0x28;
 constexpr size_t Bus_Id = 0x58;
 constexpr uint32_t Bus_IdMask = 0x1ffffff;

@@ -9,17 +9,21 @@
   stayed hidden below the level until it changed. A ghost its spawner no longer lists (the city-ghost spawner
   sometimes takes one back) is kept as before.
 - The build check also covers the spawner's unspawn.
-- **Ghosts come from a spawner of MECMP's own.** MECMP makes a copy of the level's city-ghost spawner (same data,
-  same place in the level) and spawns ghosts from it, the way a mission's replay ghost comes from a spawner of its
-  own. The city-ghost spawner is no longer touched: it is not switched on for each spawn, its list is not reordered
-  to keep the pause menu's "Your Echo" right, and it can no longer take a ghost back. If the copy cannot be made or
-  gives no character, ghosts come from the city-ghost spawner as before. `mecmp.ini` `[ghost] own_spawner=0` turns
-  it off. Its entity-creation functions have their own build check: a mismatch only turns this off. (The first
-  build's check had three wrong instruction encodings and turned it off on every game; fixed.)
-- **Ghosts find their client side by id where possible.** The client character whose entity bus id equals the
-  server character's, and the replay component that character owns, are taken at once, not by "created within
-  1.5 s of our spawn". Confirmed in game: the server and client characters have the same id, and both client objects
-  are claimed at once. The time window stays as a fallback.
+- **Experimental: ghosts from a spawner of MECMP's own** (`mecmp.ini` `[ghost] own_spawner=1`, off by default). MECMP
+  makes a copy of the level's city-ghost spawner and spawns ghosts from it. Off because the game finds the spawner of
+  the map's echo and the "Your Echo" screen by its data, and found the copy: the map took the ghost and the screen
+  showed no echo. Its entity-creation functions have their own build check: a mismatch only turns it off.
+- **Ghosts find their client side more definitely.** The replay component is taken by the client character that owns
+  it, not by "created within 1.5 s of our spawn". The client character is taken by a value its bus shares with the
+  server character when only one ghost is waiting for one; that value is the same for every ghost of a spawner, so
+  with several waiting the time window decides as before.
+- **Opening the map no longer takes a ghost, and "Your Echo" shows the game's echo.** The map and the echo screen
+  play your echo on the last character of the city-ghost spawner's client list, and that was another player's ghost
+  (added after the game's echo): it stopped and disappeared, and the screen showed it. The game's own character is
+  now kept last in those lists too, as on the server.
+- **Ghosts come back after the map and the "Your Echo" screen.** Closing them could leave other players' ghosts
+  invisible (until F7, or for a moment). When a game menu or the map closes, ghosts are now shown again and their
+  look re-applied, as F7 does (for the map at once and again a second later).
 
 ### Body pose
 - **Fingers, toes and wrists now move on other players' ghosts.** A ghost used to get only 23 bones of the player's

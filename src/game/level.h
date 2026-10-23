@@ -3,6 +3,8 @@
 // the game creates them), the local player character, and a reference bone setup for ghosts.
 
 #include <cstdint>
+#include <string>
+#include <vector>
 
 #include "game/engine.h"
 
@@ -16,6 +18,9 @@ struct BoneSetup {
 
 // Hook callbacks (game threads).
 void onSpawnerCreated(void* creationInfo, void* entity);
+void onClientSpawnerCreated(void* entity);  // a ClientCharacterSpawnEntity
+// Live client character spawners seen this level (client thread).
+std::vector<void*> clientSpawners();
 void onForeignClientReplayComp(void* comp); // a client replay component that is not one of our ghosts'
 void forgetClientReplayComp(void* comp);    // ...that turned out to be one of ours after all
 // Bones the replay recorder and player record: the data is patched when its owner is created, before it is built.
@@ -43,6 +48,8 @@ std::string levelName();
 bool inFrontEnd();
 void* playerSpawner();
 void* ghostSpawner();                 // the level's city-ghost spawner (always loaded in free roam)
+// Off by default (experimental): it has the city-ghost spawner's data in the same bus, and the game finds a replay's
+// spawner by that data, so the map's echo and the "Your Echo" screen found ours and took our ghost (2026-10-23).
 // MECMP's own ghost spawner: a spawner entity made from the city-ghost spawner's data in its bus, so the game's
 // "Your Echo" character stays the city spawner's last and the city spawner never takes a ghost back. Made on first
 // use and again when the city-ghost spawner changes. Null when it is off (mecmp.ini [ghost] own_spawner=0), the

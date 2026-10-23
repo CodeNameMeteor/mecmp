@@ -11,6 +11,7 @@
 #include "core/config.h"
 #include "core/log.h"
 #include "game/engine.h"
+#include "game/hooks.h"
 #include "game/level.h"
 #include "game/models.h"
 #include "game/motion_stats.h"
@@ -159,6 +160,7 @@ std::vector<EarlyComp> g_earlyComps;
 // in the same parent bus.
 constexpr int32_t kFirstBusId = 0x40, kLastBusId = 0x7f;
 int32_t g_nextBusId = kFirstBusId; // game thread
+std::atomic<DWORD> g_refreshAt1{0}, g_refreshAt2{0}; // gameScreenClosed: when to show ghosts again (0: not asked)
 std::atomic<bool> g_paused{false};
 std::atomic<bool> g_enabled{true};
 std::mutex g_motionM;                  // guards g_motion (written by the game thread, read by status())
@@ -739,8 +741,9 @@ void noteOwnPose(const float (*bones)[8], const uint8_t* idx, uint32_t n) {
 // Client objects are matched to ghosts definitely where that is possible, and by the claim window otherwise:
 // - a client character whose bus id equals a ghost's server character's (serverBusId) is that ghost's;
 // - a replay component belongs to the ghost whose client character owns it (componentOwner).
-// The bus-id match was confirmed in game (2026-10-23: same id on both sides, both objects claimed at once). The claim
-// window (kClaimWindowMs after our spawn) stays as the fallback when it does not match.
+// The bus value is the same on both sides (seen 2026-10-23) but not unique: every ghost from one spawner has the same
+// one. So it only decides when exactly one ghost is waiting for its client character (the normal case: spawns wait
+// for the last one's claim); otherwise the claim window (kClaimWindowMs after our spawn) decides, as before.
 constexpr DWORD kBusIdClaimMs = 15000; // a client character this long after the spawn is no longer matched by id
 
 bool onClientReplayComp(void* comp) {
@@ -795,13 +798,15 @@ void onClientCharacter(void* ent) {
         const DWORD now = GetTickCount();
         Ghost* pick = nullptr;
         const char* how = "";
-        if (clientId) // definite: the ghost whose server character has this bus id
+        if (clientId) { // the one ghost waiting for its client character whose server character has this bus value
+            int matches = 0;
             for (auto& g : g_ghosts)
                 if (!g.clientChar && g.character && g.serverBusId == clientId && now - g.spawnedAt < kBusIdClaimMs) {
-                    pick = &g;
-                    how = "bus id";
-                    break;
+                    if (!matches++) pick = &g;
                 }
+            if (matches > 1) pick = nullptr; // not unique (same spawner): the claim window decides
+            else if (pick) how = "bus id";
+        }
         if (!pick && claimWindowOpen() && data == g_ghostCharData.load()) {
             const uint32_t peer = g_pendingPeer.load();
             for (auto& g : g_ghosts)
@@ -839,8 +844,50 @@ void onClientCharacter(void* ent) {
 
 void setCharacterDataType(uintptr_t runtimeTypeInfo) { g_tiCharData = runtimeTypeInfo; }
 
+// The map's echo and the "Your Echo" screen: a client replay entity takes the *last* client character of its client
+// character spawner and plays its recording on it (PamClientReplayEntity on CharacterSpawned, 0x14394ab60 ->
+// 0x14394b1d0 -> 0x1432a60e0). Our ghosts' client characters are added to the city-ghost spawner's client list after
+// the game's echo (vtable +0xf8, 0x143239bb0), so the map took our ghost: it stopped taking our poses, and the echo
+// screen showed it. Like keepGameCharacterLast on the server: in every client spawner list that holds one of our
+// ghosts and a character of the game's, ours go first and the game's stay last, in their order. Only pointers inside
+// the list move, and +0xd0 (the last one's bus) stays right because the last one does not change. Client game thread
+// (the replay updater, where the map's replay runs), at most every 0.25 s.
+static void keepGameClientCharactersLast() {
+    static DWORD lastAt = 0;
+    const DWORD now = GetTickCount();
+    if (now - lastAt < 250) return;
+    lastAt = now;
+    std::vector<uintptr_t> mine;
+    {
+        std::lock_guard<std::mutex> lock(g_m);
+        for (const auto& g : g_ghosts)
+            if (g.clientChar) mine.push_back(reinterpret_cast<uintptr_t>(g.clientChar));
+    }
+    if (mine.empty()) return;
+    for (void* sp : level::clientSpawners()) {
+        uintptr_t list[2] = {};
+        if (!mem::read(reinterpret_cast<uintptr_t>(sp) + ClientSpawner_Spawned, list, sizeof(list)) || list[1] <= list[0] ||
+            (list[1] - list[0]) % 8 || (list[1] - list[0]) / 8 > 64)
+            continue;
+        const size_t n = (list[1] - list[0]) / 8;
+        uintptr_t items[64];
+        if (!mem::read(list[0], items, n * 8)) continue;
+        std::vector<uintptr_t> ours, theirs;
+        for (size_t i = 0; i < n; ++i)
+            (std::find(mine.begin(), mine.end(), items[i]) != mine.end() ? ours : theirs).push_back(items[i]);
+        if (ours.empty() || theirs.empty()) continue;
+        if (std::find(ours.begin(), ours.end(), items[n - 1]) == ours.end()) continue; // the game's is last already
+        std::vector<uintptr_t> order = ours;
+        order.insert(order.end(), theirs.begin(), theirs.end());
+        poke(list[0], order.data(), n * 8);
+        poke<uintptr_t>(reinterpret_cast<uintptr_t>(sp) + ClientSpawner_LastBus, mem::readOr<uintptr_t>(order.back() + Character_Bus));
+        MLOG("ghost: client spawner %p list reordered: the game's own character is last again", sp);
+    }
+}
+
 void beforeClientReplayUpdate() {
     ++g_updaterCalls;
+    keepGameClientCharactersLast();
     renderFrame();
 }
 
@@ -979,6 +1026,61 @@ void tick(uint64_t tick, uint64_t ticksInLevel) {
     (void)tick;
     const double t0 = nowUs();
     handleRequests();
+    // The "Your Echo" screen (in the map / pause menu) leaves other players' ghosts invisible when it closes (seen
+    // 2026-10-23: the ghost stayed gone until F7, which shows ghosts again and re-applies their look). So when a game
+    // menu closes, each ghost that should be seen is shown again and its look applied again, as F7 does.
+    {
+        static bool menuWas = false;
+        const bool menu = hooks::gameMenuOpen();
+        // The map is not a game menu here (gameMenuOpen stays false for it): its OnHideMap message asks for the same,
+        // at once and again 1 s later (the ghost was seen to vanish just after the map closed).
+        const DWORD now = GetTickCount();
+        bool screenClosed = false;
+        for (auto* due : {&g_refreshAt1, &g_refreshAt2}) {
+            const DWORD at = due->load();
+            if (at && static_cast<int32_t>(now - at) >= 0) {
+                *due = 0;
+                screenClosed = true;
+            }
+        }
+        if ((menuWas && !menu) || screenClosed) {
+            size_t n = 0;
+            {
+                std::lock_guard<std::mutex> lock(g_m);
+                for (auto& g : g_ghosts)
+                    if (!g.hidden && g.character) {
+                        g.visibleCalls = 0;
+                        g.lookKey.clear();
+                        g.lookTriedAt = 0;
+                        ++n;
+                    }
+            }
+            if (n) MLOG("ghost: %s closed: %llu ghost(s) shown again and their look re-applied", screenClosed ? "the map" : "a game menu",
+                        static_cast<unsigned long long>(n));
+        }
+        menuWas = menu;
+    }
+    {   // Diagnostic: the city-ghost spawner's list (the game's echo lives there), on change.
+        static std::string lastText;
+        static void* lastSp = nullptr;
+        void* const city = level::ghostSpawner();
+        uintptr_t list[2] = {};
+        if (level::spawnerAlive(city) && mem::read(reinterpret_cast<uintptr_t>(city) + Spawner_Spawned, list, sizeof(list)) &&
+            list[1] >= list[0] && (list[1] - list[0]) / 8 <= 64) {
+            std::string text;
+            for (uintptr_t it = list[0]; it < list[1]; it += 8) {
+                char b[32];
+                snprintf(b, sizeof(b), " %p", reinterpret_cast<void*>(mem::readOr<uintptr_t>(it)));
+                text += b;
+            }
+            if (city != lastSp || text != lastText) {
+                VLOG("trace: city-ghost spawner %p holds %llu:%s%s", city, static_cast<unsigned long long>((list[1] - list[0]) / 8),
+                     text.c_str(), hooks::gameMenuOpen() ? " [game menu open]" : "");
+                lastSp = city;
+                lastText = text;
+            }
+        }
+    }
     std::vector<Present> players; // present now
     for (const auto& r : net::remotes(kHideAfterMs))
         if (r.ageMs < kHideAfterMs) players.push_back({r.id, r.name, r.ageMs, r.look, r.outfit});
@@ -1253,6 +1355,11 @@ void levelChanged() {
 void requestSpawnOrRefresh() { g_reqSpawn = true; }
 void lookListArrived() { retryLooksNow(); }
 void requestHideAll() { g_reqHide = true; }
+void gameScreenClosed() {
+    const DWORD now = GetTickCount();
+    g_refreshAt1 = now ? now : 1;
+    g_refreshAt2 = (now + 1000) ? now + 1000 : 1;
+}
 
 
 uintptr_t clientCharacter(uint32_t peer) {

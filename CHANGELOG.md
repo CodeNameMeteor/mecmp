@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+### Doors
+- Ordinary doors opened by kicking, barging or pushing can share their open state through a player host
+  or dedicated server. Players receive nearby updates within 200 metres, with a 250-metre leave radius,
+  acknowledgments and bounded retries. The optional door message uses type 19; the protocol-8 pose format
+  and presence message (type 18) are unchanged. Older hosts do not relay doors.
+- The You tab has a saved **Sync doors** switch, an **Open door ahead** button for one ordinary door
+  within 3 metres, and an optional keyboard binding. Turning sync off keeps changes local in both
+  directions. Open doors stay open; turning sync back on requests nearby state.
+- Remote openings and the open button are paused during time trials and other runs. Normal game
+  interactions still work. A door that refuses an applied pulse gets at most three attempts per loaded
+  object. A heap scan is only used if MECMP attached to an already-loaded level.
+- Shared openings last until the host session ends or the dedicated server resets, including across
+  checkpoint reloads. Closing, automatic and mission-specific doors are not supported. Only the two
+  recorded animation-bank fingerprints are recognised; other banks show a waiting message.
+
 ### Dedicated server
 - **The Discord live message stays in sight.** On a busy day the joins, leaves and finished runs pushed the "who is
   online" message out of view. It now moves back to the bottom of the channel (posted again, the old one deleted)

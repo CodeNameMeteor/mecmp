@@ -42,6 +42,7 @@ bool setAltKey(const std::string& name);        // place a marker the other way
 bool setHideKey(const std::string& name);       // hide / show the overlay (hold for a second)
 bool setWheelPrevKey(const std::string& name);  // previous wheel, while the wheel is open
 bool setWheelNextKey(const std::string& name);  // next wheel
+bool setDoorKey(const std::string& name);
 bool setPlayersKey(const std::string& name);    // hold: the players panel (ui/radial.h, Mode::Players)
 // Summon (ui/summon.h): the keys that say yes / no to a summon (hold for a second; the decline key also
 // takes you back after a summon). Digits are allowed for these as for the others.

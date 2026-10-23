@@ -13,6 +13,7 @@
 #include "game/engine.h"
 #include "game/fingerprint.h"
 #include "game/ghosts.h"
+#include "game/doors.h"
 #include "game/players_map.h"
 #include "game/runs.h"
 #include "game/time_of_day.h"
@@ -43,6 +44,7 @@ void onTick(void* world, float dt) {
     static void* lastWorld = nullptr;
     if (world != lastWorld) { // new level: everything of the old one is gone
         if (lastWorld) { game::ghosts::levelChanged(); game::teleport::levelChanged(); game::runs::levelChanged(); ui::summon::levelChanged(); }
+        game::doors::levelChanged();
         lastWorld = world;
         g_levelStartTick = g_ticks.load();
     }
@@ -64,6 +66,7 @@ void onTick(void* world, float dt) {
     { prof::Scope s(prof::Ping); game::ping::tick(); }
     { prof::Scope s(prof::Models); game::models::tick(); }
     if (n % 30 == 0) game::runs::serverTick(); // registers our run listener once the server context exists
+    game::doors::tick();
     game::time_of_day::tick();                 // about once a second: send our clock, or follow the host's
     if (n % 60 == 0) game::players_map::publishOwnProfile(); // every ~2 s: online id (Beat Revival) and the setting
 }
@@ -151,6 +154,7 @@ void monitorLoop() {
             // by the main menu's "Your Echo" preview, which must not get our poses.
             if (!world) {
                 game::ghosts::levelChanged();
+                game::doors::levelChanged();
                 game::teleport::levelChanged();
                 ui::summon::levelChanged();
             }
@@ -203,6 +207,7 @@ void monitorLoop() {
         }
         // The list of loaded look pieces, once an outfit or your own look needs it (one scan per level).
         if (world) game::models::findPieces();
+        game::doors::maintain();
         config::applyPending(); // menu and game changes, in order (and mecmp.ini)
         ui::gamepad::maintain();  // once the game has loaded XInput
 #if MECMP_DEBUG_KEYS
@@ -250,6 +255,7 @@ void run(HMODULE self) {
         return;
     }
     game::ghosts::setEnabled(hooks.ghostClients);
+    game::doors::install();
     // The game is exiting: stop sending and close the router port while the network still works.
     ui::setOnWindowDestroyed([] {
         MLOG("game window closed: stopping multiplayer");

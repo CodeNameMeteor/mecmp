@@ -29,6 +29,7 @@
 #include <string>
 
 #include "net/net.h"
+#include "net/doors.h"
 
 namespace mecmp::net::protocol {
 
@@ -52,6 +53,9 @@ constexpr uint16_t kTypeProbe = 16;
 constexpr uint16_t kTypeDeparture = 17;
 constexpr uint16_t kTypePresence = 18; // host-authored confirmation of an admitted player
 constexpr uint16_t kTypeAudio = 15; // native movement event + scalar inputs (player_audio.h)
+constexpr uint16_t kTypeDoor = doors::kPacketType; // optional, open-only ordinary door state
+static_assert(kTypeDoor != kTypePresence && kTypeDoor != kTypeProbe && kTypeDoor != kTypeDeparture,
+              "door packets must not reuse a connection message type");
 // 14 is RENDEZVOUS (below): not a session packet, so it is not in knownType.
 // type 5 INFO: a server list's question "who are you?" and a dedicated server's answer. Not a session
 // packet: it is not in knownType (never stored or forwarded), and a server answers it whatever the
@@ -77,7 +81,8 @@ constexpr uint16_t kTypeRendezvous = 14;
 constexpr bool knownType(uint16_t type) {
     return type == kTypeState || type == kTypeHello || type == kTypeChat || type == kTypePing || type == kTypeReact ||
            type == kTypeSummon || type == kTypeSummonReply || type == kTypeResult || type == kTypeActivity ||
-           type == kTypeVisit || type == kTypeAudio || type == kTypeProbe || type == kTypeDeparture || type == kTypePresence;
+           type == kTypeVisit || type == kTypeAudio || type == kTypeProbe || type == kTypeDeparture || type == kTypePresence ||
+           type == kTypeDoor;
 }
 constexpr size_t kMaxChatBytes = 120; // UTF-8, after cleaning
 constexpr size_t kNameLen = 24;

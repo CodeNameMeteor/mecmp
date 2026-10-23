@@ -39,6 +39,10 @@ a server in the menu. *Leave* goes offline again. *Start this session when the g
 the clipboard), saved in `join_code.txt` and written to `mecmp.log`. Send it to your friends. The host
 forwards everyone's movement to everyone, so friends need nothing opened on their side.
 
+The Session tab shows the listening UDP port, the UPnP result and whether an external address was
+found. If no internet join code is available, local hosting still works. A join code identifies the
+address; it does not confirm that your router or firewall lets other players reach the port.
+
 **Joining**: paste the host's code in the menu and press *Join* (or set `join=2HMAS-W9ENR`).
 
 **Servers**: a dedicated server (`mecmp_server`, runs without the game, for example on a VPS) is a

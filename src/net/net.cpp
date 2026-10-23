@@ -143,7 +143,8 @@ std::vector<Reserved> g_reserved;        // guarded by g_m
 constexpr DWORD kSessionGraceMs = 60000;
 sockaddr_in g_hostAddr{};                 // JOIN
 std::atomic<bool> g_heardFromHost{false};
-std::string g_joinCode, g_lanCode;
+HostStatus g_hostStatus; // g_m; setup results belong to the current generation.
+std::mutex g_startM; // serializes session start/stop and STUN sends after DNS lookup
 std::atomic<uint32_t> g_generation{0}; // bumped on every start(); stale host setups don't publish
 PlayerState g_local;
 bool g_haveLocal = false;
@@ -1095,12 +1096,15 @@ std::mutex g_stunM;
 unsigned char g_stunTx[12] = {};
 bool g_stunPending = false;
 
-void sendStunRequest() {
+bool sendStunRequest(uint32_t generation) {
+    if (generation != g_generation || !g_run || g_role != Role::Host) return false;
     addrinfo hints{};
     hints.ai_family = AF_INET;
     hints.ai_socktype = SOCK_DGRAM;
     addrinfo* res = nullptr;
-    if (getaddrinfo("stun.l.google.com", "19302", &hints, &res) != 0 || !res) return;
+    if (getaddrinfo("stun.l.google.com", "19302", &hints, &res) != 0 || !res) return generation == g_generation;
+    std::lock_guard<std::mutex> start(g_startM);
+    if (generation != g_generation || !g_run || g_role != Role::Host) { freeaddrinfo(res); return false; }
     unsigned char req[20] = {0x00, 0x01, 0x00, 0x00, 0x21, 0x12, 0xA4, 0x42};
     {
         // One id for all retries of this setup, so a late reply to an earlier try still counts.
@@ -1114,6 +1118,7 @@ void sendStunRequest() {
     }
     sendto(g_sock, reinterpret_cast<const char*>(req), sizeof(req), 0, res->ai_addr, static_cast<int>(res->ai_addrlen));
     freeaddrinfo(res);
+    return true;
 }
 
 bool handleStun(const unsigned char* b, int n) {
@@ -1148,37 +1153,76 @@ bool isPrivate(uint32_t ip) {
            (ip >> 22) == ((100 << 2) | 1) /* 100.64/10, carrier-grade NAT */ || (ip >> 24) == 127;
 }
 
-void publishCode(const std::string& code, const std::string& lan) {
-    {
-        std::lock_guard<std::mutex> lock(g_m);
-        g_joinCode = code;
-        g_lanCode = lan;
+void beginHostStatus(uint16_t port, bool upnpEnabled) {
+    std::lock_guard<std::mutex> lock(g_m);
+    g_hostStatus = {};
+    g_hostStatus.active = true;
+    g_hostStatus.port = port;
+    g_hostStatus.upnp = upnpEnabled ? UpnpState::Pending : UpnpState::Disabled;
+    g_hostStatus.address = PublicAddressState::Pending;
+}
+
+bool currentHost(uint32_t generation, uint16_t port) { // g_m held
+    return g_run && g_role == Role::Host && generation == g_generation && g_hostStatus.port == port;
+}
+
+bool publishRouterResult(uint32_t generation, uint16_t port, const upnp::Result& result, bool enabled) {
+    std::lock_guard<std::mutex> lock(g_m);
+    if (!currentHost(generation, port)) return false;
+    g_hostStatus.upnp = !enabled ? UpnpState::Disabled : result.mapped ? UpnpState::Mapped : UpnpState::Failed;
+    g_hostStatus.upnpError = result.error;
+    const uint32_t local = parseIp(result.localIp);
+    g_hostStatus.lanCode = local ? joincode::encode(local, port) : std::string();
+    return true;
+}
+
+bool publishHostResult(uint32_t generation, uint16_t port, uint32_t publicIp, uint16_t publicPort,
+                       bool additionalNat, bool privateOnly) {
+    std::lock_guard<std::mutex> lock(g_m);
+    if (!currentHost(generation, port)) return false;
+    g_hostStatus.additionalNat = additionalNat;
+    g_hostStatus.joinCode = publicIp ? joincode::encode(publicIp, publicPort) : std::string();
+    g_hostStatus.publicAddress.clear();
+    if (!g_hostStatus.joinCode.empty()) {
+        g_hostStatus.address = PublicAddressState::Available;
+        g_hostStatus.publicAddress = std::to_string(publicIp >> 24) + "." +
+            std::to_string((publicIp >> 16) & 255) + "." + std::to_string((publicIp >> 8) & 255) + "." +
+            std::to_string(publicIp & 255) + ":" + std::to_string(publicPort);
+    } else {
+        g_hostStatus.address = privateOnly ? PublicAddressState::PrivateNetwork : PublicAddressState::Unavailable;
     }
-    // join_code.txt next to the mod. The clipboard is only written by the menu's Copy button (S-13).
+    return true;
+}
+
+void saveJoinCodes(uint32_t generation) {
+    // Keep the generation check and file write serialized with session changes.
+    std::lock_guard<std::mutex> start(g_startM);
+    if (generation != g_generation || !g_run || g_role != Role::Host) return;
+    const HostStatus status = hostStatus();
     const std::wstring path = config::dir() + L"join_code.txt";
     if (FILE* f = _wfopen(path.c_str(), L"wb")) {
-        fprintf(f, "MECMP join code: %s\r\nSame network (LAN): %s\r\n", code.c_str(), lan.c_str());
+        fprintf(f, "MECMP join code: %s\r\nSame network (LAN): %s\r\n", status.joinCode.c_str(), status.lanCode.c_str());
         fclose(f);
     }
 }
-
-void hostSetup(uint32_t generation) {
+void hostSetup(uint32_t generation, uint16_t port, bool upnpEnabled) {
     upnp::Result r;
-    if (!routerMap(g_port, &r)) {
+    if (!routerMap(port, &r)) {
         if (generation != g_generation) return;
         if (r.error.empty()) r.error = "not attempted";
     }
-    const uint32_t lanIp = parseIp(r.localIp);
-    const std::string lan = lanIp ? joincode::encode(lanIp, g_port) : std::string();
+    if (!publishRouterResult(generation, port, r, upnpEnabled)) return;
+    bool additionalNat = false;
+    bool privateOnly = false;
     uint32_t pub = parseIp(r.externalIp);
-    uint16_t pubPort = g_port;
+    uint16_t pubPort = port;
     if (r.mapped) {
-        MLOG("net: router port %u opened with UPnP", g_port);
+        MLOG("net: router port %u opened with UPnP", port);
     } else {
         MLOG("net: UPnP: %s", r.error.c_str());
         // Ask a public STUN server how the internet sees us (waits up to ~2 s for the reply).
         for (int i = 0; i < 4 && !g_stunIp; ++i) {
-            sendStunRequest();
+            if (!sendStunRequest(generation)) return;
             Sleep(500);
         }
         if (g_stunIp) {
@@ -1186,13 +1230,14 @@ void hostSetup(uint32_t generation) {
             pubPort = g_stunPort;
         }
         MLOG("net: friends outside your network can only join if UDP port %u is forwarded to this PC on your router",
-             g_port);
+             port);
     }
     if (pub && isPrivate(pub)) {
+        additionalNat = true;
         // The router itself sits behind another router (double NAT) or the ISP's NAT. Ask STUN
         // how the internet sees us; the outer router may still need the port forwarded.
         for (int i = 0; i < 4 && !g_stunIp; ++i) {
-            sendStunRequest();
+            if (!sendStunRequest(generation)) return;
             Sleep(500);
         }
         const uint32_t outer = g_stunIp;
@@ -1202,15 +1247,18 @@ void hostSetup(uint32_t generation) {
             pub = outer;
             pubPort = g_stunPort;
             MLOG("net: the join code below works if the outer router forwards UDP %u to your router. If friends cannot "
-                 "join, let another player host, or use Tailscale/ZeroTier.", g_port);
+                 "join, let another player host, or use Tailscale/ZeroTier.", port);
         } else {
             MLOG("net: not reachable from the internet (carrier-grade NAT). Let another player host, or use Tailscale/ZeroTier.");
             pub = 0;
+            privateOnly = true;
         }
     }
-    const std::string code = pub ? joincode::encode(pub, pubPort) : std::string();
-    if (generation != g_generation) return; // the session was changed meanwhile
-    publishCode(code, lan);
+    if (!publishHostResult(generation, port, pub, pubPort, additionalNat, privateOnly)) return;
+    saveJoinCodes(generation);
+    const HostStatus status = hostStatus();
+    const std::string& code = status.joinCode;
+    const std::string& lan = status.lanCode;
     if (!code.empty())
         MLOG("net: HOSTING. Join code: %s  (saved in join_code.txt; the menu's Copy button copies it)", code.c_str());
     if (!lan.empty()) MLOG("net: join code for players on your own network: %s", lan.c_str());
@@ -1448,7 +1496,6 @@ void threadMain() {
 }
 // Starting, stopping and switching sessions are serialised: start() can now run on a helper thread
 // (startAsync), while the menu's Leave and the game's exit run on others.
-std::mutex g_startM;
 std::atomic<uint32_t> g_startRequest{0}; // bumped by each startAsync, leave() and shutdown(): only the latest request starts
 std::atomic<bool> g_starting{false};     // a startAsync is still looking up its address
 std::atomic<bool> g_closed{false};       // the game is exiting: no session starts any more
@@ -1482,8 +1529,7 @@ bool startLocked(uint16_t port, const std::string& join, float loopbackOffset, c
         g_hostSession = 0;
         g_hostTimeOfDayAt = 0;
         g_serverName.clear();
-        g_joinCode.clear();
-        g_lanCode.clear();
+        g_hostStatus = {};
         g_name = name;
         g_outBurst.clear();
         for (PingCell& c : g_myPings) c = PingCell{};
@@ -1552,6 +1598,7 @@ bool startLocked(uint16_t port, const std::string& join, float loopbackOffset, c
     }
     if (join.empty()) {
         g_role = Role::Host;
+        beginHostStatus(port, config::get()->upnp);
         MLOG("net: hosting on UDP %u; setting up the router and the join code...", g_port);
     } else {
         g_role = Role::Join;
@@ -1575,7 +1622,7 @@ bool startLocked(uint16_t port, const std::string& join, float loopbackOffset, c
     }
     g_run = true;
     g_thread = std::thread(threadMain);
-    if (g_role == Role::Host) std::thread(hostSetup, g_generation.load()).detach();
+    if (g_role == Role::Host) std::thread(hostSetup, g_generation.load(), g_port, config::get()->upnp).detach();
     // Hole punching: not for a host on our own network (or ourselves: the solo test), which is reached directly.
     const std::string rv = config::get()->rendezvous;
     const bool hostOnLan = g_role == Role::Join && isPrivate(ntohl(g_hostAddr.sin_addr.s_addr));
@@ -2085,9 +2132,14 @@ bool remoteState(uint32_t id, PlayerState& out, uint32_t& ageMs) {
     return true;
 }
 
+HostStatus hostStatus() {
+    std::lock_guard<std::mutex> lock(g_m);
+    return g_run && g_role == Role::Host ? g_hostStatus : HostStatus{};
+}
+
 std::string joinCode() {
     std::lock_guard<std::mutex> lock(g_m);
-    return g_joinCode;
+    return g_hostStatus.joinCode;
 }
 
 bool hosting() { return g_role == Role::Host; }
@@ -2111,7 +2163,7 @@ bool running() { return g_run.load(); }
 bool connectedToHost() { return g_heardFromHost; }
 std::string lanCode() {
     std::lock_guard<std::mutex> lock(g_m);
-    return g_lanCode;
+    return g_hostStatus.lanCode;
 }
 void setOnlineProfile(uint64_t id, const char* name) {
     std::lock_guard<std::mutex> lock(g_m);
@@ -2137,7 +2189,7 @@ std::string describe() {
     {
         std::lock_guard<std::mutex> lock(g_m);
         peers = g_role == Role::Host ? g_members.size() : g_sendTo.size();
-        code = g_joinCode;
+        code = g_hostStatus.joinCode;
     }
     const uint64_t sent = g_sent.load();
     char buf[320];

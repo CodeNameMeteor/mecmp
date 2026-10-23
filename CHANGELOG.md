@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Hosting status
+- The Session tab now shows the listening UDP port, UPnP setup result and external-address lookup separately.
+  If no internet join code can be obtained, the menu explains the result instead of showing
+  "Preparing your join code" indefinitely. The local host keeps running. Finding an external address
+  does not confirm that the port is reachable from the internet.
 ### Ghosts
 - **Unused ghosts are now despawned.** A ghost whose player left is still hidden and kept for the next player (a
   player who reconnects gets theirs back), but one nobody has taken for 60 s is now taken away through its spawner,

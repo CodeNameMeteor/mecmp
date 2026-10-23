@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Dedicated server
+- **The Discord live message stays in sight.** On a busy day the joins, leaves and finished runs pushed the "who is
+  online" message out of view. It now moves back to the bottom of the channel (posted again, the old one deleted)
+  once 10 of the server's posts are below it, or after 5 minutes with any of them below it
+  (`webhook_live_bump_after`, `webhook_live_bump_minutes`; 0 turns either off). A webhook cannot see other people's
+  messages, so chat alone does not move it.
+
 ### Hosting status
 - The Session tab now shows the listening UDP port, UPnP setup result and external-address lookup separately.
   If no internet join code can be obtained, the menu explains the result instead of showing

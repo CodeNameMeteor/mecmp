@@ -135,6 +135,8 @@ bool readConfig(const std::string& path, Options& o, bool required) {
         else if (k == "webhook_results") o.discord.results = v != "0";
         else if (k == "webhook_live") o.discord.live = v != "0";
         else if (k == "webhook_status_id_file") o.discord.statusIdFile = v;
+        else if (k == "webhook_live_bump_after") o.discord.statusBumpAfter = std::clamp(std::atoi(v.c_str()), 0, 1000);
+        else if (k == "webhook_live_bump_minutes") o.discord.statusBumpMinutes = std::clamp(std::atoi(v.c_str()), 0, 1440);
         else if (k == "webhook_activity_file") o.discord.trackFile = v;
         else if (k == "webhook_keep_results") o.keepResults = v == "1";
         else if (k == "public_address") o.publicAddress = v;
@@ -173,6 +175,10 @@ void writeDefaultConfig(const std::string& path) {
            "# and go; it is kept across restarts (its id is saved in webhook_status_id_file)\n"
            "webhook_live=1\n"
            "webhook_status_id_file=webhook_status_id.txt\n"
+           "# the live message moves back to the bottom of the channel (posted again, the old one deleted) once this\n"
+           "# many of the server's posts are below it, or after this many minutes with any of them below it (0 = never)\n"
+           "webhook_live_bump_after=10\n"
+           "webhook_live_bump_minutes=5\n"
            "# posts: players joining and leaving, server online / offline, finished dashes and time trials\n"
            "# (0 turns one off)\n"
            "webhook_joins=1\n"
@@ -459,7 +465,8 @@ void reloadBansIfChanged(mecmp::server::Relay& relay) {
 // Two webhook settings are the same (the webhook is built once, at start).
 bool sameWebhook(const mecmp::server::discord::Config& a, const mecmp::server::discord::Config& b) {
     return a.url == b.url && a.username == b.username && a.joins == b.joins && a.status == b.status &&
-           a.results == b.results && a.live == b.live && a.statusIdFile == b.statusIdFile && a.trackFile == b.trackFile;
+           a.results == b.results && a.live == b.live && a.statusIdFile == b.statusIdFile && a.trackFile == b.trackFile &&
+           a.statusBumpAfter == b.statusBumpAfter && a.statusBumpMinutes == b.statusBumpMinutes;
 }
 
 // `reset`: every player is dropped, then mecmp_server.ini is read again (the command line still wins). The settings

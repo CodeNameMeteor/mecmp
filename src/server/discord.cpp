@@ -317,6 +317,11 @@ Answer sendJson(const char* method, const std::string& url, const std::string& b
 
 } // namespace
 
+bool statusBumpDue(int below, double minutes, int bumpAfter, int bumpMinutes) {
+    if (below <= 0) return false; // nothing of ours below it: it is still the newest
+    return (bumpAfter > 0 && below >= bumpAfter) || (bumpMinutes > 0 && minutes >= bumpMinutes);
+}
+
 // --- Poster ------------------------------------------------------------------------------------------
 
 Webhook::Webhook(Config cfg, Log log) : cfg_(std::move(cfg)), log_(std::move(log)) {
@@ -419,11 +424,11 @@ void writeFile(const std::string& path, const std::string& text) {
 // The live status message: edited in place (PATCH .../messages/<id>); posted the first time, or again if it
 // was deleted. Returns false to retry later (network, rate limit).
 bool Webhook::sendStatus(const std::string& text, std::chrono::steady_clock::time_point& nextPost,
-                         std::chrono::steady_clock::time_point deadline) {
+                         std::chrono::steady_clock::time_point deadline, bool bump) {
     using clock = std::chrono::steady_clock;
     if (statusId_.empty() && !cfg_.statusIdFile.empty()) {
         const std::string saved = readFileTrimmed(cfg_.statusIdFile);
-        if (isMessageId(saved)) statusId_ = saved;
+        if (isMessageId(saved)) { statusId_ = saved; statusPostedAt_ = clock::now(); }
     }
     const auto now = clock::now();
     if (now < nextPost) {
@@ -431,7 +436,24 @@ bool Webhook::sendStatus(const std::string& text, std::chrono::steady_clock::tim
         std::this_thread::sleep_for(nextPost - now);
     }
     Answer a;
-    if (!statusId_.empty()) {
+    if (bump && !statusId_.empty()) {
+        // To the bottom: the new message first (the channel always has one), then the old one goes.
+        a = sendJson("POST", withQuery(cfg_.url, "wait=true"), payload(text, cfg_.username));
+        const std::string id = a.status >= 200 && a.status < 300 ? messageId(a.body) : std::string();
+        if (!id.empty()) {
+            toDelete_.push_back(statusId_);
+            statusId_ = id;
+            if (!cfg_.statusIdFile.empty()) writeFile(cfg_.statusIdFile, statusId_);
+            saveTracked(); // the old one is deleted with the next pass (or at the next start)
+            linesBelowStatus_ = activityBelowStatus_ = 0;
+            statusPostedAt_ = clock::now();
+        } else {
+            // Not moved (Discord refused or did not answer): wait for the next trigger instead of trying again
+            // straight away. A pending edit is retried as a normal edit.
+            linesBelowStatus_ = activityBelowStatus_ = 0;
+            statusPostedAt_ = clock::now();
+        }
+    } else if (!statusId_.empty()) {
         a = sendJson("PATCH", withPath(cfg_.url, "/messages/" + statusId_), payload(text, ""));
         if (a.status == 404) { // deleted in Discord: post a new one
             log_("discord: the status message was deleted; posting a new one");
@@ -443,6 +465,8 @@ bool Webhook::sendStatus(const std::string& text, std::chrono::steady_clock::tim
         if (a.status >= 200 && a.status < 300) {
             statusId_ = messageId(a.body);
             if (!statusId_.empty() && !cfg_.statusIdFile.empty()) writeFile(cfg_.statusIdFile, statusId_);
+            linesBelowStatus_ = activityBelowStatus_ = 0;
+            statusPostedAt_ = clock::now();
         }
     }
     nextPost = clock::now() + std::chrono::milliseconds(2100);
@@ -468,6 +492,7 @@ void Webhook::sendPosts(std::deque<std::string> posts, bool track, clock::time_p
         const Answer a = sendJson("POST", url, payload(posts.front(), cfg_.username));
         nextPost = clock::now() + std::chrono::milliseconds(2100); // ~28 posts a minute at most
         if (a.status >= 200 && a.status < 300) {
+            if (!statusId_.empty()) ++(track ? activityBelowStatus_ : linesBelowStatus_);
             if (track) {
                 const std::string id = messageId(a.body);
                 if (id.empty() && !playerLogged_) {
@@ -554,6 +579,18 @@ void Webhook::deleteMessages(clock::time_point& nextPost, bool stopping) {
     }
 }
 
+bool Webhook::bumpDue(clock::time_point now) const {
+    if (!cfg_.live || statusId_.empty()) return false;
+    const double minutes = std::chrono::duration<double>(now - statusPostedAt_).count() / 60.0;
+    return statusBumpDue(linesBelowStatus_ + activityBelowStatus_, minutes, cfg_.statusBumpAfter, cfg_.statusBumpMinutes);
+}
+
+Webhook::clock::time_point Webhook::bumpAt() const {
+    if (!cfg_.live || statusId_.empty() || cfg_.statusBumpMinutes <= 0 || linesBelowStatus_ + activityBelowStatus_ <= 0)
+        return clock::time_point::max();
+    return statusPostedAt_ + std::chrono::minutes(cfg_.statusBumpMinutes);
+}
+
 void Webhook::run() {
     clock::time_point nextPost = clock::now();
     clock::time_point nextStatus = clock::now(); // at most one edit every kStatusGap (the latest text wins)
@@ -564,19 +601,30 @@ void Webhook::run() {
         std::string status;
         bool haveStatus = false;
         bool stopping = false;
+        bool bump = false;
         {
             std::unique_lock<std::mutex> lock(m_);
-            cv_.wait(lock, [this] { return stop_ || !queue_.empty() || statusDirty_ || !toDelete_.empty(); });
+            const auto work = [this] { return stop_ || !queue_.empty() || statusDirty_ || !toDelete_.empty(); };
+            // Also wakes up when the live message is due to move to the bottom by time alone.
+            const clock::time_point wakeAt = bumpAt();
+            if (wakeAt == clock::time_point::max()) cv_.wait(lock, work);
+            else cv_.wait_until(lock, wakeAt, work);
             stopping = stop_;
             if (stopping && queue_.empty() && !statusDirty_ && toDelete_.empty()) return;
+            if (!stopping && !statusText_.empty() && bumpDue(clock::now())) {
+                status = statusText_; // the latest text, posted anew at the bottom
+                statusDirty_ = false;
+                haveStatus = true;
+                bump = true;
+            }
             // Gather what arrives in the next 2 s into the same post (unless stopping).
             if (!stop_ && !queue_.empty()) cv_.wait_for(lock, std::chrono::seconds(2), [this] { return stop_; });
             items.swap(queue_);
-            if (statusDirty_ && (stop_ || clock::now() >= nextStatus)) {
+            if (!bump && statusDirty_ && (stop_ || clock::now() >= nextStatus)) {
                 status = statusText_;
                 statusDirty_ = false;
                 haveStatus = true;
-            } else if (statusDirty_ && items.empty() && toDelete_.empty()) {
+            } else if (!bump && statusDirty_ && items.empty() && toDelete_.empty()) {
                 cv_.wait_until(lock, nextStatus, [this] { return stop_; }); // the next edit is not due yet
                 continue;
             }
@@ -595,6 +643,7 @@ void Webhook::run() {
         for (size_t i = 0; i < items.size();) {
             if (items[i].kind == Item::EndSession) {
                 for (const std::string& id : activity_.take()) toDelete_.push_back(id);
+                activityBelowStatus_ = 0; // those posts are deleted now: they no longer bury the live message
                 saveTracked();
                 ++i;
                 continue;
@@ -607,11 +656,17 @@ void Webhook::run() {
         }
         deleteMessages(nextPost, stopping);
         if (haveStatus) {
-            if (!sendStatus(status, nextPost, clock::now() + std::chrono::seconds(120))) {
+            // Posts gathered in this pass went below the live message: moving it is checked again first.
+            if (!bump && bumpDue(clock::now())) bump = true;
+            if (!sendStatus(status, nextPost, clock::now() + std::chrono::seconds(120), bump)) {
                 std::lock_guard<std::mutex> lock(m_);
                 if (!statusDirty_) { statusText_ = status; statusDirty_ = !stop_; } // retry unless stopping
             }
             nextStatus = clock::now() + kStatusGap;
+        } else if (!stopping && bumpDue(clock::now())) {
+            // This pass's posts buried the live message: move it on the next pass.
+            std::lock_guard<std::mutex> lock(m_);
+            statusDirty_ = true;
         }
     }
 }

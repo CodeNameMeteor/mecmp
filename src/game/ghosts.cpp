@@ -843,17 +843,15 @@ void onClientCharacter(void* ent) {
 
 void setCharacterDataType(uintptr_t runtimeTypeInfo) { g_tiCharData = runtimeTypeInfo; }
 
-// The map's echo: when the map opens, a client replay entity takes the *last* client character of its client
+// The map's echo and the "Your Echo" screen: a client replay entity takes the *last* client character of its client
 // character spawner and plays its recording on it (PamClientReplayEntity on CharacterSpawned, 0x14394ab60 ->
-// 0x14394b1d0 -> 0x1432a60e0). Our ghosts' client characters end up in the city-ghost spawner's client list (the
-// client spawner adds every character spawned for it, vtable +0xf8 -> 0x143239bb0), often as its only entry, and the
-// map then took our ghost: it stopped taking our poses and disappeared while the map was open. Reordering could not
-// help when ours was the only one. So our client characters are taken out of every client spawner list, the way the
-// spawner itself removes one (vtable +0x100, 0x143234e20: swap with the last, shorten, +0xd0 = the new last one's bus
-// or 0) but without telling its listeners (our ghost is not going anywhere). That list then holds only the game's
-// characters, as without the mod. Its removal on a real despawn finds nothing and does nothing. Client game thread
+// 0x14394b1d0 -> 0x1432a60e0). Our ghosts' client characters are added to the city-ghost spawner's client list after
+// the game's echo (vtable +0xf8, 0x143239bb0), so the map took our ghost: it stopped taking our poses, and the echo
+// screen showed it. Like keepGameCharacterLast on the server: in every client spawner list that holds one of our
+// ghosts and a character of the game's, ours go first and the game's stay last, in their order. Only pointers inside
+// the list move, and +0xd0 (the last one's bus) stays right because the last one does not change. Client game thread
 // (the replay updater, where the map's replay runs), at most every 0.25 s.
-static void keepGhostsOutOfClientSpawners() {
+static void keepGameClientCharactersLast() {
     static DWORD lastAt = 0;
     const DWORD now = GetTickCount();
     if (now - lastAt < 250) return;
@@ -866,33 +864,29 @@ static void keepGhostsOutOfClientSpawners() {
     }
     if (mine.empty()) return;
     for (void* sp : level::clientSpawners()) {
-        const uintptr_t s = reinterpret_cast<uintptr_t>(sp);
         uintptr_t list[2] = {};
-        if (!mem::read(s + ClientSpawner_Spawned, list, sizeof(list)) || list[1] <= list[0] || (list[1] - list[0]) % 8 ||
-            (list[1] - list[0]) / 8 > 64)
+        if (!mem::read(reinterpret_cast<uintptr_t>(sp) + ClientSpawner_Spawned, list, sizeof(list)) || list[1] <= list[0] ||
+            (list[1] - list[0]) % 8 || (list[1] - list[0]) / 8 > 64)
             continue;
-        size_t n = (list[1] - list[0]) / 8;
+        const size_t n = (list[1] - list[0]) / 8;
         uintptr_t items[64];
         if (!mem::read(list[0], items, n * 8)) continue;
-        size_t removed = 0;
-        for (size_t i = 0; i < n;) {
-            if (std::find(mine.begin(), mine.end(), items[i]) == mine.end()) { ++i; continue; }
-            MLOG("ghost: client character %p taken out of client spawner %p (%llu of %llu), so the map's echo cannot take it",
-                 reinterpret_cast<void*>(items[i]), sp, static_cast<unsigned long long>(i + 1), static_cast<unsigned long long>(n));
-            items[i] = items[n - 1]; // as the game's own removal: the last one takes its place
-            --n;
-            ++removed;
-        }
-        if (!removed) continue;
-        poke(list[0], items, n * 8);
-        poke<uintptr_t>(s + ClientSpawner_Spawned + 8, list[0] + n * 8);
-        poke<uintptr_t>(s + ClientSpawner_LastBus, n ? mem::readOr<uintptr_t>(items[n - 1] + Character_Bus) : 0);
+        std::vector<uintptr_t> ours, theirs;
+        for (size_t i = 0; i < n; ++i)
+            (std::find(mine.begin(), mine.end(), items[i]) != mine.end() ? ours : theirs).push_back(items[i]);
+        if (ours.empty() || theirs.empty()) continue;
+        if (std::find(ours.begin(), ours.end(), items[n - 1]) == ours.end()) continue; // the game's is last already
+        std::vector<uintptr_t> order = ours;
+        order.insert(order.end(), theirs.begin(), theirs.end());
+        poke(list[0], order.data(), n * 8);
+        poke<uintptr_t>(reinterpret_cast<uintptr_t>(sp) + ClientSpawner_LastBus, mem::readOr<uintptr_t>(order.back() + Character_Bus));
+        MLOG("ghost: client spawner %p list reordered: the game's own character is last again", sp);
     }
 }
 
 void beforeClientReplayUpdate() {
     ++g_updaterCalls;
-    keepGhostsOutOfClientSpawners();
+    keepGameClientCharactersLast();
     renderFrame();
 }
 
@@ -1052,6 +1046,27 @@ void tick(uint64_t tick, uint64_t ticksInLevel) {
             if (n) MLOG("ghost: a game menu closed: %llu ghost(s) shown again and their look re-applied", static_cast<unsigned long long>(n));
         }
         menuWas = menu;
+    }
+    {   // Diagnostic: the city-ghost spawner's list (the game's echo lives there), on change.
+        static std::string lastText;
+        static void* lastSp = nullptr;
+        void* const city = level::ghostSpawner();
+        uintptr_t list[2] = {};
+        if (level::spawnerAlive(city) && mem::read(reinterpret_cast<uintptr_t>(city) + Spawner_Spawned, list, sizeof(list)) &&
+            list[1] >= list[0] && (list[1] - list[0]) / 8 <= 64) {
+            std::string text;
+            for (uintptr_t it = list[0]; it < list[1]; it += 8) {
+                char b[32];
+                snprintf(b, sizeof(b), " %p", reinterpret_cast<void*>(mem::readOr<uintptr_t>(it)));
+                text += b;
+            }
+            if (city != lastSp || text != lastText) {
+                VLOG("trace: city-ghost spawner %p holds %llu:%s%s", city, static_cast<unsigned long long>((list[1] - list[0]) / 8),
+                     text.c_str(), hooks::gameMenuOpen() ? " [game menu open]" : "");
+                lastSp = city;
+                lastText = text;
+            }
+        }
     }
     std::vector<Present> players; // present now
     for (const auto& r : net::remotes(kHideAfterMs))

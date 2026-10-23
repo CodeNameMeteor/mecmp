@@ -1040,9 +1040,9 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
         return;
     }
     if (h.type == proto::kTypeAudio) {
-#ifndef MECMP_PLAYER_AUDIO
-        return; // player sounds are disabled in this build (game/player_audio.h): nothing plays them
-#endif
+        // Player sounds are disabled unless built with MECMP_PLAYER_AUDIO (game/player_audio.h): nothing plays them.
+        // The body is left out rather than skipped by an early return, which MSVC reports as unreachable (C4702).
+#ifdef MECMP_PLAYER_AUDIO
         PlayerAudio sample;
         const DWORD now = GetTickCount();
         if (!proto::readAudio(payload, len, sample)) { ++g_dropped; return; }
@@ -1058,6 +1058,7 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
         if (until < -500. || until > 500.) return;
         const DWORD playAt = now + static_cast<DWORD>(static_cast<int32_t>(std::max(0., until)));
         g_audio.push_back({r.id, now, playAt, sample});
+#endif
         return;
     }
     if (h.type != proto::kTypeState) return;

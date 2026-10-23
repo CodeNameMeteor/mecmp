@@ -71,15 +71,19 @@ The Players list includes your own row without travel or summon controls. Your r
 host or server; other rows show RTT to that player through the host or server. Loss is the share of
 incoming movement snapshots missing over the last five seconds, including late snapshots. Upload
 loss is not measured. Unknown or stale measurements show `n/a`; a local host shows `local` for ping.
+The host periodically confirms admitted players with ordered presence messages. This lets a player
+rejoin after a missed kick or an unban without old departure packets hiding them again.
 Session membership follows network traffic rather than ghost visibility, so loading a level does
 not count as leaving. Notices distinguish a received exit, a timeout, a kick, a ban and session closure.
 A timeout means contact was lost, without guessing whether the game crashed or the internet failed.
-After ten seconds without valid HELLO, movement or probe traffic from the host, the connection status
-expires and recovers when that traffic resumes.
+After ten seconds without valid HELLO, movement, probe or presence traffic from the host, the
+connection status expires and recovers when that traffic resumes.
 
 These additions keep protocol 8 and the existing delta/base pose format. Older protocol-8 peers can
-still play, but they ignore the new RTT and departure packets. Ping then stays `n/a`, and departures
+still play, but they ignore the new RTT, departure and presence packets. Ping then stays `n/a`, and departures
 without an explicit notice fall back to a timeout. Update the host/server and clients for all features.
+A timeout or server reset keeps the client reconnecting; a kick, ban or host shutdown stops it.
+Switching sessions clears pending outgoing chat, so messages cannot carry over to another session.
 
 Solo test (developer builds only): *Solo test* in the menu, or `join=127.0.0.1:47800`. Your own packets come back and a
 ghost copies your moves 3 m away along the world X axis (`loopback_offset`); it stays put while you

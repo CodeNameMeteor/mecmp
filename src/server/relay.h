@@ -23,7 +23,6 @@
 
 #include "net/connection.h"
 #include "net/protocol.h"
-#include "net/connection.h"
 
 namespace mecmp::server {
 
@@ -116,6 +115,7 @@ public:
     // server chat and counters start again. Bans stay, and so do kick blocks (they run out by themselves).
     void reset();
     void shutdown();
+    bool pendingDepartures() const { return departures_.size() != 0; }
     // The settings read again (`reset`): players stay connected; a lower limit only refuses new ones.
     void reconfigure(Config cfg);
 
@@ -150,6 +150,9 @@ private:
     Config cfg_;
     uint32_t session_;
     uint32_t seq_ = 0;
+    uint32_t nowMs_ = 0;
+    bool stopping_ = false;
+    net::DepartureQueue<Addr> departures_;
     uint8_t cookieKey_[16] = {}; // random per process: the cookies it hands out are only valid for it
     Send send_;
     Log log_;

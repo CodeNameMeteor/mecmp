@@ -1,6 +1,9 @@
 #pragma once
 
 #include <cstdint>
+#include <cstddef>
+#include <deque>
+#include <vector>
 
 namespace mecmp::net {
 
@@ -8,6 +11,33 @@ constexpr uint32_t kConnectionTimeoutMs = 10000;
 constexpr uint32_t kProbeEveryMs = 2000;
 constexpr uint32_t kProbeSpacingMs = 250;
 constexpr uint32_t kProbeFreshMs = 6000;
+
+template <class Address> class DepartureQueue {
+    struct Pending {
+        Address to;
+        std::vector<char> bytes;
+        uint32_t started, due;
+        unsigned left;
+    };
+    std::deque<Pending> pending_;
+public:
+    static constexpr size_t kLimit = 512;
+    void add(const Address& to, const char* bytes, size_t size, uint32_t now) {
+        if (pending_.size() == kLimit) pending_.pop_front();
+        pending_.push_back({to, {bytes, bytes + size}, now, now + 100, 2});
+    }
+    template <class Send> void pump(uint32_t now, Send send) {
+        for (auto it = pending_.begin(); it != pending_.end();) {
+            if (now - it->started >= 1000) { it = pending_.erase(it); continue; }
+            if (static_cast<int32_t>(now - it->due) < 0) { ++it; continue; }
+            send(it->to, it->bytes.data(), it->bytes.size());
+            if (!--it->left) it = pending_.erase(it);
+            else { it->due = now + 100; ++it; }
+        }
+    }
+    void clear() { pending_.clear(); }
+    size_t size() const { return pending_.size(); }
+};
 
 // Header::seq of STATE packets: each sender numbers its STATE packets on their own (other packet types
 // have their own counter), so a gap is a lost STATE and an older number is a stale or repeated one.

@@ -179,7 +179,7 @@ static void testServerHello() {
     t.deliver(A, hA, 0);
     t.sent.clear();
     t.relay.tick(0); // a newcomer is greeted at once
-    CHECK(t.sentTo(A) == 1);
+    CHECK(t.sentTo(A) == 2); // server HELLO and host-authored presence
     proto::Header h;
     memcpy(&h, t.sent[0].data.data(), sizeof(h));
     CHECK(h.type == proto::kTypeHello && h.session == 0xabcdef01);
@@ -192,7 +192,7 @@ static void testServerHello() {
     t.relay.tick(500); // not due yet
     CHECK(t.sent.empty());
     t.relay.tick(1000);
-    CHECK(t.sentTo(A) == 1);
+    CHECK(t.sentTo(A) == 2);
 }
 
 static void testSessionBinding() {
@@ -971,6 +971,7 @@ static void testDepartures() {
     t.sent.clear();
     t.relay.tick(10501);
     CHECK(hasDeparture(t, A, 3, proto::DepartureReason::TimedOut));
+    CHECK(!hasDeparture(t, C, 3, proto::DepartureReason::TimedOut));
     t.deliver(B, hello(4, "bob"), 10600);
     t.sent.clear();
     CHECK(t.relay.kick("bob", 10700));
@@ -1027,7 +1028,82 @@ static void testStateOrder() {
     CHECK(t.sentTo(B) == 0);
 }
 
+static void testPresenceAndResetNotices() {
+    Harness t;
+    t.deliver(A, hello(1, "alice"), 100);
+    t.deliver(B, hello(2, "bob"), 100);
+    t.sent.clear();
+    t.relay.tick(200);
+    bool confirmed = false;
+    for (const auto& sent : t.sent) {
+        proto::Header h{};
+        if (sent.to != A || sent.data.size() != sizeof(h) + sizeof(uint32_t)) continue;
+        memcpy(&h, sent.data.data(), sizeof(h));
+        uint32_t player = 0;
+        memcpy(&player, sent.data.data() + sizeof(h), sizeof(player));
+        confirmed |= h.type == 18 && h.session == t.relay.session() && player == 2;
+    }
+    CHECK(confirmed);
+    t.sent.clear();
+    char forged[sizeof(proto::Header) + sizeof(uint32_t)];
+    const proto::Header header{proto::kMagic, proto::kProtocol, 18, 1, 20};
+    const uint32_t player = 2;
+    memcpy(forged, &header, sizeof(header));
+    memcpy(forged + sizeof(header), &player, sizeof(player));
+    t.relay.onPacket(A, forged, sizeof(forged), 250);
+    CHECK(t.sent.empty());
+    t.sent.clear();
+    t.relay.reset();
+    CHECK(!hasDeparture(t, A, 1, proto::DepartureReason::SessionClosed));
+    CHECK(hasDeparture(t, A, 1, proto::DepartureReason::SessionReset));
+    server::Config cfg;
+    cfg.mirror = true;
+    Harness mirror(cfg);
+    mirror.deliver(A, hello(1, "alice"), 100);
+    mirror.sent.clear();
+    mirror.relay.tick(100);
+    bool mirrorConfirmed = false;
+    for (const auto& sent : mirror.sent) {
+        proto::Header h{};
+        memcpy(&h, sent.data.data(), sizeof(h));
+        uint32_t id = 0;
+        if (sent.to == A && h.type == proto::kTypePresence &&
+            proto::readPresence(sent.data.data() + sizeof(h), sent.data.size() - sizeof(h), id))
+            mirrorConfirmed |= id == server::mirrorSession(1);
+    }
+    CHECK(mirrorConfirmed);
+}
+
+static void testDepartureRetrySpacing() {
+    Harness t;
+    t.deliver(A, hello(1, "alice"), 100);
+    t.deliver(B, hello(2, "bob"), 100);
+    t.sent.clear();
+    CHECK(t.relay.kick("bob", 200));
+    size_t notices = 0;
+    for (const auto& sent : t.sent) {
+        proto::Header h{};
+        memcpy(&h, sent.data.data(), sizeof(h));
+        notices += sent.to == A && h.type == proto::kTypeDeparture;
+    }
+    CHECK(notices == 1);
+    t.sent.clear();
+    t.relay.tick(250);
+    CHECK(!hasDeparture(t, A, 2, proto::DepartureReason::Kicked));
+    t.sent.clear();
+    t.relay.tick(300);
+    CHECK(hasDeparture(t, A, 2, proto::DepartureReason::Kicked));
+    t.sent.clear();
+    t.relay.tick(400);
+    CHECK(hasDeparture(t, A, 2, proto::DepartureReason::Kicked));
+    t.sent.clear();
+    t.relay.tick(500);
+    CHECK(!hasDeparture(t, A, 2, proto::DepartureReason::Kicked));
+}
+
 int main() {
+    testDepartureRetrySpacing();
+    testPresenceAndResetNotices();
     testDepartures();
     testProbeRouting();
     testStateOrder();

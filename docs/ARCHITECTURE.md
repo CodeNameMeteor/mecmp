@@ -333,10 +333,16 @@ UDP, one socket. Sessions have one host and any number of joiners (up to 16).
   through peers; its host probe is normally due every 2 s. Large sessions refresh individual peers less often.
   The local row shows host RTT; upload loss is unknown. The host's own row shows `local`.
 - Type 17 DEPARTURE carries a player id and an explicit reason. Members may report only their own voluntary
-  exit; only the host/server announces departures to clients. Exits are sent three times and can still be
-  lost over UDP. Without one, 10 s of silence produces a timeout. HELLO keeps membership alive during loading,
-  independently from the shorter movement/ghost visibility window. A silent player can resume with HELLO;
-  stale packets after an explicit departure do not recreate that player.
+  exit; only the host/server announces departures to clients. Notices are sent immediately and retried twice
+  at 100 ms intervals, with a bounded queue (512 recipients, 1 s expiry). Graceful shutdown drains the queue
+  for up to 300 ms. Packets can still be lost over UDP. Without a notice, 10 s of silence produces a timeout.
+  HELLO keeps membership alive during loading, independently from movement/ghost visibility.
+- Type 18 PRESENCE carries an admitted player id and is authored only by the host/server. It is sent with
+  periodic host HELLOs, including the listen host's own player and the server mirror when enabled. PRESENCE
+  and DEPARTURE use the same host sequence: a newer presence can revive a departed player, while an older
+  presence/departure cannot undo the latest decision. Each order is scoped to the host session id.
+  A self timeout and the explicit SessionReset reason keep the network worker alive for admission retries;
+  kick/ban/host closure still stop it. With an older host, HELLO remains the timeout recovery fallback.
 - Optional packet types do not change protocol 8's pose codec. Older peers ignore them: RTT is unavailable,
   and exit notices fall back to timeout. `Relay::drop` takes the wire reason separately from log wording.
 - At most 64 player entries are kept; an entry silent for 2 minutes is forgotten. Packets of unknown

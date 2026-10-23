@@ -3,6 +3,10 @@
 ## Unreleased
 
 ### Connection and players
+- Timeouts and server resets keep clients reconnecting. Host-confirmed re-admission restores players
+  after a missed kick or an unban; older departure packets cannot undo a newer admission.
+- Departure retries are spaced over separate ticks, lifecycle notices are written to the log, and
+  switching sessions clears pending outgoing chat.
 - The Players list includes you without travel or summon controls on your own row. Separate Ping and Loss
   columns show measured round-trip times and missing incoming movement snapshots; unknown values show `n/a`.
 - Connection status expires after ten seconds without valid host traffic and recovers when traffic resumes.

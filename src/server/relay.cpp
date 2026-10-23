@@ -108,11 +108,16 @@ void Relay::announceDeparture(uint32_t player, proto::DepartureReason reason) {
     char buf[proto::kMaxPacket];
     const proto::Header h{proto::kMagic, proto::kProtocol, proto::kTypeDeparture, session_, ++seq_};
     const size_t n = proto::writeDeparture(buf, h, {player, reason});
-    for (int repeat = 0; repeat < 3; ++repeat)
-        for (const auto& m : members_) send_(m.addr, buf, n);
+    for (const auto& m : members_) {
+        if (reason == proto::DepartureReason::TimedOut && m.session == player) continue;
+        send_(m.addr, buf, n);
+        departures_.add(m.addr, buf, n, nowMs_);
+    }
 }
 
 void Relay::onPacket(const Addr& from, const char* buf, size_t n, uint32_t nowMs) {
+    if (stopping_) return;
+    nowMs_ = nowMs;
     proto::Header h;
     if (n < sizeof(h) || n > proto::kMaxPacket) { ++stats_.dropped; return; }
     memcpy(&h, buf, sizeof(h));
@@ -175,6 +180,7 @@ void Relay::onPacket(const Addr& from, const char* buf, size_t n, uint32_t nowMs
 
     const char* payload = buf + sizeof(h);
     const size_t len = n - sizeof(h);
+    if (h.type == proto::kTypePresence) { ++stats_.dropped; ++m->dropped; return; }
     if (h.type == proto::kTypeProbe) {
         proto::Probe probe;
         if (!proto::readProbe(payload, len, probe)) { ++stats_.dropped; return; }
@@ -406,6 +412,16 @@ void Relay::sendHello() {
     const proto::Header h{proto::kMagic, proto::kProtocol, proto::kTypeHello, session_, ++seq_};
     const size_t n = proto::writeHello(buf, h, cfg_.name.c_str(), 0, proto::kHelloHost | proto::kHelloServer);
     for (const auto& m : members_) send_(m.addr, buf, n);
+    for (const auto& player : members_) {
+        const proto::Header ph{proto::kMagic, proto::kProtocol, proto::kTypePresence, session_, ++seq_};
+        const size_t size = proto::writePresence(buf, ph, player.session);
+        for (const auto& recipient : members_) send_(recipient.addr, buf, size);
+        if (cfg_.mirror) {
+            const proto::Header mh{proto::kMagic, proto::kProtocol, proto::kTypePresence, session_, ++seq_};
+            const size_t mirrorSize = proto::writePresence(buf, mh, mirrorSession(player.session));
+            send_(player.addr, buf, mirrorSize);
+        }
+    }
 }
 
 void Relay::sendHelloTo(const Addr& to) {
@@ -439,6 +455,9 @@ void Relay::queueChat(const std::string& raw, const Addr* only) {
 }
 
 void Relay::tick(uint32_t nowMs) {
+    nowMs_ = nowMs;
+    departures_.pump(nowMs, send_);
+    if (stopping_) return;
     for (size_t i = 0; i < registered_.size();) {
         if (nowMs - registered_[i].lastSeen > kRegisterTimeoutMs) registered_.erase(registered_.begin() + static_cast<long>(i));
         else ++i;
@@ -483,6 +502,7 @@ size_t Relay::matchPlayers(const std::string& who, size_t* first) const {
 }
 
 bool Relay::kick(const std::string& who, uint32_t nowMs) {
+    nowMs_ = nowMs;
     size_t i = 0;
     if (matchPlayers(who, &i) != 1) return false; // nobody, or a name several players share
     const Member& m = members_[i];
@@ -529,7 +549,7 @@ void Relay::setBans(std::set<uint32_t> ips) {
 }
 
 void Relay::reset() {
-    while (!members_.empty()) drop(0, "server reset", proto::DepartureReason::SessionClosed);
+    while (!members_.empty()) drop(0, "server reset", proto::DepartureReason::SessionReset);
     reserved_.clear();
     notices_.clear();
     chat_.clear();
@@ -538,7 +558,11 @@ void Relay::reset() {
     stats_ = Stats{};
 }
 
-void Relay::shutdown() { announceDeparture(session_, proto::DepartureReason::SessionClosed); }
+void Relay::shutdown() {
+    if (stopping_) return;
+    stopping_ = true;
+    announceDeparture(session_, proto::DepartureReason::SessionClosed);
+}
 
 void Relay::reconfigure(Config cfg) { cfg_ = std::move(cfg); }
 

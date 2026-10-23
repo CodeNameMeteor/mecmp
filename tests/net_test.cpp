@@ -1130,7 +1130,41 @@ static void testConnectionPackets() {
     CHECK(!protocol::readDeparture(buf + sizeof(h), n - sizeof(h), departure));
 }
 
+static void testPresenceCodecAndDepartureRetries() {
+    char buf[protocol::kMaxPacket];
+    const protocol::Header h{protocol::kMagic, protocol::kProtocol, protocol::kTypePresence, 1, 2};
+    uint32_t player = 0;
+    const size_t n = protocol::writePresence(buf, h, 7);
+    CHECK(protocol::readPresence(buf + sizeof(h), n - sizeof(h), player) && player == 7);
+    CHECK(!protocol::readPresence(buf + sizeof(h), n - sizeof(h) - 1, player));
+    CHECK(!protocol::readPresence(buf + sizeof(h), n - sizeof(h) + 1, player));
+    protocol::writePresence(buf, h, 0);
+    CHECK(!protocol::readPresence(buf + sizeof(h), n - sizeof(h), player));
+    protocol::Departure departure;
+    const size_t d = protocol::writeDeparture(buf, h, {7, protocol::DepartureReason::SessionReset});
+    CHECK(protocol::readDeparture(buf + sizeof(h), d - sizeof(h), departure));
+    CHECK(departure.reason == protocol::DepartureReason::SessionReset);
+    DepartureQueue<int> queue;
+    const char packet = 'x';
+    queue.add(1, &packet, 1, UINT32_MAX - 50);
+    int sends = 0;
+    const auto send = [&](int to, const char* bytes, size_t size) { CHECK(to == 1 && size == 1 && *bytes == 'x'); ++sends; };
+    queue.pump(48, send);
+    CHECK(sends == 0);
+    queue.pump(49, send);
+    CHECK(sends == 1);
+    queue.pump(148, send);
+    CHECK(sends == 1);
+    queue.pump(149, send);
+    CHECK(sends == 2 && queue.size() == 0);
+    for (size_t i = 0; i <= queue.kLimit; ++i) queue.add(static_cast<int>(i), &packet, 1, 0);
+    CHECK(queue.size() == queue.kLimit);
+    queue.pump(1000, [&](int, const char*, size_t) { ++sends; });
+    CHECK(queue.size() == 0 && sends == 2);
+}
+
 int main() {
+    testPresenceCodecAndDepartureRetries();
     testConnectionMetrics();
     testConnectionPackets();
 

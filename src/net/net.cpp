@@ -154,7 +154,11 @@ std::mutex g_startM; // serializes session start/stop and STUN sends after DNS l
 Heartbeat g_hostHeartbeat;
 RoundTrip g_hostRoundTrip;
 bool g_hostLost = false;
+StateSequence g_ownMembership;
+uint32_t g_ownMembershipHost = 0;
+uint32_t g_presenceHost = 0;
 std::deque<std::string> g_connectionNotices;
+DepartureQueue<sockaddr_in> g_departures;
 std::atomic<uint32_t> g_generation{0}; // bumped on every start(); stale host setups don't publish
 PlayerState g_local;
 bool g_haveLocal = false;
@@ -319,8 +323,38 @@ proto::Header header(uint16_t type) {
 }
 
 void connectionNotice(std::string text) {
+    MLOG("net: %s", text.c_str());
     g_connectionNotices.push_back(std::move(text));
     while (g_connectionNotices.size() > 32) g_connectionNotices.pop_front();
+}
+
+void reviveRemote(Remote& r) {
+    const auto order = r.departureSeq;
+    const uint32_t host = r.departureHost;
+    r = Remote{};
+    r.departureSeq = order;
+    r.departureHost = host;
+}
+
+void confirmPresence(uint32_t host, uint32_t seq, uint32_t player) {
+    if (player == g_session) {
+        if (g_ownMembershipHost == host && !g_ownMembership.accepts(seq)) return;
+        g_ownMembershipHost = host;
+        g_ownMembership.commit(seq);
+        return;
+    }
+    auto it = g_remotes.find(player);
+    if (it == g_remotes.end()) {
+        if (g_remotes.size() >= kMaxRemotes) return;
+        it = g_remotes.emplace(player, Remote{}).first;
+    }
+    Remote& r = it->second;
+    if (r.departureHost == host && !r.departureSeq.accepts(seq)) return;
+    if (r.departed) reviveRemote(r);
+    r.id = player;
+    r.lastHeard = GetTickCount();
+    r.departureHost = host;
+    r.departureSeq.commit(seq);
 }
 
 void hostContact() {
@@ -362,12 +396,25 @@ void departRemote(uint32_t session, proto::DepartureReason reason) {
 void sendDepartureTo(const sockaddr_in& to, uint32_t session, proto::DepartureReason reason) {
     char buf[proto::kMaxPacket];
     const size_t n = proto::writeDeparture(buf, header(proto::kTypeDeparture), {session, reason});
-    for (int repeat = 0; repeat < 3; ++repeat)
-        sendto(g_sock, buf, static_cast<int>(n), 0, reinterpret_cast<const sockaddr*>(&to), sizeof(to));
+    sendto(g_sock, buf, static_cast<int>(n), 0, reinterpret_cast<const sockaddr*>(&to), sizeof(to));
+    g_departures.add(to, buf, n, GetTickCount());
+}
+
+bool sendDepartureRetries() {
+    std::lock_guard<std::mutex> lock(g_m);
+    g_departures.pump(GetTickCount(), [](const sockaddr_in& to, const char* data, size_t n) {
+        sendto(g_sock, data, static_cast<int>(n), 0, reinterpret_cast<const sockaddr*>(&to), sizeof(to));
+    });
+    return g_departures.size() != 0;
 }
 
 void announceDeparture(uint32_t session, proto::DepartureReason reason) {
-    for (const auto& to : g_sendTo) sendDepartureTo(to, session, reason);
+    for (const auto& to : g_sendTo) {
+        bool departing = false;
+        if (reason == proto::DepartureReason::TimedOut)
+            for (const auto& m : g_members) departing |= m.session == session && sameAddr(m.addr, to);
+        if (!departing) sendDepartureTo(to, session, reason);
+    }
 }
 
 void sendProbe(uint32_t target, uint32_t id, bool reply) {
@@ -451,6 +498,16 @@ void sendHello() {
     const float timeOfDay = g_role == Role::Host ? g_myTimeOfDay.load() : -1.f; // only a host's clock is followed
     sendAll(buf, proto::writeHello(buf, header(proto::kTypeHello), name.c_str(), g_look.load(), flags, g_outfit.load(), &profile,
                                    timeOfDay));
+    if (g_role == Role::Host) {
+        std::lock_guard<std::mutex> lock(g_m);
+        const auto sendPresence = [&](uint32_t player) {
+            const size_t n = proto::writePresence(buf, header(proto::kTypePresence), player);
+            for (const auto& to : g_sendTo)
+                sendto(g_sock, buf, static_cast<int>(n), 0, reinterpret_cast<const sockaddr*>(&to), sizeof(to));
+        };
+        sendPresence(g_session);
+        for (const auto& member : g_members) sendPresence(member.session);
+    }
 }
 
 // Player names are shown in the menu and written to the log: keep bytes that can be shown, drop control
@@ -959,6 +1016,11 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
             m->stateSeq = {};
         }
         if (!m->bucket.take(GetTickCount())) { ++g_dropped; return; } // flooding: not forwarded, not processed
+        if (h.type == proto::kTypePresence) { ++g_dropped; return; }
+        if (h.type == proto::kTypeHello) {
+            const auto remote = g_remotes.find(h.session);
+            if (remote != g_remotes.end() && remote->second.departed) reviveRemote(remote->second);
+        }
         if (h.type == proto::kTypeDeparture) {
             proto::Departure departure;
             if (!proto::readDeparture(buf + sizeof(h), static_cast<size_t>(n) - sizeof(h), departure) ||
@@ -1055,6 +1117,16 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
         return;
     }
     if (g_role == Role::Join) {
+        if (h.type == proto::kTypePresence) {
+            uint32_t player = 0;
+            if (h.session != g_hostSession || !proto::readPresence(data + sizeof(h), n - sizeof(h), player)) {
+                ++g_dropped; return;
+            }
+            g_presenceHost = h.session;
+            confirmPresence(h.session, h.seq, player);
+            hostContact();
+            return;
+        }
         if (h.type == proto::kTypeDeparture) {
             proto::Departure departure;
             if (h.session != g_hostSession ||
@@ -1062,6 +1134,17 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
                 ++g_dropped; return;
             }
             if (departure.player == g_hostSession || departure.player == g_session) {
+                if (g_ownMembershipHost == h.session && !g_ownMembership.accepts(h.seq)) return;
+                g_ownMembershipHost = h.session;
+                g_ownMembership.commit(h.seq);
+                if (departure.player == g_session &&
+                    (departure.reason == proto::DepartureReason::TimedOut || departure.reason == proto::DepartureReason::SessionReset)) {
+                    connectionNotice(departure.reason == proto::DepartureReason::TimedOut
+                                     ? "Connection timed out; reconnecting" : "Session reset; reconnecting");
+                    g_hostHeartbeat = {};
+                    g_hostLost = true;
+                    return;
+                }
                 if (departure.player == g_hostSession) connectionNotice("Session closed");
                 else connectionNotice(departure.reason == proto::DepartureReason::Kicked ? "You were kicked"
                                      : departure.reason == proto::DepartureReason::Banned ? "You were banned"
@@ -1127,12 +1210,9 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
     }
     Remote& r = found->second;
     if (r.departed) {
-        if (r.departureReason != proto::DepartureReason::TimedOut || h.type != proto::kTypeHello) return;
-        const auto departures = r.departureSeq;
-        const auto departureHost = r.departureHost;
-        r = Remote{};
-        r.departureSeq = departures;
-        r.departureHost = departureHost;
+        if (r.departureReason != proto::DepartureReason::TimedOut || h.type != proto::kTypeHello ||
+            (g_presenceHost && g_presenceHost == g_hostSession.load())) return;
+        reviveRemote(r);
     }
     r.lastHeard = GetTickCount();
     if (!r.id) {
@@ -1664,6 +1744,7 @@ void threadMain() {
         }
         if (now - lastHello >= 1000 || g_helloNow.exchange(false)) { lastHello = now; sendHello(); }
         probePeers();
+        sendDepartureRetries();
         rendezvousTick();
         if (now - lastStats >= 30000) { lastStats = now; MLOG("net: %s", describe().c_str()); }
         if (now - lastHousekeeping >= 1000) {
@@ -1723,8 +1804,12 @@ void stopLocked() { // caller holds g_startM
     // The router mapping stays until the next start() (re-hosting reuses it) or shutdown().
     if (g_thread.joinable()) g_thread.join();
     if (!g_stopRequested && g_sock != INVALID_SOCKET) {
-        std::lock_guard<std::mutex> lock(g_m);
-        announceDeparture(g_session, g_role == Role::Host ? proto::DepartureReason::SessionClosed : proto::DepartureReason::Left);
+        {
+            std::lock_guard<std::mutex> lock(g_m);
+            announceDeparture(g_session, g_role == Role::Host ? proto::DepartureReason::SessionClosed : proto::DepartureReason::Left);
+        }
+        const DWORD started = GetTickCount();
+        while (sendDepartureRetries() && GetTickCount() - started < 300) Sleep(10);
     }
     if (g_sock != INVALID_SOCKET) closesocket(g_sock);
     g_sock = INVALID_SOCKET;
@@ -1751,7 +1836,11 @@ bool startLocked(uint16_t port, const std::string& join, float loopbackOffset, c
         g_hostHeartbeat = {};
         g_hostRoundTrip = {};
         g_hostLost = false;
+        g_ownMembership = {};
+        g_ownMembershipHost = 0;
+        g_presenceHost = 0;
         g_connectionNotices.clear();
+        g_departures.clear();
         g_hostSession = 0;
         g_hostTimeOfDayAt = 0;
         g_serverName.clear();

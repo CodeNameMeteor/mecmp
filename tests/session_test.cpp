@@ -1,4 +1,5 @@
 #include "../src/net/net.cpp"
+#include "server/relay.h"
 
 #include <cstdio>
 
@@ -37,6 +38,10 @@ static void resetSession(Role role = Role::Join) {
     g_hostRoundTrip = {};
     g_heardFromHost = false;
     g_hostLost = false;
+    g_ownMembership = {};
+    g_ownMembershipHost = 0;
+    g_presenceHost = 0;
+    g_departures.clear();
     g_serverName.clear();
     g_name = "Local";
 }
@@ -142,6 +147,52 @@ static void testSessionClosed() {
     departureFrom(200, 200, proto::DepartureReason::SessionClosed);
     CHECK(!running() && !connectedToHost());
     CHECK(takeConnectionNotices() == std::vector<std::string>{"Session closed"});
+}
+
+static void presenceFrom(uint32_t host, uint32_t player, uint32_t seq) {
+    char buf[sizeof(proto::Header) + sizeof(player)];
+    const proto::Header h{proto::kMagic, proto::kProtocol, 18, host, seq};
+    memcpy(buf, &h, sizeof(h));
+    memcpy(buf + sizeof(h), &player, sizeof(player));
+    handlePacket(buf, sizeof(buf), g_hostAddr);
+}
+
+static void testOwnTimeoutKeepsReconnecting() {
+    resetSession();
+    helloFrom(200, "Host", proto::kHelloHost);
+    departureFrom(200, 100, proto::DepartureReason::TimedOut, 5);
+    CHECK(running() && !g_stopRequested);
+    helloFrom(200, "Host", proto::kHelloHost);
+    CHECK(running() && connectedToHost());
+}
+
+static void testConfirmedReadmissionAndOrdering() {
+    resetSession();
+    helloFrom(200, "Host", proto::kHelloHost);
+    helloFrom(300, "Other");
+    presenceFrom(200, 100, 10);
+    departureFrom(200, 100, proto::DepartureReason::TimedOut, 9);
+    CHECK(running() && connectedToHost());
+    presenceFrom(200, 400, 21);
+    helloFrom(400, "Fresh admission");
+    departureFrom(200, 400, proto::DepartureReason::TimedOut, 20);
+    CHECK(g_remotes.at(400).announced && !g_remotes.at(400).departed);
+    departureFrom(200, 300, proto::DepartureReason::Kicked, 20);
+    CHECK(g_remotes.at(300).departed);
+    presenceFrom(300, 300, 21);
+    helloFrom(300, "Old hello");
+    CHECK(g_remotes.at(300).departed);
+    presenceFrom(200, 300, 21);
+    helloFrom(300, "Other");
+    CHECK(g_remotes.at(300).announced && !g_remotes.at(300).departed);
+    departureFrom(200, 300, proto::DepartureReason::Kicked, 20);
+    CHECK(!g_remotes.at(300).departed);
+    departureFrom(200, 300, proto::DepartureReason::Left, 22);
+    presenceFrom(200, 300, 21);
+    helloFrom(300, "Old hello");
+    CHECK(g_remotes.at(300).departed);
+    presenceFrom(200, 300, 22);
+    CHECK(g_remotes.at(300).departed); // duplicate sequence cannot change departed to active
 }
 
 static void testMalformedTrafficAndRecovery() {
@@ -287,7 +338,135 @@ static void testRoundTripsAndProbeBudget() {
     CHECK(pending == 1);
 }
 
+struct RelayLink {
+    struct Wire { mecmp::server::Addr to; std::vector<char> bytes; };
+    const mecmp::server::Addr local{0x0a000001, 5000}, other{0x0a000002, 5000};
+    std::vector<Wire> wire;
+    mecmp::server::Relay relay;
+    RelayLink() : relay({}, 200,
+        [this](const mecmp::server::Addr& to, const char* d, size_t n) { wire.push_back({to, {d, d + n}}); },
+        [](const std::string&) {}) {}
+    void join(mecmp::server::Addr addr, uint32_t id, uint32_t now, uint32_t seq) {
+        char buf[proto::kMaxPacket];
+        proto::Header h{proto::kMagic, proto::kProtocol, proto::kTypeHello, id, seq};
+        const size_t n = proto::writeHello(buf, h, id == 100 ? "Local" : "Other", 0);
+        const size_t before = wire.size();
+        relay.onPacket(addr, buf, n, now);
+        for (size_t i = before; i < wire.size(); ++i) {
+            proto::Header response{};
+            memcpy(&response, wire[i].bytes.data(), sizeof(response));
+            if (response.type != proto::kTypeChallenge || wire[i].to != addr) continue;
+            uint64_t cookie = 0;
+            CHECK(proto::readCookie(wire[i].bytes.data() + sizeof(response), wire[i].bytes.size() - sizeof(response), cookie));
+            char answer[proto::kMaxPacket];
+            h.type = proto::kTypeAnswer;
+            relay.onPacket(addr, answer, proto::writeCookie(answer, h, cookie), now);
+            relay.onPacket(addr, buf, n, now);
+            break;
+        }
+    }
+    void deliver() {
+        for (const auto& msg : wire)
+            if (msg.to == local) handlePacket(msg.bytes.data(), static_cast<int>(msg.bytes.size()), g_hostAddr);
+        wire.clear();
+    }
+};
+
+static void testRelayResetAndReadmission() {
+    resetSession();
+    RelayLink link;
+    link.join(link.local, 100, 100, 1);
+    link.relay.tick(100);
+    link.deliver();
+    CHECK(connectedToHost());
+    link.relay.reset();
+    link.deliver();
+    CHECK(running() && !g_stopRequested);
+    link.join(link.local, 100, 200, 2);
+    link.relay.tick(200);
+    link.deliver();
+    CHECK(link.relay.members().size() == 1 && connectedToHost());
+    link.relay.tick(300);
+    link.deliver();
+    CHECK(running() && connectedToHost());
+}
+
+static void testRelayReadmitsMissedKickAndUnban() {
+    for (bool ban : {false, true}) {
+        resetSession();
+        RelayLink link;
+        link.join(link.local, 100, 100, 1);
+        link.join(link.other, 300, 100, 1);
+        link.relay.tick(100);
+        link.deliver();
+        CHECK(players().size() == 2);
+        if (ban) CHECK(link.relay.ban("Other") != 0);
+        else CHECK(link.relay.kick("Other", 200));
+        link.deliver(); // packets to Other are lost; it keeps the same session id
+        CHECK(g_remotes.at(300).departed);
+        link.join(link.other, 300, 250, 2);
+        CHECK(link.relay.members().size() == 1);
+        link.deliver();
+        CHECK(g_remotes.at(300).departed);
+        if (ban) CHECK(link.relay.unban("10.0.0.2"));
+        const uint32_t now = ban ? 300 : 60201;
+        link.join(link.local, 100, now, 2);
+        link.join(link.other, 300, now, 3);
+        link.relay.tick(now);
+        link.deliver();
+        link.join(link.other, 300, now + 10, 4);
+        link.deliver();
+        CHECK(link.relay.members().size() == 2);
+        CHECK(g_remotes.at(300).announced && !g_remotes.at(300).departed);
+        CHECK(players().size() == 2);
+    }
+}
+
+static void testListenHostConfirmsItsOwnPlayer() {
+    resetSession(Role::Host);
+    g_hostSession = 0;
+    const SOCKET receiver = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    CHECK(receiver != INVALID_SOCKET);
+    auto target = address(0);
+    CHECK(bind(receiver, reinterpret_cast<const sockaddr*>(&target), sizeof(target)) == 0);
+    int size = sizeof(target);
+    CHECK(getsockname(receiver, reinterpret_cast<sockaddr*>(&target), &size) == 0);
+    const DWORD waitMs = 100;
+    CHECK(setsockopt(receiver, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&waitMs), sizeof(waitMs)) == 0);
+    g_sendTo = {target};
+    Member member;
+    member.addr = target;
+    member.session = 300;
+    g_members.push_back(member);
+    sendHello();
+    bool ownPresence = false;
+    for (int i = 0; i < 3; ++i) {
+        char buf[proto::kMaxPacket];
+        const int n = recv(receiver, buf, sizeof(buf), 0);
+        if (n < static_cast<int>(sizeof(proto::Header))) continue;
+        proto::Header h{};
+        memcpy(&h, buf, sizeof(h));
+        uint32_t player = 0;
+        if (h.type == proto::kTypePresence && proto::readPresence(buf + sizeof(h), n - sizeof(h), player))
+            ownPresence |= player == 100;
+    }
+    CHECK(ownPresence);
+    closesocket(receiver);
+    resetSession();
+    helloFrom(200, "Host", proto::kHelloHost);
+    presenceFrom(200, 100, 1);
+    departRemote(200, proto::DepartureReason::TimedOut);
+    presenceFrom(200, 200, 2);
+    helloFrom(200, "Host", proto::kHelloHost);
+    CHECK(g_remotes.at(200).announced && !g_remotes.at(200).departed);
+}
+
 int main() {
+    testListenHostConfirmsItsOwnPlayer();
+    testRelayResetAndReadmission();
+    testRelayReadmitsMissedKickAndUnban();
+    testOwnTimeoutKeepsReconnecting();
+    testConfirmedReadmissionAndOrdering();
     testRestartedHostDepartureSequence();
     testDelayedTimeoutDuplicate();
     testGracefulStopPackets();

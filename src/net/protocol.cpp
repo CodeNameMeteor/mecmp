@@ -93,7 +93,7 @@ bool readDeparture(const char* payload, size_t n, Departure& out) {
     Departure departure;
     uint8_t reason = 0;
     if (!get(p, end, departure.player) || !get(p, end, reason) || p != end ||
-        reason > static_cast<uint8_t>(DepartureReason::SessionClosed)) return false;
+        reason > static_cast<uint8_t>(DepartureReason::SessionReset)) return false;
     departure.reason = static_cast<DepartureReason>(reason);
     out = departure;
     return true;
@@ -106,8 +106,24 @@ const char* departureText(DepartureReason reason) {
     case DepartureReason::Kicked: return "was kicked";
     case DepartureReason::Banned: return "was banned";
     case DepartureReason::SessionClosed: return "left (session closed)";
+    case DepartureReason::SessionReset: return "is reconnecting (session reset)";
     }
     return "left the session";
+}
+
+size_t writePresence(char* buf, const Header& h, uint32_t player) {
+    char* p = buf;
+    put(p, h); put(p, player);
+    return static_cast<size_t>(p - buf);
+}
+
+bool readPresence(const char* payload, size_t n, uint32_t& player) {
+    const char* p = payload;
+    const char* end = p + n;
+    uint32_t value = 0;
+    if (!get(p, end, value) || p != end || !value) return false;
+    player = value;
+    return true;
 }
 
 bool sanePosition(const float pos[3]) {

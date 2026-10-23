@@ -18,12 +18,12 @@ namespace mecmp::game::hooks {
 namespace {
 
 using FactoryFn = void* (*)(void* creator, void* ci, void* a3, void* a4);
-enum Factory { kSpawner, kPamSpawner, kClientReplay, kClientRecording, kClientCharacter, kCustomize, kPresenceManager, kNamedChallenge, kChallengeMarker, kFactoryCount };
+enum Factory { kSpawner, kPamSpawner, kClientReplay, kClientRecording, kClientCharacter, kCustomize, kPresenceManager, kNamedChallenge, kChallengeMarker, kClientSpawner, kFactoryCount };
 FactoryFn g_orig[kFactoryCount] = {};
 const char* const kNames[kFactoryCount] = {"ServerCharacterSpawnEntity", "PamServerCharacterSpawnEntity",
                                            "PamClientReplayPlayerComponent", "PamClientReplayRecordingComponent", "PamClientCharacterEntity",
                                            "PamServerCustomizeProjectionCharacterEntity", "PamClientPresenceInfoManagerEntity",
-                                           "PamServerNamedChallengeEntity", "PamServerChallengeMarkerEntity"};
+                                           "PamServerNamedChallengeEntity", "PamServerChallengeMarkerEntity", "ClientCharacterSpawnEntity"};
 
 void* spawnerFactory(void* creator, void* ci, void* a3, void* a4) {
     void* e = g_orig[kSpawner](creator, ci, a3, a4);
@@ -55,6 +55,13 @@ void* challengeMarkerFactory(void* creator, void* ci, void* a3, void* a4) {
 void* presenceManagerFactory(void* creator, void* ci, void* a3, void* a4) {
     void* e = g_orig[kPresenceManager](creator, ci, a3, a4);
     MLOG("map: the level created a friend-marker manager %p", e);
+    return e;
+}
+
+// Client character spawners: their list decides which client character the map's echo replay takes (ghosts.h).
+void* clientSpawnerFactory(void* creator, void* ci, void* a3, void* a4) {
+    void* e = g_orig[kClientSpawner](creator, ci, a3, a4);
+    if (e) level::onClientSpawnerCreated(e);
     return e;
 }
 
@@ -264,6 +271,8 @@ bool install(TickFn onTick, Installed* out) {
     // Optional: without it the look catalogue is found by a memory scan instead.
     installFactory(kCustomize, Slot_CustomizeProjectionFactory, Fn_CustomizeProjectionCreate, &customizeFactory, undo);
     got.ghostClients = replay && chars;
+    // Optional: without it the map's echo can take a ghost's client character (the ghost then stops for a moment).
+    installFactory(kClientSpawner, Slot_ClientCharacterSpawnFactory, Fn_ClientCharacterSpawnFactory, &clientSpawnerFactory, undo);
     installUIPauseHook(undo);
     installPlayersMapHook(undo);
     installFactory(kPresenceManager, Slot_PresenceInfoManagerCreator, Fn_PresenceInfoManagerCreator, &presenceManagerFactory, undo);

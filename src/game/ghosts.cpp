@@ -739,8 +739,9 @@ void noteOwnPose(const float (*bones)[8], const uint8_t* idx, uint32_t n) {
 // Client objects are matched to ghosts definitely where that is possible, and by the claim window otherwise:
 // - a client character whose bus id equals a ghost's server character's (serverBusId) is that ghost's;
 // - a replay component belongs to the ghost whose client character owns it (componentOwner).
-// The bus-id match was confirmed in game (2026-10-23: same id on both sides, both objects claimed at once). The claim
-// window (kClaimWindowMs after our spawn) stays as the fallback when it does not match.
+// The bus value is the same on both sides (seen 2026-10-23) but not unique: every ghost from one spawner has the same
+// one. So it only decides when exactly one ghost is waiting for its client character (the normal case: spawns wait
+// for the last one's claim); otherwise the claim window (kClaimWindowMs after our spawn) decides, as before.
 constexpr DWORD kBusIdClaimMs = 15000; // a client character this long after the spawn is no longer matched by id
 
 bool onClientReplayComp(void* comp) {
@@ -795,13 +796,15 @@ void onClientCharacter(void* ent) {
         const DWORD now = GetTickCount();
         Ghost* pick = nullptr;
         const char* how = "";
-        if (clientId) // definite: the ghost whose server character has this bus id
+        if (clientId) { // the one ghost waiting for its client character whose server character has this bus value
+            int matches = 0;
             for (auto& g : g_ghosts)
                 if (!g.clientChar && g.character && g.serverBusId == clientId && now - g.spawnedAt < kBusIdClaimMs) {
-                    pick = &g;
-                    how = "bus id";
-                    break;
+                    if (!matches++) pick = &g;
                 }
+            if (matches > 1) pick = nullptr; // not unique (same spawner): the claim window decides
+            else if (pick) how = "bus id";
+        }
         if (!pick && claimWindowOpen() && data == g_ghostCharData.load()) {
             const uint32_t peer = g_pendingPeer.load();
             for (auto& g : g_ghosts)
@@ -839,8 +842,73 @@ void onClientCharacter(void* ent) {
 
 void setCharacterDataType(uintptr_t runtimeTypeInfo) { g_tiCharData = runtimeTypeInfo; }
 
+// The map's echo: when the map opens, a client replay entity takes the *last* client character of its client
+// character spawner and plays its recording on it (PamClientReplayEntity on CharacterSpawned, 0x14394ab60). A ghost's
+// client character can be in that list (it was last), and the map then took it: it stopped taking our poses and
+// disappeared while the map was open. Like keepGameCharacterLast on the server: in every client spawner list that
+// holds one of our ghosts and a character of the game's, ours go first and the game's stay last, in their order.
+// Only pointers inside the list move. Client game thread (the replay updater), at most every 0.5 s.
+static void keepGameClientCharactersLast() {
+    static DWORD lastAt = 0;
+    const DWORD now = GetTickCount();
+    if (now - lastAt < 500) return;
+    lastAt = now;
+    std::vector<uintptr_t> mine;
+    {
+        std::lock_guard<std::mutex> lock(g_m);
+        for (const auto& g : g_ghosts)
+            if (g.clientChar) mine.push_back(reinterpret_cast<uintptr_t>(g.clientChar));
+    }
+    if (mine.empty()) return;
+    // Diagnostic, once per client character: which client spawner list holds it (the map takes the last one).
+    static std::vector<uintptr_t> noted;
+    std::vector<uintptr_t> found;
+    const auto spawners = level::clientSpawners();
+    for (void* sp : spawners) {
+        uintptr_t list[2] = {};
+        if (!mem::read(reinterpret_cast<uintptr_t>(sp) + ClientSpawner_Spawned, list, sizeof(list)) || list[1] <= list[0] ||
+            (list[1] - list[0]) / 8 > 64)
+            continue;
+        const size_t n = (list[1] - list[0]) / 8;
+        uintptr_t items[64];
+        if (!mem::read(list[0], items, n * 8)) continue;
+        std::vector<uintptr_t> ours, theirs;
+        for (size_t i = 0; i < n; ++i)
+            (std::find(mine.begin(), mine.end(), items[i]) != mine.end() ? ours : theirs).push_back(items[i]);
+        for (size_t i = 0; i < n; ++i)
+            if (std::find(mine.begin(), mine.end(), items[i]) != mine.end() &&
+                std::find(noted.begin(), noted.end(), items[i]) == noted.end()) {
+                MLOG("ghost: client character %p is in client spawner %p (%llu of %llu)", reinterpret_cast<void*>(items[i]), sp,
+                     static_cast<unsigned long long>(i + 1), static_cast<unsigned long long>(n));
+                found.push_back(items[i]);
+            }
+        if (ours.empty()) continue;
+        if (theirs.empty()) {
+            static DWORD lastNote = 0;
+            if (noteDue(lastNote, 60000))
+                VLOG("ghost: client spawner %p holds only our ghosts (%llu): the map's echo may take one", sp,
+                     static_cast<unsigned long long>(n));
+            continue;
+        }
+        if (std::find(ours.begin(), ours.end(), items[n - 1]) == ours.end()) continue; // the game's is last already
+        std::vector<uintptr_t> order = ours;
+        order.insert(order.end(), theirs.begin(), theirs.end());
+        poke(list[0], order.data(), n * 8);
+        MLOG("ghost: client spawner %p list reordered: the game's own character is last again", sp);
+    }
+    for (uintptr_t c : mine)
+        if (std::find(noted.begin(), noted.end(), c) == noted.end()) {
+            if (std::find(found.begin(), found.end(), c) == found.end())
+                MLOG("ghost: client character %p is in none of the %llu client spawner lists", reinterpret_cast<void*>(c),
+                     static_cast<unsigned long long>(spawners.size()));
+            if (noted.size() > 256) noted.erase(noted.begin());
+            noted.push_back(c);
+        }
+}
+
 void beforeClientReplayUpdate() {
     ++g_updaterCalls;
+    keepGameClientCharactersLast();
     renderFrame();
 }
 

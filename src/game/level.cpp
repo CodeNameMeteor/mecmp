@@ -20,6 +20,7 @@ std::mutex g_m;
 void* g_playerSpawner = nullptr;
 void* g_ghostSpawner = nullptr;
 std::vector<void*> g_clientComps; // other ghosts' client replay components (reference setup source)
+std::vector<void*> g_clientSpawners; // ClientCharacterSpawnEntity objects seen this level (hook)
 std::vector<void*> g_ghostCands;  // every ghost-blueprint spawner seen (hooks and scans), for chooseGhostSpawner
 // chooseGhostSpawner has picked g_ghostSpawner. A spawner the game creates later is only a candidate then:
 // made current at once (as before), it was what the "keep the current one on a tie" rule compared against,
@@ -192,6 +193,21 @@ void onSpawnerCreated(void* ci, void* entity) {
     // (chooseGhostSpawner prefers a spawner whose data is its own).
     if (g_makingOwn) return;
     considerSpawner(entity, mem::readOr<uintptr_t>(reinterpret_cast<uintptr_t>(ci) + CI_Data), false);
+}
+
+void onClientSpawnerCreated(void* entity) {
+    std::lock_guard<std::mutex> lock(g_m);
+    if (std::find(g_clientSpawners.begin(), g_clientSpawners.end(), entity) != g_clientSpawners.end()) return;
+    if (g_clientSpawners.size() >= 512) g_clientSpawners.erase(g_clientSpawners.begin());
+    g_clientSpawners.push_back(entity);
+}
+
+std::vector<void*> clientSpawners() {
+    std::lock_guard<std::mutex> lock(g_m);
+    std::vector<void*> out;
+    for (void* s : g_clientSpawners)
+        if (mem::readOr<uintptr_t>(reinterpret_cast<uintptr_t>(s)) == rva(Vtbl_ClientCharacterSpawnEntity)) out.push_back(s);
+    return out;
 }
 
 void onForeignClientReplayComp(void* comp) {
@@ -371,6 +387,7 @@ void reset() {
         g_playerSpawner = nullptr;
         g_ghostSpawner = nullptr;
         g_clientComps.clear();
+        g_clientSpawners.clear();
         g_ghostCands.clear();
         g_ghostChosen = false;
         g_spawnFails.clear();

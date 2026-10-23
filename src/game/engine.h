@@ -94,6 +94,13 @@ constexpr uintptr_t Slot_ClientCharacterFactory = 0x141c3cd80;
 constexpr uintptr_t Slot_CustomizeProjectionFactory = 0x141c7eb40;
 constexpr uintptr_t Fn_CustomizeProjectionCreate = 0x143a83490;
 constexpr uintptr_t Fn_ClientCharacterFactory = 0x143910d20;
+// ClientCharacterSpawnEntity's creator slot and create function (the client side of a character spawner). Its
+// spawned client characters are a vector at +0xb0/+0xb8; the client replay entity (the map's echo) takes the last
+// one (0x1432a60e0 <- 0x14394b1d0, on CharacterSpawned 0xa29c98e6) and starts its replay on that character.
+constexpr uintptr_t Slot_ClientCharacterSpawnFactory = 0x141b2ad88;
+constexpr uintptr_t Fn_ClientCharacterSpawnFactory = 0x1432a67c0;
+constexpr uintptr_t Vtbl_ClientCharacterSpawnEntity = 0x141b2ac20;
+constexpr size_t ClientSpawner_Spawned = 0xb0;
 constexpr uintptr_t Slot_ServerWorldPostUpdate = 0x141b42d28; // ServerGameWorld vtable +0x28
 constexpr uintptr_t Fn_ServerWorldPostUpdate = 0x143341ee0;
 
@@ -153,8 +160,9 @@ constexpr size_t SpawnerData_Template = 0x198;   // -> CharacterSpawnTemplateDat
 constexpr size_t Template_Customization = 0x18;  // -> CustomizeCharacterData
 constexpr size_t Character_Data = 0x30;          // PamCharacterEntityData
 constexpr size_t Character_Player = 0x250;
-// A character's own entity bus (server and client) and its id (& 0x1ffffff). The server character's and the client
-// character's are the same (seen in game 2026-10-23); ghosts are paired by it.
+// A character's own entity bus (server and client) and the u32 at bus +0x58 (& 0x1ffffff). The server and client
+// characters have the same value, but it is not unique per character: every ghost from one spawner has the same
+// one (the low bits of the spawner's data pointer, seen in game 2026-10-23). It only says "a ghost of this kind".
 constexpr size_t Character_Bus = 0x28;
 constexpr size_t Bus_Id = 0x58;
 constexpr uint32_t Bus_IdMask = 0x1ffffff;

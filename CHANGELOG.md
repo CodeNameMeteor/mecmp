@@ -16,10 +16,13 @@
   gives no character, ghosts come from the city-ghost spawner as before. `mecmp.ini` `[ghost] own_spawner=0` turns
   it off. Its entity-creation functions have their own build check: a mismatch only turns this off. (The first
   build's check had three wrong instruction encodings and turned it off on every game; fixed.)
-- **Ghosts find their client side by id where possible.** The client character whose entity bus id equals the
-  server character's, and the replay component that character owns, are taken at once, not by "created within
-  1.5 s of our spawn". Confirmed in game: the server and client characters have the same id, and both client objects
-  are claimed at once. The time window stays as a fallback.
+- **Ghosts find their client side more definitely.** The replay component is taken by the client character that owns
+  it, not by "created within 1.5 s of our spawn". The client character is taken by a value its bus shares with the
+  server character when only one ghost is waiting for one; that value is the same for every ghost of a spawner, so
+  with several waiting the time window decides as before.
+- **Opening the map no longer takes a ghost.** The map plays your echo on the last character of a client spawner,
+  which could be another player's ghost: it stopped and disappeared while the map was open. The game's own character
+  is now kept last in those lists too, as on the server.
 
 ### Body pose
 - **Fingers, toes and wrists now move on other players' ghosts.** A ghost used to get only 23 bones of the player's

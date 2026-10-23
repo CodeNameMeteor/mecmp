@@ -3,6 +3,8 @@
 // the game creates them), the local player character, and a reference bone setup for ghosts.
 
 #include <cstdint>
+#include <string>
+#include <vector>
 
 #include "game/engine.h"
 
@@ -16,6 +18,9 @@ struct BoneSetup {
 
 // Hook callbacks (game threads).
 void onSpawnerCreated(void* creationInfo, void* entity);
+void onClientSpawnerCreated(void* entity);  // a ClientCharacterSpawnEntity
+// Live client character spawners seen this level (client thread).
+std::vector<void*> clientSpawners();
 void onForeignClientReplayComp(void* comp); // a client replay component that is not one of our ghosts'
 void forgetClientReplayComp(void* comp);    // ...that turned out to be one of ours after all
 // Bones the replay recorder and player record: the data is patched when its owner is created, before it is built.

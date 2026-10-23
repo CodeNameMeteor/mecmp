@@ -7,7 +7,7 @@ description: >
 runs:
   using: composite
   steps:
-    - uses: actions/cache@v4
+    - uses: actions/cache@v5 # v4 runs on Node 20, which GitHub has deprecated
       with:
         path: ~/mingw-debs
         # Bump the suffix to rebuild the cache (e.g. after the runner image changes the compiler's version).

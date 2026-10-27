@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Time trials
+- **Racing your own time trial no longer crashes the game, and its ghost moves again.** The full body pose was taken
+  by making the game's own replay recorder record 85 bones, and that recorder also records your time-trial runs,
+  the time trials you create and your echo. The game's ghosts play 23 bones: on your own time trial the ghost
+  T-posed, and loading an 85-bone run onto a ghost the game reuses wrote past its buffer (a crash at the start, at
+  the finish or on exit, somewhere different each time). Players without MECMP were hit by your uploaded runs too.
+  The recorder is now left as the game makes it, so everything it records is the game's own 23 bones again, and the
+  full body is read from the same skeleton pose the recorder copies its bones from. Others still see your whole body.
+- Runs and time trials you already recorded with an earlier beta are still 85 bones and still break the ghost (for
+  anyone who races them) until a new time replaces them.
+
 ### Dedicated server
 - **The Discord live message stays in sight.** On a busy day the joins, leaves and finished runs pushed the "who is
   online" message out of view. It now moves back to the bottom of the channel (posted again, the old one deleted)
@@ -57,9 +68,8 @@
 - **Any animation works.** Every pose names its skeleton bones, so a new animation mod needs no change here, and the
   sender and receiver need no shared table. Unchanged bones are not sent again until the next full pose.
 - **Protocol 8.** Everyone in a session must run this version (older ones are shown as "other version").
-- **If MECMP is loaded after the level was created** (for example the game is started straight into a level by a
-  launcher), the player's recorder is already built with the game's 23 bones. Ghosts then stay on 23 bones too, so
-  nothing breaks; reload a checkpoint to get the full body. A normal start (main menu first) is not affected.
+- **MECMP loaded after the level was created** (for example the game started straight into a level by a launcher)
+  still sends the full body: it no longer depends on how the recorder was built.
 - **The game's own ghosts are left alone.** City and time-trial ghosts keep their recorded poses.
 - **Lost packets no longer bend the body.** A pose that changed only some bones is now marked with the full pose it
   was made from. If that full pose was lost, the ghost keeps its last pose (still moving with the player) until
@@ -67,9 +77,8 @@
   hosts, servers and players alike, and the loss shown in the menu counts lost poses only.
 - **Ghosts no longer freeze after you open the map.** Opening the game's map made other players' ghosts stop taking
   their pose until they were hidden and shown again (F12/F7). The mod now notices and sets them going again.
-- **`full_body_pose`** (`[player]`, on by default): 0 keeps the game's own 23-bone recording. The player's recorder
-  also records your runs, so this is the switch to use if a time trial or its uploaded ghost misbehaves. Takes
-  effect when a level loads.
+- **`full_body_pose`** (`[player]`, on by default): 0 sends the game's own 23 bones. Your runs are recorded with the
+  game's bones either way. The full body has its own build check: if the game differs, the 23 bones are sent.
 ### Off for now
 - **Hole punching is off by default** until there is a permanent server. Joining goes straight to the join code's
   address again (the host forwards the port or has UPnP, or everyone joins a dedicated server). To use it, set

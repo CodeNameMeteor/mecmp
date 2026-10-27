@@ -3,7 +3,9 @@
 #include <cmath>
 #include <cstring>
 
+#include "core/config.h"
 #include "core/log.h"
+#include "game/body_pose.h"
 #include "game/engine.h"
 #include "game/ghosts.h"
 #include "game/level.h"
@@ -12,13 +14,15 @@ namespace mecmp::game::local_player {
 namespace {
 
 // Newest keyframe of the recorder ring: {f32 time; u32 flags; pad[8]; bone[n] {vec4 t; quat q}}.
-// `keyTime` = the keyframe's own time (recorder seconds).
-bool capturePose(net::PlayerState& st, float& keyTime) {
+// `keyTime` = the keyframe's own time (recorder seconds). The recorder keeps the game's own bones; the full body of
+// the same keyframe comes from body_pose (taken where the recorder sampled it), the recorder's bones otherwise.
+// `wait`: the keyframe is new but its full body is not taken yet; nothing is published this tick.
+bool capturePose(net::PlayerState& st, float& keyTime, bool& wait) {
     void* ch = reinterpret_cast<void* (*)()>(rva(Fn_LocalClientCharacter))();
     if (!ch) return false;
     void* comp = getComponent(ch, TI_PamClientReplayRecordingComponent);
     if (!comp) return false;
-    const uintptr_t rec = mem::readOr<uintptr_t>(reinterpret_cast<uintptr_t>(comp) + 0x48);
+    const uintptr_t rec = mem::readOr<uintptr_t>(reinterpret_cast<uintptr_t>(comp) + RecComp_Recorder);
     if (!rec) return false;
     // The ring's stride, capacity, base and head in one read.
     uint8_t ring[Rec_Head + 4 - Rec_Stride];
@@ -42,8 +46,7 @@ bool capturePose(net::PlayerState& st, float& keyTime) {
         if (!level::readSetupAt(rec + Rec_Setup, setup) || setup.count != n) return false;
         for (uint32_t i = 0; i < n; ++i)
             if (setup.indices[i] > 255) return false;
-        const bool synced = level::noteRecorderSetup(setup);
-        MLOG("capture: local recorder has %u bones (%s)", n, synced ? "full sync set" : "vanilla set, the mod loaded after the level");
+        MLOG("capture: local recorder has %u bones", n);
     }
     uint32_t best = head % cap;
     const uint32_t prev = (head + cap - 1) % cap;
@@ -56,8 +59,22 @@ bool capturePose(net::PlayerState& st, float& keyTime) {
         return false;
     keyTime = before;
     for (uint32_t i = 0; i < n; ++i) st.boneIdx[i] = static_cast<uint8_t>(setup.indices[i]);
-    ghosts::noteOwnPose(st.bones, st.boneIdx, n);
     st.boneCount = n;
+    if (config::get()->fullBodyPose) {
+        thread_local body_pose::Sample full;
+        if (body_pose::latest(full)) {
+            if (full.time == keyTime) {
+                memcpy(st.bones, full.bones, full.count * sizeof(st.bones[0]));
+                memcpy(st.boneIdx, full.idx, full.count);
+                st.boneCount = full.count;
+            } else if (std::fabs(keyTime - full.time) < 1.f) {
+                st.boneCount = 0;
+                wait = true; // the full body of this keyframe is taken a moment apart (client thread): next tick
+                return false;
+            }
+        }
+    }
+    ghosts::noteOwnPose(st.bones, st.boneIdx, st.boneCount);
     return true;
 }
 } // namespace
@@ -74,7 +91,9 @@ bool capture(net::PlayerState& st) {
     st.flags = 1;
     st.boneCount = 0;
     float keyTime = 0;
-    const bool posed = capturePose(st, keyTime) && st.boneCount > 1;
+    bool wait = false;
+    const bool posed = capturePose(st, keyTime, wait) && st.boneCount > 1;
+    if (wait) return false;
     // The recorder writes keyframes less often than the server ticks: a keyframe already sent is not
     // sent again with a new time (that made motion stop and jump). Nothing new: nothing to publish.
     static float lastKeyTime = -1.f;

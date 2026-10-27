@@ -67,7 +67,7 @@ struct Settings {
     std::string servers;                  // the menu's server list: addresses, comma separated
     bool membersMayHardSummon = false;    // when you host: members may pull players in (a hard summon)
     // [player]
-    bool fullBodyPose = true;             // record and send the whole body (85 bones); 0 = the game's own 23 (level reload)
+    bool fullBodyPose = true;             // send the whole body (85 bones, game/body_pose.h); 0 = the game's own 23
     bool shareProfile = false;            // send your EA online id and profile name, so others' maps show your Runner Tag
     bool allowForcedSummon = false;       // a hard summon from the host (or a member it allows) takes you after a countdown
     bool doNotDisturb = false;            // blocks all incoming summons, go to's

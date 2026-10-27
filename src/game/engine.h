@@ -183,6 +183,23 @@ constexpr size_t SRP_PlaybackState = 0x38, SRP_Setup = 0xb0, SRP_Pose = 0x178, S
 // data's RecordingBones; the received pose only counts when the server's bone count equals it (+0x2e4).
 constexpr size_t CRP_PlaybackState = 0x40, CRP_PlaybackForced = 0xb0, CRP_Setup = 0xb8,
                  CRP_ReceivedPose = 0x180, CRP_OwnSetup = 0x200, CRP_CountOk = 0x2e4, CRP_SkipRoot = 0x2e6;
+// The local player's replay recorder is sampled by its recording component's updater (vtable 0x141c48ca0, updateAll
+// slot +0x10: PamClientReplayRecordingComponent_updateAll 0x14394dac0), which calls ReplayRecorder_SampleAndStream
+// (0x143974390) with the component's recorder (+0x48) and pose handle (+0x58). The handle's +0x28 is the character's
+// full local pose, one {vec4 translation, quat rotation} per skeleton bone; the recorder copies the bones of its
+// setup from it. The skeleton the setup was built for (ReplaySetup_Build 0x143948610) is the component's +0x98: bone
+// count at +0x08, parent of each bone (int, negative for a root) at [+0xf0]. The same recorder streams the player's
+// time-trial runs and writes shared time trials (ReplayRecorder_SerializeRange 0x143970820) with its own setup, so it
+// is left as the game makes it (game/body_pose.h).
+constexpr uintptr_t Slot_ClientReplayRecordingUpdateAll = 0x141c48cb0;
+constexpr uintptr_t Fn_ClientReplayRecordingUpdateAll = 0x14394dac0;
+constexpr size_t RecComp_Recorder = 0x48, RecComp_PoseHandle = 0x58, RecComp_Skeleton = 0x98;
+constexpr size_t PoseHandle_LocalPose = 0x28;
+constexpr size_t Skel_BoneCount = 0x08, Skel_Parents = 0xf0;
+constexpr uintptr_t Code_RecordingSampleCall = 0x14394db59;   // lea r8,[rcx+58h]; mov rcx,[rcx+48h]
+constexpr uintptr_t Code_RecorderReadsLocalPose = 0x1439745be; // mov rax,[rbp+28h] (the handle's pose)
+constexpr uintptr_t Code_RecordingCompSkeleton = 0x14394cef3; // mov [rdi+98h],rax
+constexpr uintptr_t Code_SetupBuildParents = 0x1439487ac;     // mov rax,[r9+0F0h]
 // Local replay recorder (PamClientReplayRecordingComponent +0x48): keyframe ring.
 constexpr size_t Rec_Stride = 0x68, Rec_Capacity = 0x70, Rec_Base = 0x78, Rec_Head = 0x88;
 constexpr size_t Rec_Setup = 0xd8; // the recorder's bone setup (same layout as the client's)

@@ -34,7 +34,6 @@ constexpr int kMaxSpawnFails = 3;
 // PamReplayPlayerComponentData objects we patched (data, original RecordingBones pointer), so that the patch can be undone.
 std::mutex g_patchM;
 std::vector<std::pair<uintptr_t, uintptr_t>> g_playerPatched;
-bool g_playerPatchOff = false;
 // The ghost spawner MECMP made for itself (ownGhostSpawner): a copy of the city-ghost spawner (same data, same
 // bus), so ghosts no longer come from the spawner whose last character is the game's "Your Echo". Server game
 // thread only, except the hook check (g_makingOwn is only true inside that thread's own creation call).
@@ -57,7 +56,7 @@ bool spawnerAliveUnlocked(void* spawner) {
            (vt == rva(Vtbl_PamServerCharacterSpawnEntity) || vt == rva(Vtbl_ServerCharacterSpawnEntity));
 }
 
-// The bones the replay recorder and player are told to record: these and all their ancestors. One list for the
+// The bones MECMP sends and our ghosts' replay players play: these and all their ancestors. One list for the
 // whole body - the animated bones the base set misses are the fingers, toes and the roll (twist) bones; the
 // procedural helpers (twists, bends, bulges, pits) are computed by the rig and the face is left out.
 constexpr uint32_t kTargets[] = {
@@ -95,23 +94,21 @@ bool readOwnSetup(uintptr_t comp, BoneSetup& out) { return readSetupAt(comp + CR
 
 bool readSetup(uintptr_t comp, BoneSetup& out) { return readSetupAt(comp + CRP_Setup, out); }
 
-// The data objects of the recorder and the player hold the bones they record. Only the game's own list is
-// replaced (6 bones for the recorder, 5 for the player): another list is somebody else's and stays.
+// The data object of a replay player holds the bones it plays. Only the game's own list is replaced (5 bones for the
+// player): another list is somebody else's and stays.
 bool vanillaTargets(uintptr_t list, uint32_t count, uint32_t first, uint32_t second) {
     return list && mem::readOr<uint32_t>(list - 4) == count && mem::readOr<uint32_t>(list) == first &&
            mem::readOr<uint32_t>(list + 4) == second;
 }
 
-// The player has one recorder, and it also records the runs (time trials, dashes) the game keeps and may
-// upload. full_body_pose=0 leaves it as the game made it; ghosts then stay vanilla too (noteRecorderSetup).
-void patchRecordingData(uintptr_t c) {
-    if (!c || c < 0x10000 || !config::get()->fullBodyPose) return;
-    const uintptr_t list = mem::readOr<uintptr_t>(c + 0x78); // PamReplayRecordingComponentData::RecordingBones
-    if (vanillaTargets(list, 6, 5, 52)) {
-        poke<uintptr_t>(c + 0x78, reinterpret_cast<uintptr_t>(&kTargetBones.bones[0]));
-        MLOG("patch: recording data %p now records %u targets", reinterpret_cast<void*>(c), kTargetBones.count);
-    }
+uint32_t bodyTargets(const uint32_t*& list) {
+    list = kTargetBones.bones;
+    return kTargetBones.count;
 }
+
+// The player's recorder is not patched: it also records the runs (time trials, shared time trials, the echo) the
+// game keeps, uploads and plays on its own ghosts, which only play the game's 23 bones. The full body is read from
+// the pose the recorder samples (game/body_pose.h).
 
 void patchPlayerData(uintptr_t c, bool ours) {
     if (!c || c < 0x10000) return;
@@ -121,7 +118,7 @@ void patchPlayerData(uintptr_t c, bool ours) {
     const uintptr_t targets = reinterpret_cast<uintptr_t>(&kTargetBones.bones[0]);
     if (ours) {
         if (list == targets) lastOursAt = GetTickCount();
-        if (g_playerPatchOff || !vanillaTargets(list, 5, 52, 15)) return;
+        if (!vanillaTargets(list, 5, 52, 15)) return;
         if (g_playerPatched.size() < 256) g_playerPatched.push_back({c, list});
         poke<uintptr_t>(c + 0x70, targets);
         lastOursAt = GetTickCount();
@@ -137,26 +134,6 @@ void patchPlayerData(uintptr_t c, bool ours) {
             VLOG("patch: player data %p back to vanilla for a game ghost", reinterpret_cast<void*>(c));
             return;
         }
-}
-
-// The recorder was built before the recording data was patched (the mod loaded after the level) when its setup
-// lacks a target. Then ghost clients must stay vanilla too: the player patches are undone and no longer made.
-bool noteRecorderSetup(const BoneSetup& setup) {
-    for (uint32_t t : kTargets) {
-        bool have = false;
-        for (uint32_t i = 0; i < setup.count && !have; ++i) have = setup.indices[i] == t;
-        if (have) continue;
-        std::lock_guard<std::mutex> lock(g_patchM);
-        if (!g_playerPatchOff) {
-            g_playerPatchOff = true;
-            for (const auto& p : g_playerPatched)
-                if (mem::readOr<uintptr_t>(p.first + 0x70) == reinterpret_cast<uintptr_t>(&kTargetBones.bones[0]))
-                    poke<uintptr_t>(p.first + 0x70, p.second);
-            g_playerPatched.clear();
-        }
-        return false;
-    }
-    return true;
 }
 
 // A spawner whose data names the player's or the ghost blueprint. `pooledData`: data shared by the
@@ -381,7 +358,6 @@ void reset() {
         std::lock_guard<std::mutex> lock(g_m);
         {
             std::lock_guard<std::mutex> patchLock(g_patchM);
-            g_playerPatchOff = false;
             g_playerPatched.clear();
         }
         g_playerSpawner = nullptr;

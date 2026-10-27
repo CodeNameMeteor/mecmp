@@ -9,5 +9,7 @@ namespace mecmp::game::fingerprint {
 bool check();
 // The entity-creation functions the own ghost spawner needs. False (logged) turns only that feature off.
 bool checkOwnSpawner();
+// The offsets the full-body pose is read with (game/body_pose.h). False (logged) turns only the full body off.
+bool checkBodyPose();
 
 } // namespace mecmp::game::fingerprint

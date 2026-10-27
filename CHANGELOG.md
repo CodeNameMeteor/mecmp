@@ -10,8 +10,10 @@
   the finish or on exit, somewhere different each time). Players without MECMP were hit by your uploaded runs too.
   The recorder is now left as the game makes it, so everything it records is the game's own 23 bones again, and the
   full body is read from the same skeleton pose the recorder copies its bones from. Others still see your whole body.
-- Runs and time trials you already recorded with an earlier beta are still 85 bones and still break the ghost (for
-  anyone who races them) until a new time replaces them.
+- **Old full-body ghosts are no longer loaded.** Runs and time trials recorded with an earlier beta are still 85 bones
+  on the servers. When a time trial's ghost turns out to be one of them, MECMP stops the game from loading it (the
+  game treats it as a failed download, so there is no ghost) and says why on screen, instead of the ghost T-posing
+  and the game crashing. A new time replaces it. Players without MECMP are not protected from those runs.
 
 ### Dedicated server
 - **The Discord live message stays in sight.** On a busy day the joins, leaves and finished runs pushed the "who is

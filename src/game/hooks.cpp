@@ -10,6 +10,8 @@
 #include "game/level.h"
 #include "game/models.h"
 #include "game/body_pose.h"
+#include "game/fingerprint.h"
+#include "game/replay_check.h"
 #include "net/net.h"
 
 #include <atomic>
@@ -177,6 +179,36 @@ void undoPatches(const std::vector<Patch>& undo) {
     for (auto it = undo.rbegin(); it != undo.rend(); ++it) mem::patchPointer(it->slot, it->original, nullptr);
 }
 
+// The projection spawner's download listener (time-trial ghosts): a recording with more bones than the game's is
+// refused before the game loads it (game/replay_check.h). The flag is given back for any other listener.
+using ListenerFn = void (*)(void* self, void* message, void* a3, void* a4);
+ListenerFn g_origReplayDownloaded = nullptr;
+
+void replayDownloadedHook(void* self, void* message, void* a3, void* a4) {
+    uint8_t* const refused = replay_check::beforeReplayDownloaded(message);
+    g_origReplayDownloaded(self, message, a3, a4);
+    replay_check::restore(refused);
+}
+
+// Optional: without it an old 85-bone time-trial ghost can still crash the game.
+void installReplayDownloadedHook(std::vector<Patch>& undo) {
+    if (!fingerprint::checkReplayCheck()) return;
+    const uintptr_t slot = rva(Slot_ProjectionReplayDownloaded);
+    uintptr_t current = 0;
+    if (!mem::read(slot, current) || current != rva(Fn_ProjectionReplayDownloaded)) {
+        MLOG("hook replay download: slot holds %p, expected %p; old full-body ghosts are not refused",
+             reinterpret_cast<void*>(current), reinterpret_cast<void*>(rva(Fn_ProjectionReplayDownloaded)));
+        return;
+    }
+    g_origReplayDownloaded = reinterpret_cast<ListenerFn>(current); // before the patch, as above
+    if (!mem::patchPointer(slot, reinterpret_cast<uintptr_t>(&replayDownloadedHook), nullptr)) {
+        MLOG("hook replay download: VirtualProtect failed (%lu)", GetLastError());
+        return;
+    }
+    undo.push_back({slot, current});
+    VLOG("hook replay download: installed");
+}
+
 // Optional: without it the game's 23 bones are sent (no full body).
 void installRecordingUpdaterHook(std::vector<Patch>& undo) {
     const uintptr_t slot = rva(Slot_ClientReplayRecordingUpdateAll);
@@ -288,6 +320,7 @@ bool install(TickFn onTick, Installed* out) {
     got.spawners = sp1 && sp2;
     const bool replay = installFactory(kClientReplay, Slot_ClientReplayPlayerFactory, Fn_ClientReplayPlayerFactory, &clientReplayFactory, undo);
     installRecordingUpdaterHook(undo);
+    installReplayDownloadedHook(undo);
     const bool chars = installFactory(kClientCharacter, Slot_ClientCharacterFactory, Fn_ClientCharacterFactory, &clientCharacterFactory, undo);
     // Optional: without it the look catalogue is found by a memory scan instead.
     installFactory(kCustomize, Slot_CustomizeProjectionFactory, Fn_CustomizeProjectionCreate, &customizeFactory, undo);

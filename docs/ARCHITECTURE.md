@@ -35,6 +35,7 @@ worlds in one process; the mod uses both.
 |---|---|
 | Character spawner factories | capture the player's spawner (`Characters/FaithCharacter`) and the city-ghost spawner (`Characters/Projection/ProjectionCharacter`); collect spawn-template looks for models |
 | Client replay player factory | claim our ghosts' client components (their data records the body set); others give the reference bone setup and keep vanilla data |
+| Projection spawner download listener (vtable slot `0x141c7e9d8`) | refuses a time-trial ghost recorded with more bones than the game's (`game/replay_check.cpp`) |
 | Recording components' updater (`updateAll`, vtable slot `0x141c48cb0`) | right after the recorders sample, the full-body pose is copied from the same skeleton pose (`game/body_pose.cpp`) |
 | Client character factory | claim our ghosts' client characters (to make them visible) |
 | Look-picker factory (`PamServerCustomizeProjectionCharacterEntity`) | the echo look catalogue, without a memory scan (optional) |
@@ -65,6 +66,11 @@ not sent.
   own from: the component's pose handle (+0x58), whose +0x28 is the full local pose, indexed by skeleton bone. The
   set is built from the skeleton the recorder's setup was built for (+0x98: bone count +0x08, parents at [+0xf0]),
   as `ReplaySetup_Build` (0x143948610) does. `local_player` sends it with the recorder keyframe of the same time.
+- **Old full-body runs** (85-bone recordings from earlier betas) are still on the servers. `game/replay_check.cpp`
+  hooks the projection spawner's download listener (vtable slot `0x141c7e9d8`, `ProjectionSpawner_OnReplayDownloaded`
+  0x143a8a910) and reads the recording's header (big-endian: version 5, setup hash, bone count; `replay_header.h`).
+  More bones than the game's 23: the message's "succeeded" flag is cleared for the call, so the game takes its own
+  failed-download path (no ghost), and a notice says why.
 - **Playing:** the player data is patched in the client replay factory hook, before the object is built, and only
   for our ghosts (the game's city and time-trial ghosts share it and keep their 23-bone replays).
 

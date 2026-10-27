@@ -11,5 +11,7 @@ bool check();
 bool checkOwnSpawner();
 // The offsets the full-body pose is read with (game/body_pose.h). False (logged) turns only the full body off.
 bool checkBodyPose();
+// The download message layout the replay safety net reads (game/replay_check.h). False (logged) leaves it out.
+bool checkReplayCheck();
 
 } // namespace mecmp::game::fingerprint

@@ -200,6 +200,14 @@ constexpr uintptr_t Code_RecordingSampleCall = 0x14394db59;   // lea r8,[rcx+58h
 constexpr uintptr_t Code_RecorderReadsLocalPose = 0x1439745be; // mov rax,[rbp+28h] (the handle's pose)
 constexpr uintptr_t Code_RecordingCompSkeleton = 0x14394cef3; // mov [rdi+98h],rax
 constexpr uintptr_t Code_SetupBuildParents = 0x1439487ac;     // mov rax,[r9+0F0h]
+// The projection spawner (time-trial ghosts) hears that its ghost's recording was downloaded through a message
+// listener (vtable slot 0x141c7e9d8: ProjectionSpawner_OnReplayDownloaded 0x143a8a910). For the download response
+// (type +0x0c) with its "succeeded" flag (+0x30) set it copies the recording (+0x48, size +0x50) and loads it into
+// the ghost; with the flag clear it takes the failed-download path (FUN_143a8f1f0: no ghost). game/replay_check.h.
+constexpr uintptr_t Slot_ProjectionReplayDownloaded = 0x141c7e9d8;
+constexpr uintptr_t Fn_ProjectionReplayDownloaded = 0x143a8a910;
+constexpr uint32_t kReplayDownloadedType = 0x8c4a0d15;
+constexpr size_t ReplayMsg_Type = 0x0c, ReplayMsg_Ok = 0x30, ReplayMsg_Data = 0x48, ReplayMsg_Size = 0x50;
 // Local replay recorder (PamClientReplayRecordingComponent +0x48): keyframe ring.
 constexpr size_t Rec_Stride = 0x68, Rec_Capacity = 0x70, Rec_Base = 0x78, Rec_Head = 0x88;
 constexpr size_t Rec_Setup = 0xd8; // the recorder's bone setup (same layout as the client's)

@@ -76,6 +76,18 @@ const Code kBodyPoseCode[] = {
     {"setup builder parents", Code_SetupBuildParents, 0, {0x49, 0x8B, 0x81, 0xF0, 0x00, 0x00, 0x00}, 7},
 };
 
+// The replay safety net (game/replay_check.h). Not part of check(): a mismatch only leaves the safety net out.
+const Code kReplayCheckCode[] = {
+    // mov eax,[rdx+0Ch]; cmp eax,8C4A0D15h: the download response's type
+    {"replay download type", Fn_ProjectionReplayDownloaded, 0x1e, {0x8B, 0x42, 0x0C, 0x3D, 0x15, 0x0D, 0x4A, 0x8C}, 8},
+    // cmp byte [rdx+30h],0: its "succeeded" flag
+    {"replay download flag", Fn_ProjectionReplayDownloaded, 0x36, {0x80, 0x7A, 0x30, 0x00}, 4},
+    // mov eax,[rdx+50h]: its size
+    {"replay download size", Fn_ProjectionReplayDownloaded, 0x42, {0x8B, 0x42, 0x50}, 3},
+    // mov rdx,[rbx+48h]: its data
+    {"replay download data", Fn_ProjectionReplayDownloaded, 0x71, {0x48, 0x8B, 0x53, 0x48}, 4},
+};
+
 std::string hex(const unsigned char* b, size_t n) {
     std::string s;
     char t[4];
@@ -128,6 +140,19 @@ bool checkBodyPose() {
         if (!mem::read(rva(c.fn) + c.skip, got, c.n) || memcmp(got, c.bytes, c.n) != 0) {
             MLOG("build check: %s starts with %s, expected %s (full body off: the game's 23 bones are sent)", c.what,
                  hex(got, c.n).c_str(), hex(c.bytes, c.n).c_str());
+            ++bad;
+        }
+    }
+    return bad == 0;
+}
+
+bool checkReplayCheck() {
+    int bad = 0;
+    for (const Code& c : kReplayCheckCode) {
+        unsigned char got[16] = {};
+        if (!mem::read(rva(c.fn) + c.skip, got, c.n) || memcmp(got, c.bytes, c.n) != 0) {
+            MLOG("build check: %s starts with %s, expected %s (replay safety net off)", c.what, hex(got, c.n).c_str(),
+                 hex(c.bytes, c.n).c_str());
             ++bad;
         }
     }

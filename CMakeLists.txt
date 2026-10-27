@@ -67,6 +67,7 @@ add_library(mecmp SHARED
   src/game/time_of_day.cpp
   src/game/raycast.cpp
   src/game/body_pose.cpp
+  src/game/replay_check.cpp
   src/net/net.cpp
   src/net/protocol.cpp
   src/net/upnp.cpp

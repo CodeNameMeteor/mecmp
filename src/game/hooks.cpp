@@ -9,6 +9,7 @@
 #include "game/player_audio.h"
 #include "game/level.h"
 #include "game/models.h"
+#include "game/replay_guard.h"
 #include "net/net.h"
 
 #include <atomic>
@@ -80,6 +81,7 @@ std::atomic<bool> g_updaterHooked{false};
 
 void updateAllHook(void* self, void* info) {
     runs::clientTick(); // cheap once registered
+    replay_guard::beforeClientUpdate(self);
     ghosts::beforeClientReplayUpdate();
     g_origUpdateAll(self, info);
     if (player_audio::kEnabled) player_audio::tick();

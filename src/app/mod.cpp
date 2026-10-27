@@ -22,6 +22,7 @@
 #include "game/local_player.h"
 #include "game/models.h"
 #include "game/ping_point.h"
+#include "game/replay_guard.h"
 #include "game/motion_stats.h"
 #include "net/net.h"
 #include "net/serverlist.h"
@@ -60,6 +61,7 @@ void onTick(void* world, float dt) {
         g_localMotion.add(local);
     }
     game::ghosts::tick(n, n - g_levelStartTick);
+    game::replay_guard::serverTick(); // before the next tick's time-trial loads (game/replay_guard.h)
     { prof::Scope s(prof::Teleport); game::teleport::tick(); }
     { prof::Scope s(prof::Ping); game::ping::tick(); }
     { prof::Scope s(prof::Models); game::models::tick(); }

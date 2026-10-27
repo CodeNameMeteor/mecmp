@@ -47,6 +47,8 @@ std::string levelName();
 // thread; cached per world.
 bool inFrontEnd();
 void* playerSpawner();
+// Every live ghost-blueprint spawner seen this level (the city-ghost, time-trial and replay-marker spawners).
+std::vector<void*> ghostSpawnerCandidates();
 void* ghostSpawner();                 // the level's city-ghost spawner (always loaded in free roam)
 // Off by default (experimental): it has the city-ghost spawner's data in the same bus, and the game finds a replay's
 // spawner by that data, so the map's echo and the "Your Echo" screen found ours and took our ghost (2026-10-23).

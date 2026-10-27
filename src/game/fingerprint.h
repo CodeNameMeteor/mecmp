@@ -9,5 +9,8 @@ namespace mecmp::game::fingerprint {
 bool check();
 // The entity-creation functions the own ghost spawner needs. False (logged) turns only that feature off.
 bool checkOwnSpawner();
+// The allocator calls and replay offsets the replay guard uses (game/replay_guard.h). False (logged) turns only
+// the guard off.
+bool checkReplayGuard();
 
 } // namespace mecmp::game::fingerprint

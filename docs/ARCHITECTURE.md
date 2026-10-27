@@ -61,6 +61,15 @@ their 23-bone replays). The face and the rig's procedural helpers are not sent.
 - A ghost's server component takes the setup of its own client (`readOwnSetup`), because the client drops a pose whose
   bone count differs from its own. The pose is moved into that setup by index (`remapPose`); a bone the sender does not
   send takes the local player's own current value.
+- **Runs are full-body too** (the recorder records them), and the game's replay loader is not ready for a recording
+  with more bones than the last one. `ReplayPlayback_LoadRecording` (0x143973740) reads the bone count from the
+  recording but keeps the playback's keyframe ring (+0x48 stride, +0x58 base) when there is one; only
+  `ReplayPlayback_Stop` frees it. A time-trial ghost is reused (`ProjectionSpawner_GetOrSpawnGhostCharacter`
+  0x143a84d00) and loaded before it is stopped, so an 85-bone run on a ghost that played a 23-bone one overran the
+  heap. `game/replay_guard.cpp` grows every replay player's ring to room for 96 bones with the ring's own allocator
+  (server: the ghost spawners' characters each tick; client: the replay updater's list, in its hook), on the thread
+  that loads into it, so the next load always fits. Players without MECMP are not protected; keeping runs at the
+  game's 23 bones is the follow-up.
 - If the mod loaded after the level, the recorder was built before the patch and records the vanilla set
   (`noteRecorderSetup`): the player patches are then undone and ghosts stay vanilla until the next level.
 

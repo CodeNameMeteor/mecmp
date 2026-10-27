@@ -183,6 +183,21 @@ constexpr size_t SRP_PlaybackState = 0x38, SRP_Setup = 0xb0, SRP_Pose = 0x178, S
 // data's RecordingBones; the received pose only counts when the server's bone count equals it (+0x2e4).
 constexpr size_t CRP_PlaybackState = 0x40, CRP_PlaybackForced = 0xb0, CRP_Setup = 0xb8,
                  CRP_ReceivedPose = 0x180, CRP_OwnSetup = 0x200, CRP_CountOk = 0x2e4, CRP_SkipRoot = 0x2e6;
+// A replay player's playback object (server +0x30, client +0x38) decodes keyframes into a ring at +0x48:
+// {u64 stride, u32 slots, base, allocator}, stride = (bones - 1) * 0x20 + 0x30 (ReplayKeyframeRing_Alloc
+// 0x143949780). ReplayPlayback_LoadRecording (0x143973740) takes the bone count from the recording but makes the
+// ring only when +0x58 is null, with the playback's allocator (+0x168); only ReplayPlayback_Stop (0x143970cc0)
+// frees it. A recording with more bones loaded on a playback that still holds a smaller ring overruns the heap
+// (game/replay_guard.h).
+constexpr size_t SRP_Playback = 0x30, CRP_Playback = 0x38;
+constexpr size_t Playback_Ring = 0x48, Playback_Arena = 0x168;
+constexpr size_t Ring_Stride = 0x00, Ring_Slots = 0x08, Ring_Base = 0x10, Ring_Arena = 0x18;
+constexpr uintptr_t Fn_Arena_allocAligned = 0x142a77780; // (allocator, size, align) -> memory
+constexpr uintptr_t Fn_Arena_free = 0x142a78220;         // poolFree(allocator, memory)
+constexpr uintptr_t Fn_ReplayKeyframeRing_Alloc = 0x143949780;
+constexpr uintptr_t Code_ReplayLoadRingCheck = 0x14397386e; // cmp qword [rbx+58h],0; jnz; lea rcx,[rbx+48h]; mov r9,[rbx+168h]
+// The client replay updater's list of client replay players (vector at +0x28/+0x30, read by updateAll 0x14394da40).
+constexpr size_t ClientReplayUpdater_List = 0x28;
 // Local replay recorder (PamClientReplayRecordingComponent +0x48): keyframe ring.
 constexpr size_t Rec_Stride = 0x68, Rec_Capacity = 0x70, Rec_Base = 0x78, Rec_Head = 0x88;
 constexpr size_t Rec_Setup = 0xd8; // the recorder's bone setup (same layout as the client's)

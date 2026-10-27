@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Time trials
+- **Racing your own ghost no longer crashes the game.** With the full body pose, your runs are recorded with 85 bones
+  instead of the game's 23. The game keeps a time-trial ghost's keyframe buffer when it loads the next run onto it, so
+  an 85-bone run on a ghost that last played a 23-bone one wrote past that buffer and crashed (at the start or the
+  end of the trial, in a different place each time). MECMP now gives every replay ghost's buffer room for 96 bones
+  right after the game makes it, so any run fits, yours and other players'. The full body pose stays on.
+- Players without MECMP can still crash on an 85-bone run (theirs is the game's own loader). A later change keeps
+  runs at the game's 23 bones while the others still see your whole body.
+- The build check covers the allocator and replay offsets this uses; a mismatch only turns this protection off.
+
 ### Dedicated server
 - **The Discord live message stays in sight.** On a busy day the joins, leaves and finished runs pushed the "who is
   online" message out of view. It now moves back to the bottom of the channel (posted again, the old one deleted)

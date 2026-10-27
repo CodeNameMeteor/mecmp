@@ -63,6 +63,23 @@ const Code kOwnSpawnerCode[] = {
     {"Entity init", Fn_Entity_init, 0, {0x44, 0x8B, 0x41, 0x18, 0x44, 0x89, 0xC0, 0xC1, 0xE8, 0x03, 0xA8, 0x01, 0x75, 0x12}, 14},
 };
 
+// The replay guard (game/replay_guard.h). Not part of check(): a mismatch only turns the guard off.
+const Code kReplayGuardCode[] = {
+    // mov eax,[rcx+8]; mov r10,rdx; dec eax; cmp eax,0Ah; ja: the allocator's kind switch
+    {"Arena allocAligned", Fn_Arena_allocAligned, 0, {0x8B, 0x41, 0x08, 0x49, 0x89, 0xD2, 0xFF, 0xC8, 0x83, 0xF8, 0x0A, 0x77, 0x7A}, 13},
+    // test byte [rcx+0Ch],1; mov r9,rcx; jnz; test rdx,rdx
+    {"Arena free", Fn_Arena_free, 0,
+     {0xF6, 0x41, 0x0C, 0x01, 0x49, 0x89, 0xC9, 0x0F, 0x85, 0xAA, 0x00, 0x00, 0x00, 0x48, 0x85, 0xD2}, 16},
+    // dec edx; mov eax,r8d; mov [rcx+8],r8d; shl rdx,5; mov rbx,rcx: stride = (bones - 1) * 0x20 + 0x30, slots at +8
+    {"ReplayKeyframeRing alloc", Fn_ReplayKeyframeRing_Alloc, 5,
+     {0xFF, 0xCA, 0x44, 0x89, 0xC0, 0x44, 0x89, 0x41, 0x08, 0x48, 0xC1, 0xE2, 0x05, 0x48, 0x89, 0xCB}, 16},
+    // cmp qword [rbx+58h],0; jnz; lea rcx,[rbx+48h]; mov r9,[rbx+168h]: the ring and its allocator in the playback
+    {"ReplayPlayback load ring", Code_ReplayLoadRingCheck, 0,
+     {0x48, 0x83, 0x7B, 0x58, 0x00, 0x75, 0x18, 0x48, 0x8D, 0x4B, 0x48, 0x4C, 0x8B, 0x8B, 0x68, 0x01}, 16},
+    // mov rax,[rdi+30h]; mov rbx,[rdi+28h]: the client updater's list of replay players
+    {"client replay updater list", Fn_ClientReplayUpdateAll, 0x1f, {0x48, 0x8B, 0x47, 0x30, 0x48, 0x8B, 0x5F, 0x28}, 8},
+};
+
 std::string hex(const unsigned char* b, size_t n) {
     std::string s;
     char t[4];
@@ -102,6 +119,19 @@ bool checkOwnSpawner() {
         if (!mem::read(rva(c.fn) + c.skip, got, c.n) || memcmp(got, c.bytes, c.n) != 0) {
             MLOG("build check: %s starts with %s, expected %s (own ghost spawner off)", c.what, hex(got, c.n).c_str(),
                  hex(c.bytes, c.n).c_str());
+            ++bad;
+        }
+    }
+    return bad == 0;
+}
+
+bool checkReplayGuard() {
+    int bad = 0;
+    for (const Code& c : kReplayGuardCode) {
+        unsigned char got[16] = {};
+        if (!mem::read(rva(c.fn) + c.skip, got, c.n) || memcmp(got, c.bytes, c.n) != 0) {
+            MLOG("build check: %s starts with %s, expected %s (replay guard off: racing a full-body run can crash)", c.what,
+                 hex(got, c.n).c_str(), hex(c.bytes, c.n).c_str());
             ++bad;
         }
     }

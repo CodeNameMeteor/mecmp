@@ -439,6 +439,14 @@ void* ghostSpawner() {
     return g_ghostSpawner;
 }
 
+std::vector<void*> ghostSpawnerCandidates() {
+    std::lock_guard<std::mutex> lock(g_m);
+    std::vector<void*> out;
+    for (void* s : g_ghostCands)
+        if (spawnerAliveUnlocked(s)) out.push_back(s);
+    return out;
+}
+
 void* ownGhostSpawner() {
     static const bool codeOk = fingerprint::checkOwnSpawner();
     if (!codeOk || !config::get()->ownSpawner) return nullptr;

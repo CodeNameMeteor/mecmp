@@ -550,6 +550,7 @@ void Relay::setBans(std::set<uint32_t> ips) {
 
 void Relay::reset() {
     while (!members_.empty()) drop(0, "server reset", proto::DepartureReason::SessionReset);
+    if (++session_ == 0) ++session_;
     reserved_.clear();
     notices_.clear();
     chat_.clear();

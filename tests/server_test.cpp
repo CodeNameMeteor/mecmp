@@ -910,7 +910,9 @@ static void testReset() {
     CHECK(t.relay.members().size() == 1);
     CHECK(t.relay.ban("10.0.0.9") == 0x0a000009); // an address nobody uses yet
     t.relay.say("welcome back"); // server chat still due on the next ticks
+    const auto oldSession=t.relay.session();
     t.relay.reset();
+    CHECK(t.relay.session()!=oldSession&&t.relay.session()!=0); // A reset starts a new host session.
     CHECK(t.relay.members().empty());
     CHECK(t.relay.stats().received == 0);
     CHECK(t.relay.bans().count(0x0a000009) == 1);
@@ -948,13 +950,14 @@ static std::vector<char> departurePacket(uint32_t sender, uint32_t player, proto
     return {buf, buf + n};
 }
 
-static bool hasDeparture(const Harness& t, const Addr& to, uint32_t player, proto::DepartureReason reason) {
+static bool hasDeparture(const Harness& t, const Addr& to, uint32_t player, proto::DepartureReason reason,
+                         uint32_t sender = 0) {
     for (const auto& sent : t.sent) {
         proto::Header h{};
         if (sent.to != to || sent.data.size() < sizeof(h)) continue;
         memcpy(&h, sent.data.data(), sizeof(h));
         proto::Departure departure;
-        if (h.type == proto::kTypeDeparture && h.session == t.relay.session() &&
+        if (h.type == proto::kTypeDeparture && h.session == (sender ? sender : t.relay.session()) &&
             proto::readDeparture(sent.data.data() + sizeof(h), sent.data.size() - sizeof(h), departure) &&
             departure.player == player && departure.reason == reason) return true;
     }
@@ -1060,9 +1063,10 @@ static void testPresenceAndResetNotices() {
     t.relay.onPacket(A, forged, sizeof(forged), 250);
     CHECK(t.sent.empty());
     t.sent.clear();
+    const auto oldSession = t.relay.session();
     t.relay.reset();
-    CHECK(!hasDeparture(t, A, 1, proto::DepartureReason::SessionClosed));
-    CHECK(hasDeparture(t, A, 1, proto::DepartureReason::SessionReset));
+    CHECK(!hasDeparture(t, A, 1, proto::DepartureReason::SessionClosed, oldSession));
+    CHECK(hasDeparture(t, A, 1, proto::DepartureReason::SessionReset, oldSession));
     server::Config cfg;
     cfg.mirror = true;
     Harness mirror(cfg);
@@ -1114,6 +1118,7 @@ int main() {
     testDepartures();
     testProbeRouting();
     testStateOrder();
+
 
     testReset();
     testReconfigure();

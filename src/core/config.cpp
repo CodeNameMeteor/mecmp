@@ -44,6 +44,9 @@ constexpr const char* kDefaultIni =
 #if MECMP_DEBUG_KEYS
     "; solo test (developer builds): join=127.0.0.1:47800 (a ghost mirrors you)\r\n"
 #endif
+    "; main-server quick connect and status queries while the menu is open. Empty disables both.\r\n"
+    "; Omit main_server to follow the built-in default; uncomment to use a custom address.\r\n"
+    "; main_server=your-server:47800\r\n"
     "join=\r\n"
     "; 1 = start that session (host, or join= above) as soon as the game starts; 0 = stay offline until\r\n"
     ";     you host or join in the menu (nothing is opened on your router until then)\r\n"
@@ -460,6 +463,7 @@ void load(const std::wstring& dir) {
     s.join = readString(ini, L"net", L"join", "\x01");
     if (s.join == "\x01") s.join = readString(ini, L"net", L"peer", ""); // older mecmp.ini files (no join= line)
     s.servers = readString(ini, L"net", L"servers", "");
+    s.mainServer = readString(ini, L"net", L"main_server", kDefaultMainServer);
     // Files from before this setting existed started the session at launch: keep that for them.
     s.autoStart = readInt(ini, L"net", L"auto_start", 1) != 0;
     // Off by default until there is a permanent server. Earlier versions wrote their default server into
@@ -633,7 +637,7 @@ void change(std::function<void(Settings&)> edit, bool persist) {
     if (g_queue.size() < 256) g_queue.push_back({std::move(edit), persist});
 }
 
-void applyPending() {
+void applyPending(bool flush) {
     std::vector<Change> todo;
     std::shared_ptr<const Settings> snapshot;
     const DWORD now = GetTickCount();
@@ -655,7 +659,7 @@ void applyPending() {
                 g_lastEditAt = now;
             }
         }
-        if (!g_saveWanted || (now - g_lastEditAt < kSaveQuietMs && now - g_firstUnsavedAt < kSaveMaxMs)) return;
+        if (!g_saveWanted || (!flush && now - g_lastEditAt < kSaveQuietMs && now - g_firstUnsavedAt < kSaveMaxMs)) return;
         g_saveWanted = false;
         snapshot = g_settings;
     }
@@ -680,6 +684,10 @@ void applyPending() {
     put(L"player", L"name", snapshot->name);
     put(L"net", L"join", snapshot->join);
     put(L"net", L"servers", snapshot->servers);
+    if (snapshot->mainServer == kDefaultMainServer)
+        WritePrivateProfileStringW(L"net", L"main_server", nullptr, ini.c_str());
+    else
+        put(L"net", L"main_server", snapshot->mainServer);
     put(L"net", L"auto_start", snapshot->autoStart ? "1" : "0");
     putOrDrop(L"net", L"rendezvous_server", snapshot->rendezvous);
     WritePrivateProfileStringW(L"net", L"rendezvous", nullptr, ini.c_str()); // the old key (see load)

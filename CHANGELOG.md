@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Quick connect
+- A button above the menu tabs connects to the configured main server and shows its player count and ping.
+  The default `[net] main_server=34.27.13.116:47800` also enables outbound status queries to that address
+  every 5 seconds while the menu is open, even if it is not saved in the server list. Set it empty to
+  disable the button and its automatic queries. Saved servers keep their existing query behavior.
+- Leave stays on its own row when hosting diagnostics wrap.
+
 ### Time trials
 - **Racing your own time trial no longer crashes the game, and its ghost moves again.** The full body pose was taken
   by making the game's own replay recorder record 85 bones, and that recorder also records your time-trial runs,

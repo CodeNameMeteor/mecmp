@@ -44,6 +44,8 @@ constexpr const char* kDefaultIni =
 #if MECMP_DEBUG_KEYS
     "; solo test (developer builds): join=127.0.0.1:47800 (a ghost mirrors you)\r\n"
 #endif
+    "; main-server quick connect and status queries while the menu is open. Empty disables both.\r\n"
+    "main_server=34.27.13.116:47800\r\n"
     "join=\r\n"
     "; 1 = start that session (host, or join= above) as soon as the game starts; 0 = stay offline until\r\n"
     ";     you host or join in the menu (nothing is opened on your router until then)\r\n"
@@ -454,6 +456,7 @@ void load(const std::wstring& dir) {
     s.join = readString(ini, L"net", L"join", "\x01");
     if (s.join == "\x01") s.join = readString(ini, L"net", L"peer", ""); // older mecmp.ini files (no join= line)
     s.servers = readString(ini, L"net", L"servers", "");
+    s.mainServer = readString(ini, L"net", L"main_server", "34.27.13.116:47800");
     // Files from before this setting existed started the session at launch: keep that for them.
     s.autoStart = readInt(ini, L"net", L"auto_start", 1) != 0;
     // Off by default until there is a permanent server. Earlier versions wrote their default server into
@@ -671,6 +674,7 @@ void applyPending() {
     put(L"player", L"name", snapshot->name);
     put(L"net", L"join", snapshot->join);
     put(L"net", L"servers", snapshot->servers);
+    put(L"net", L"main_server", snapshot->mainServer);
     put(L"net", L"auto_start", snapshot->autoStart ? "1" : "0");
     putOrDrop(L"net", L"rendezvous_server", snapshot->rendezvous);
     WritePrivateProfileStringW(L"net", L"rendezvous", nullptr, ini.c_str()); // the old key (see load)

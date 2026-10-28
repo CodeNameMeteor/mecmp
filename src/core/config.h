@@ -57,6 +57,7 @@ struct Settings {
     // [net]
     bool netEnabled = true;
     uint16_t port = 47800;
+    std::string mainServer = "34.27.13.116:47800"; // quick connect; empty disables the button and its queries
     std::string join;                     // join code or ip:port of the host; empty = host a session
     bool autoStart = false;               // start that session when the game starts (else wait for the menu)
     // A dedicated server that introduces hosts and joiners for hole punching (no port forwarding for most

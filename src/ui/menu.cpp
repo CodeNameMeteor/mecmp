@@ -18,6 +18,7 @@
 #include "core/config.h"
 #include "game/mumble_link.h"
 #include "game/player_audio.h"
+#include "game/doors.h"
 #include "game/ghosts.h"
 #include "game/ping_point.h"
 #include "game/raycast.h"
@@ -45,7 +46,7 @@ char g_reactLabel[config::kPingSlots][net::protocol::kMaxPingLabelBytes + 1] = {
 bool g_inited = false;
 bool g_keyCapture = false; // waiting for a new menu key
 int g_bindCapture = -1;        // which key of the Controls tab is being recorded (see kKeyBinds; -1 = none)
-std::string g_bindNote[11];    // why the last key was refused (empty = nothing to say)
+std::string g_bindNote[12];    // why the last key was refused (empty = nothing to say)
 std::string g_menuKeyNote;     // the same for the menu key
 std::string g_padNote[static_cast<int>(gamepad::Action::Count)]; // the same for each gamepad combination
 gamepad::Action g_padCapture = gamepad::Action::Count; // which gamepad binding is being recorded (Count = none)
@@ -642,6 +643,22 @@ void voiceStatus() {
     ImGui::Unindent();
 }
 
+void doorsSection() {
+    const auto cfg = config::get();
+    ImGui::SeparatorText("Doors");
+    bool doors = cfg->syncDoors;
+    if (ImGui::Checkbox("Sync doors", &doors))
+        config::change([doors](config::Settings& c) { c.syncDoors = doors; });
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Share ordinary door openings with nearby players.\n"
+                          "Off: your openings stay local and other players cannot open your doors.\n"
+                          "Doors already open stay open. Turning this on restores nearby shared state.");
+    ImGui::BeginDisabled(!game::doors::canOpen());
+    if (ImGui::Button("Open door ahead")) game::doors::requestOpen();
+    ImGui::EndDisabled();
+    ImGui::TextDisabled("%s", game::doors::status().c_str());
+}
+
 // You tab: what the player shares or allows.
 void privacySection() {
     const auto cfg = config::get();
@@ -916,7 +933,7 @@ struct KeyBind {
     bool (*set)(const std::string&);
     int mouse;  // 0 = the keyboard only, 1 = also the middle button and Mouse 4 / 5
 };
-const KeyBind kKeyBinds[11] = {
+const KeyBind kKeyBinds[12] = {
     {"Tap to place a marker. Hold to open the marker wheel.", &config::Settings::pingKey, &ui::setPingKey, 1},
     {"Tap twice to remove the marker you look at (or stand at). Hold for a moment to remove all your markers.",
      &config::Settings::pingClearKey, &ui::setPingClearKey, 1},
@@ -942,6 +959,7 @@ const KeyBind kKeyBinds[11] = {
     {"Hold to open the players panel: right click a player to go to them, click players to pick them and summon "
      "them with the button below (or everyone), 1-9 go to that player. Letting go of the key only closes it.",
      &config::Settings::playersKey, &ui::setPlayersKey, 1},
+    {"Open the ordinary door ahead, within 3 metres.", &config::Settings::doorKey, &ui::setDoorKey, 0},
 };
 
 void keyRow(const config::Settings& cfg, int which) {
@@ -1613,6 +1631,7 @@ void controlsSection() {
         padRow("Gamepad:", gamepad::Action::React, cfg->reactPad, &config::Settings::reactPad,
                "The same on a gamepad: tap sends your last answer, hold opens the answers wheel.");
     }
+    if (ImGui::CollapsingHeader("Doors")) keyRow(*cfg, 11);
     if (ImGui::CollapsingHeader("Chat")) keyRow(*cfg, 2);
     if (ImGui::CollapsingHeader("Overlay")) {
         ImGui::TextUnformatted("Hide / show names, markers, arrows, notices and chat (hold)");
@@ -1814,6 +1833,7 @@ void draw(bool open) {
     if (ImGui::BeginTabBar("##tabs")) {
         if (ImGui::BeginTabItem("Session")) {
             sessionSection();
+            doorsSection();
             hostSettingsSection();
             serversSection();
             ImGui::EndTabItem();

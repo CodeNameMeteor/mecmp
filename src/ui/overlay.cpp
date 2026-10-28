@@ -22,6 +22,7 @@
 #include "core/log.h"
 #include "core/mem.h"
 #include "core/prof.h"
+#include "game/doors.h"
 #include "game/ghosts.h"
 #include "game/hooks.h"
 #include "game/ping_point.h"
@@ -66,6 +67,7 @@ std::atomic<bool> g_justOpened{false}; // focus the menu window on the next fram
 std::atomic<int> g_chatKey{'T'};
 std::atomic<int> g_pingKey{0}; // 0 = none
 std::atomic<int> g_reactKey{0}; // the quick answers key; 0 = none
+std::atomic<int> g_doorKey{0};
 std::atomic<int> g_playersKey{0}; // the players panel key; 0 = none
 std::atomic<int> g_altKey{0}, g_hideKey{0}, g_prevKey{0}, g_nextKey{0}; // the other keys; 0 = none
 std::atomic<int> g_summonAcceptKey{0}, g_summonDeclineKey{0}; // answering a summon (ui/summon.h); 0 = none
@@ -472,6 +474,12 @@ LRESULT CALLBACK wndProc(HWND hwnd, UINT msg, WPARAM w, LPARAM l) {
         g_eatChar = true;
         return 0;
     }
+    if (keyDown && !g_open && !chat::isOpen() && g_ready && !g_keyCapture.load() && gameFocused() &&
+        g_doorKey.load() != 0 && static_cast<int>(w) == g_doorKey.load() && !(l & (1 << 30)) &&
+        !game::hooks::gameMenuOpen() && !radial::engaged()) {
+        game::doors::requestOpen();
+        return 0;
+    }
     // Marker key: only noted here; the game still gets the key. A short press places a marker when
     // the key is released, holding it opens the marker wheel. Not over one of the game's own menus.
     if (keyDown && !g_open && !chat::isOpen() && g_ready && g_pingKey.load() != 0 &&
@@ -751,7 +759,7 @@ namespace {
 // Every key the mod listens to besides the menu key. A key does one job.
 std::atomic<int>* const kBound[] = {&g_pingKey, &g_pingClearKey, &g_chatKey, &g_reactKey, &g_altKey,
                                     &g_hideKey, &g_prevKey,      &g_nextKey, &g_summonAcceptKey,
-                                    &g_summonDeclineKey, &g_playersKey};
+                                    &g_summonDeclineKey, &g_playersKey, &g_doorKey};
 
 // A key name from mecmp.ini. `mouse`: false = the keyboard only, true = also MOUSE3 (the middle
 // button), MOUSE4 and MOUSE5 (the side buttons).
@@ -812,6 +820,7 @@ bool setWheelPrevKey(const std::string& name) { return setBind(g_prevKey, name, 
 bool setWheelNextKey(const std::string& name) { return setBind(g_nextKey, name, true); }
 bool setSummonAcceptKey(const std::string& name) { return setBind(g_summonAcceptKey, name, true); }
 bool setSummonDeclineKey(const std::string& name) { return setBind(g_summonDeclineKey, name, true); }
+bool setDoorKey(const std::string& name) { return setBind(g_doorKey, name, false); }
 bool setPlayersKey(const std::string& name) { return setBind(g_playersKey, name, true); }
 
 bool middleButtonIsABind() {
@@ -899,6 +908,7 @@ bool install() {
     noteRefused(setWheelNextKey(config::get()->wheelNextKey), "wheel_next_key", config::get()->wheelNextKey);
     noteRefused(setSummonAcceptKey(config::get()->summonAcceptKey), "summon_accept_key", config::get()->summonAcceptKey);
     noteRefused(setSummonDeclineKey(config::get()->summonDeclineKey), "summon_decline_key", config::get()->summonDeclineKey);
+    noteRefused(setDoorKey(config::get()->doorKey), "door_key", config::get()->doorKey);
     noteRefused(setPlayersKey(config::get()->playersKey), "players_key", config::get()->playersKey);
     // Gamepad combinations: the menu's first, so it wins over an identical one.
     setPadBinding(config::get()->menuPad, gamepad::Action::Menu, "menu_pad");

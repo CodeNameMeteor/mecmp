@@ -153,6 +153,7 @@ private:
     uint32_t nowMs_ = 0;
     bool stopping_ = false;
     net::DepartureQueue<Addr> departures_;
+    net::doors::Authority doorAuthority_;
     uint8_t cookieKey_[16] = {}; // random per process: the cookies it hands out are only valid for it
     Send send_;
     Log log_;

@@ -27,7 +27,7 @@ endif()
 # --- mecmp_server: dedicated server (Windows or Linux, no game needed) ---------------------------
 find_package(Threads REQUIRED)
 add_executable(mecmp_server tools/server/mecmp_server.cpp src/server/relay.cpp src/server/discord.cpp src/net/protocol.cpp
-               src/net/joincode.cpp)
+               src/net/joincode.cpp src/net/doors.cpp)
 target_include_directories(mecmp_server PRIVATE src)
 target_link_libraries(mecmp_server PRIVATE Threads::Threads)
 if(WIN32)
@@ -54,6 +54,7 @@ add_library(mecmp SHARED
   src/game/fingerprint.cpp
   src/game/hooks.cpp
   src/game/level.cpp
+  src/game/doors.cpp
   src/game/ghosts.cpp
   src/game/models.cpp
   src/game/mumble_link.cpp
@@ -69,6 +70,7 @@ add_library(mecmp SHARED
   src/game/body_pose.cpp
   src/game/replay_check.cpp
   src/net/net.cpp
+  src/net/doors.cpp
   src/net/protocol.cpp
   src/net/upnp.cpp
   src/net/joincode.cpp

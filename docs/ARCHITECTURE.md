@@ -408,3 +408,44 @@ render or game thread.
 `mecmp.log` stops at 16 MB. Messages caused by other players (joins, leaves, new session ids,
 names) share a budget of 20, then one every 3 s; each player's name is logged at most 3 times.
 The exception logger uses no heap and never waits for the log lock.
+
+## Nearby doors (`game/doors.cpp`, `net/doors.cpp`)
+
+The door adapter registers animation drivers through their init and destroy slots. Doors are identified
+by a normalised level-name hash and quantised initial placement, never by a process address. Ambiguous
+placements are skipped. Only the two recorded main-city animation-bank fingerprints are supported;
+unknown banks leave the controls inactive. Ordinary doors are open-only; automatic and scripted doors
+need separate validation.
+
+Natural openings are captured after the original ANT bool setter (`0x141a435d0`, function `0x142c3ea40`)
+writes the resolved open-pulse property. Kicks, barges and slow pushes use this pulse. The callback records
+an event for the game tick; it does not send network traffic. Our own writes are suppressed. The Closed
+reader is used only for the aimed door or queued applications, with a fast return when nothing is pending.
+Registry walks, placement matching and network handoff happen on the game tick, never in that reader.
+Calls into an actor use the live arguments of the animation callback and validate its current registration.
+The adapter checks its function and slot fingerprints before installation, then uses `mem::patchPointer`.
+Door controls are in Session. Discovery uses lifecycle hooks. A late-injection heap scan is off by
+default; `[player] door_bootstrap_scan=1` opts into a bounded pass for the world already loaded when
+hooks were installed (5 seconds or 256 MiB, in 2 ms slices with 64 KiB reads). A read can exceed the
+slice budget. A level change ends the pass permanently; missed objects need a subsequent level load.
+
+The player host and dedicated server use the same bounded `doors::Authority`. Clients send interest
+and local opens; only the host sends authoritative states. Type 19 carries versioned 80-byte payloads.
+The 200-metre enter and 250-metre leave radii limit delivery, while acknowledgments and spaced retries
+recover lost packets. Incoming state is acknowledged separately from application in the game. Application
+tries at most three pulses, at least three seconds apart, per loaded object. Refused/locked doors do not
+keep retrying forever. A successful opening marks that loaded object done: closing it later does not
+start another pulse cycle until the object reloads. Authority retains up to 8192 opened keys per session.
+Timed-out peers and restarted sessions lose their subscriptions.
+
+The saved sync switch stops both sending and applying shared openings. The button/key still works
+locally with sync off. During a run both remote application and the button/key are refused; on leaving
+the run, interest is re-enabled and nearby state is requested again. A server reset changes its authority
+session, clears the shared state and lets clients reconnect. Delayed packets from retired host sessions
+are ignored. Shared opens otherwise survive checkpoint reloads until the session ends, so an opened door
+can be reapplied when its object is loaded again. The game still decides whether a pulse can open it.
+
+Tests cover delivery loss, reordering, interest changes, the player-host and relay handlers, session
+reset/re-admission, saved settings, callback filtering, run guards and application limits. The earlier
+prototype was checked with one game and a UDP test peer. The setter-hook revision still needs a real
+two-game-client check for animation, collision, streaming, locked doors and checkpoint reloads.

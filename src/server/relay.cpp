@@ -96,6 +96,7 @@ bool Relay::blocked(const Addr& a, uint32_t nowMs) {
 void Relay::drop(size_t index, const char* why, proto::DepartureReason reason) {
     const Member& m = members_[index];
     announceDeparture(m.session, reason);
+    doorAuthority_.remove(m.session);
     log_("player " + hex(m.session) + " '" + m.name + "' (" + toString(m.addr) + ") left: " + why + "; " +
          std::to_string(members_.size() - 1) + " connected");
     Event e{Event::Left, m.name, members_.size() - 1, {}};
@@ -163,6 +164,7 @@ void Relay::onPacket(const Addr& from, const char* buf, size_t n, uint32_t nowMs
         // nobody else uses.
         if (h.type != proto::kTypeHello || sessionTaken(h.session, from)) { ++stats_.dropped; ++m->dropped; return; }
         log_("player " + hex(m->session) + " '" + m->name + "' is now " + hex(h.session) + " (restarted)");
+        doorAuthority_.remove(m->session);
         m->session = h.session;
         m->poseDecoder = {};
         m->poseEncoder = {};
@@ -203,6 +205,15 @@ void Relay::onPacket(const Addr& from, const char* buf, size_t n, uint32_t nowMs
         const size_t index = static_cast<size_t>(m - members_.data());
         reserved_.push_back({m->session, from, nowMs + cfg_.sessionGraceMs});
         drop(index, "left", proto::DepartureReason::Left);
+        return;
+    }
+    if (h.type == proto::kTypeDoor) {
+        net::doors::Message message;
+        if (!net::doors::decode(payload, len, message) || message.op == net::doors::Op::State ||
+            (message.op == net::doors::Op::Ack && message.ack != net::doors::Op::State)) {
+            ++stats_.dropped; return;
+        }
+        doorAuthority_.receive(m->session, message, nowMs);
         return;
     }
     char copy[proto::kMaxPacket];
@@ -458,6 +469,20 @@ void Relay::tick(uint32_t nowMs) {
     nowMs_ = nowMs;
     departures_.pump(nowMs, send_);
     if (stopping_) return;
+    for (const auto& delivery : doorAuthority_.tick(nowMs)) {
+        for (const auto& member : members_) {
+            if (member.session != delivery.peer) continue;
+            char buf[proto::kMaxPacket];
+            const proto::Header header{proto::kMagic, proto::kProtocol, proto::kTypeDoor, session_, ++seq_};
+            memcpy(buf, &header, sizeof(header));
+            const auto n = net::doors::encode(delivery.message, buf + sizeof(header), sizeof(buf) - sizeof(header));
+            if (n) {
+                send_(member.addr, buf, sizeof(header) + n);
+                ++stats_.relayed;
+            }
+            break;
+        }
+    }
     for (size_t i = 0; i < registered_.size();) {
         if (nowMs - registered_[i].lastSeen > kRegisterTimeoutMs) registered_.erase(registered_.begin() + static_cast<long>(i));
         else ++i;
@@ -549,6 +574,7 @@ void Relay::setBans(std::set<uint32_t> ips) {
 }
 
 void Relay::reset() {
+    doorAuthority_.reset();
     while (!members_.empty()) drop(0, "server reset", proto::DepartureReason::SessionReset);
     if (++session_ == 0) ++session_;
     reserved_.clear();

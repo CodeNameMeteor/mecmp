@@ -53,6 +53,25 @@ constexpr size_t Camera_BaseFovYDeg = 0xac;   // the camera's own vertical FOV b
 constexpr uintptr_t kXInputGetStatePtr = 0x14256d7e0; // the game's XInputGetState (set once by 0x1437ba6c0)
 constexpr uintptr_t Code_StoreXInputGetState = 0x1437ba76f; // mov [kXInputGetStatePtr], rax
 
+// Door callbacks and shared ANT bool accessors, checked against the loaded PC game image.
+namespace doors {
+constexpr uintptr_t kDriver = 0x141c43850, kAnt = 0x141b06770, kReader = 0x141b06e50, kBool = 0x141a435c8;
+constexpr uintptr_t kInitSlot = 0x141c438c8, kDestroySlot = 0x141c43888, kReadSlot = 0x141b7ad30,
+                    kSetSlot = 0x141a435d0;
+constexpr uintptr_t kInit = 0x143933cd0, kDestroy = 0x14392b200, kRead = 0x14342d510, kGet = 0x142c34a70,
+                    kSet = 0x142c3ea40;
+constexpr uintptr_t kManager = 0x1423dd0b8;
+
+struct BankFingerprint { uint32_t entries; uint64_t hash; uint32_t closed, pulse; };
+// Captured SP_MainCity ANT banks: stock (33340) and BreachOnewayDoors NoSign-Fix (33341).
+// Hash is FNV-1a over the export map's 20-byte records. Property ids were resolved from
+// those captures and verified by recording a kick, then applying the same open pulse.
+constexpr BankFingerprint kBanks[] = {
+    {33340, 0xd70756f58c02cb00ULL, 0x85f3c, 0x86256},
+    {33341, 0xe20f1f8ac2e10d23ULL, 0x85f77, 0x86292},
+};
+} // namespace doors
+
 // --- TypeInfo (runtime ClassInfo) ----------------------------------------------------------------
 constexpr uintptr_t TI_ServerCharacterEntity = 0x1427fe1e0;
 constexpr uintptr_t TI_ObjectBlueprint = 0x1427e7eb0;

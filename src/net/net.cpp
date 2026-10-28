@@ -138,6 +138,8 @@ struct Member {
 };
 
 std::mutex g_m;
+doors::Authority g_doorAuthority;
+doors::Client g_doorClient;
 std::deque<RemoteAudio> g_audio;
 std::map<uint32_t, Remote> g_remotes;     // by session id
 std::vector<sockaddr_in> g_sendTo;        // JOIN: the host. HOST: kept in sync with g_members
@@ -480,6 +482,43 @@ void sendState() {
     static proto::Encoder enc;
     char buf[proto::kMaxPacket];
     sendAll(buf, proto::writeState(buf, header(proto::kTypeState), s, enc));
+}
+
+void sendDoors() {
+    struct Out { sockaddr_in address; doors::Message message; };
+    std::vector<Out> out;
+    {
+        std::lock_guard<std::mutex> lock(g_m);
+        const auto now = GetTickCount();
+        for (const auto& message : g_doorClient.tick(now)) {
+            if (g_role == Role::Host) g_doorAuthority.receive(g_session, message, now);
+            else out.push_back({g_hostAddr, message});
+        }
+        if (g_role == Role::Host) {
+            for (const auto& delivery : g_doorAuthority.tick(now)) {
+                if (delivery.peer == g_session) g_doorClient.receive(delivery.message, now);
+                else {
+                    for (const auto& member : g_members) {
+                        if (member.session != delivery.peer) continue;
+                        out.push_back({member.addr, delivery.message});
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    for (const auto& item : out) {
+        char buf[proto::kMaxPacket];
+        const auto h = header(proto::kTypeDoor);
+        memcpy(buf, &h, sizeof(h));
+        const auto n = doors::encode(item.message, buf + sizeof(h), sizeof(buf) - sizeof(h));
+        const auto size = static_cast<int>(sizeof(h) + n);
+        if (n && sendto(g_sock, buf, size, 0, reinterpret_cast<const sockaddr*>(&item.address),
+                        sizeof(item.address)) == size) {
+            ++g_sent;
+            g_bytesSent += sizeof(h) + n;
+        }
+    }
 }
 
 proto::OnlineProfile g_profile; // ours, under g_m
@@ -1017,6 +1056,7 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
         if (h.session != m->session) {
             if (h.type != proto::kTypeHello || sessionInUse(h.session, from)) { ++g_dropped; return; }
             if (peerLogAllowed()) MLOG("net: %s is now session %08x (restarted)", addrToString(from).c_str(), h.session);
+            g_doorAuthority.remove(m->session);
             m->session = h.session;
             m->poseDecoder = {};
             m->poseEncoder = {};
@@ -1034,6 +1074,7 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
                 departure.player != h.session || departure.reason != proto::DepartureReason::Left) {
                 ++g_dropped; return;
             }
+            g_doorAuthority.remove(h.session);
             announceDeparture(h.session, departure.reason);
             departRemote(h.session, departure.reason);
             g_reserved.push_back({h.session, from, GetTickCount() + kSessionGraceMs});
@@ -1058,6 +1099,15 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
                         break;
                     }
             }
+            return;
+        }
+        if (h.type == proto::kTypeDoor) {
+            doors::Message message;
+            if (!doors::decode(buf + sizeof(h), static_cast<size_t>(n) - sizeof(h), message) ||
+                message.op == doors::Op::State || (message.op == doors::Op::Ack && message.ack != doors::Op::State)) {
+                ++g_dropped; return;
+            }
+            g_doorAuthority.receive(m->session, message, GetTickCount());
             return;
         }
         // A joiner's HELLO goes on without the "I host" flag: only the host's own HELLO may set it.
@@ -1154,6 +1204,7 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
                                      ? "Connection timed out; reconnecting" : "Session reset; reconnecting");
                     g_hostHeartbeat = {};
                     g_hostLost = true;
+                    g_doorClient.reset();
                     if (departure.reason == proto::DepartureReason::SessionReset) retireHostSession(h.session);
                     return;
                 }
@@ -1195,6 +1246,18 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
             }
             return;
         }
+    }
+    if (h.type == proto::kTypeDoor) {
+        doors::Message message;
+        if (g_role != Role::Join || !g_hostSession.load() || h.session != g_hostSession.load() ||
+            !doors::decode(buf + sizeof(h), static_cast<size_t>(n) - sizeof(h), message) ||
+            (message.op != doors::Op::State && message.op != doors::Op::Ack) ||
+            (message.op == doors::Op::Ack && message.ack == doors::Op::State)) {
+            ++g_dropped; return;
+        }
+        g_doorClient.receive(message, GetTickCount());
+        hostContact();
+        return;
     }
 #if !MECMP_DEBUG_KEYS
     // The solo test (our own packets coming back as a mirrored ghost) is a developer tool: release
@@ -1259,7 +1322,10 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
         r.asksVisit = (flags & proto::kHelloAskVisit) != 0;
         // Accepted only straight from the host (forwarded copies come from the host's address too, but have the flag cleared).
         if ((flags & proto::kHelloHost) && !own && g_role == Role::Join && sameAddr(from, g_hostAddr)) {
-            if (g_hostSession.load() != h.session) retireHostSession(g_hostSession.load());
+            if (g_hostSession.load() && g_hostSession.load() != h.session) {
+                retireHostSession(g_hostSession.load());
+                g_doorClient.reset();
+            }
             g_hostSession = h.session;
             g_hostAllowsMembers = (flags & proto::kHelloMembersHard) != 0 && !(flags & proto::kHelloServer);
             // A dedicated server: not a player (it sends no state, so it never gets a ghost or a list entry).
@@ -1751,6 +1817,7 @@ void threadMain() {
             nextSend += kSendMs;
             if (t - nextSend > kSendMs) nextSend = t + kSendMs; // far behind (the PC stalled): no burst to catch up
             sendState();
+            sendDoors();
             sendPendingChat();
             sendPendingBursts();
             sendActivity();
@@ -1786,6 +1853,7 @@ void threadMain() {
                     g_reserved.push_back({g_members[i].session, g_members[i].addr, now + kSessionGraceMs});
                     for (size_t k = 0; k < g_sendTo.size(); ++k)
                         if (sameAddr(g_sendTo[k], g_members[i].addr)) { g_sendTo.erase(g_sendTo.begin() + static_cast<long>(k)); break; }
+                    g_doorAuthority.remove(g_members[i].session);
                     g_members.erase(g_members.begin() + static_cast<long>(i));
                 }
                 g_reserved.erase(std::remove_if(g_reserved.begin(), g_reserved.end(),
@@ -1837,6 +1905,8 @@ bool startLocked(uint16_t port, const std::string& join, float loopbackOffset, c
     {
         std::lock_guard<std::mutex> lock(g_m);
         g_remotes.clear();
+        g_doorAuthority.reset();
+        g_doorClient.reset();
         g_audio.clear();
         g_sendTo.clear();
         g_members.clear();
@@ -2045,6 +2115,23 @@ void publishLocal(const PlayerState& s) {
     if (!limitPose(g_local)) { g_haveLocal = false; return; }
     g_haveLocal = true;
     g_localAt = GetTickCount();
+}
+
+void publishDoorInterest(uint64_t world, const float pos[3], bool enabled) {
+    std::lock_guard<std::mutex> lock(g_m);
+    if (g_run) g_doorClient.interest(world, pos, enabled, GetTickCount());
+}
+bool publishDoorOpened(const doors::Key& key) {
+    std::unique_lock<std::mutex> lock(g_m, std::try_to_lock);
+    return lock.owns_lock() && g_run && g_doorClient.opened(key, GetTickCount());
+}
+bool doorIsOpen(const doors::Key& key) {
+    std::unique_lock<std::mutex> lock(g_m, std::try_to_lock);
+    return lock.owns_lock() && g_run && g_doorClient.isOpen(key);
+}
+bool doorSyncAvailable() {
+    std::lock_guard<std::mutex> lock(g_m);
+    return g_run && g_doorClient.available(GetTickCount());
 }
 
 void publishAudio(PlayerAudio sample) {

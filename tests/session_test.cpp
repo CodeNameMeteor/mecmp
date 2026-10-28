@@ -31,6 +31,8 @@ static void resetSession(Role role = Role::Join) {
     g_hostAddr = address(47801);
     g_sendTo = {g_hostAddr};
     g_members.clear();
+    g_doorAuthority.reset();
+    g_doorClient.reset();
     g_retiredHostSessions.clear();
     g_reserved.clear();
     g_remotes.clear();

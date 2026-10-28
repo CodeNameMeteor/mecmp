@@ -73,6 +73,10 @@ constexpr const char* kDefaultIni =
     "do_not_disturb=0\r\n"
     "; 1 = players who use Go to on you wait until you say yes (the summon accept / decline keys); 0 = anyone may\r\n"
     "ask_before_go_to=0\r\n"
+    "; 1 = share nearby ordinary door openings; 0 = keep door changes local in both directions\r\n"
+    "sync_doors=1\r\n"
+    "; opt-in search for already-loaded doors after late injection; reload the level instead to avoid a scan.\r\n"
+    "door_bootstrap_scan=0\r\n"
     "; 1 = see the host's time of day (sky and light) while you join a player's session; 0 = keep your own\r\n"
     "sync_time_of_day=1\r\n"
     "; 1 = share your EA online id and profile name with the session, so the game's map shows your Runner Tag\r\n"
@@ -209,6 +213,8 @@ constexpr const char* kDefaultIniTail =
     "; ping_key; empty = none. players_pad: the same on a gamepad (hold the buttons; right stick points, RT\r\n"
     "; clicks, LT goes to, LB turns the page)\r\n"
     "players_key=T\r\n"
+    "; open the ordinary door ahead; empty = no key\r\n"
+    "door_key=\r\n"
     "players_pad=DOWN+RB\r\n"
     "hard_summon_grace_ms=5000\r\n"
     "; how gamepad buttons are named in hints: xbox or playstation (the settings above keep Xbox names)\r\n"
@@ -573,11 +579,14 @@ void load(const std::wstring& dir) {
     s.summonDeclineKey = readString(ini, L"ui", L"summon_decline_key", "2");
     s.summonAcceptPad = readString(ini, L"ui", L"summon_accept_pad", "LEFT");
     s.summonDeclinePad = readString(ini, L"ui", L"summon_decline_pad", "RIGHT");
+    s.doorKey = readString(ini, L"ui", L"door_key", "");
     s.playersKey = readString(ini, L"ui", L"players_key", "T");
     s.playersPad = readString(ini, L"ui", L"players_pad", "DOWN+RB");
     s.hardSummonGraceMs = clampInt(readInt(ini, L"ui", L"hard_summon_grace_ms", 5000), 0, 15000);
     s.allowForcedSummon = readInt(ini, L"player", L"allow_forced_summon", 0) != 0;
     s.doNotDisturb = readInt(ini, L"player", L"do_not_disturb", 0) != 0;
+    s.syncDoors = readInt(ini, L"player", L"sync_doors", 1) != 0;
+    s.doorBootstrapScan = readInt(ini, L"player", L"door_bootstrap_scan", 0) != 0;
     s.syncTimeOfDay = readInt(ini, L"player", L"sync_time_of_day", 1) != 0;
     s.askBeforeVisit = readInt(ini, L"player", L"ask_before_go_to", 0) != 0;
     s.shareProfile = readInt(ini, L"player", L"share_profile", 0) != 0;
@@ -762,10 +771,13 @@ void applyPending(bool flush) {
     put(L"ui", L"summon_accept_pad", snapshot->summonAcceptPad);
     put(L"ui", L"summon_decline_pad", snapshot->summonDeclinePad);
     put(L"ui", L"players_key", snapshot->playersKey);
+    put(L"ui", L"door_key", snapshot->doorKey);
     put(L"ui", L"players_pad", snapshot->playersPad);
     put(L"ui", L"hard_summon_grace_ms", std::to_string(snapshot->hardSummonGraceMs));
     put(L"player", L"allow_forced_summon", snapshot->allowForcedSummon ? "1" : "0");
     put(L"player", L"do_not_disturb", snapshot->doNotDisturb ? "1" : "0");
+    put(L"player", L"sync_doors", snapshot->syncDoors ? "1" : "0");
+    put(L"player", L"door_bootstrap_scan", snapshot->doorBootstrapScan ? "1" : "0");
     put(L"player", L"sync_time_of_day", snapshot->syncTimeOfDay ? "1" : "0");
     put(L"player", L"ask_before_go_to", snapshot->askBeforeVisit ? "1" : "0");
     put(L"player", L"share_profile", snapshot->shareProfile ? "1" : "0");

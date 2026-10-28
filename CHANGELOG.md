@@ -2,7 +2,6 @@
 
 ## Unreleased
 
-<<<<<<< HEAD
 ### Doors
 - Ordinary doors opened by kicking, barging or pushing can share their open state through a player host
   or dedicated server. Players receive nearby updates within 200 metres, with a 250-metre leave radius,
@@ -24,7 +23,7 @@
 - Shared openings last until the host session ends or the dedicated server resets, including across
   checkpoint reloads. Closing, automatic and mission-specific doors are not supported. Only the two
   recorded animation-bank fingerprints are recognised; other banks show a waiting message.
-=======
+
 ### Time trials
 - **Racing your own time trial no longer crashes the game, and its ghost moves again.** The full body pose was taken
   by making the game's own replay recorder record 85 bones, and that recorder also records your time-trial runs,
@@ -37,7 +36,6 @@
   on the servers. When a time trial's ghost turns out to be one of them, MECMP stops the game from loading it (the
   game treats it as a failed download, so there is no ghost) and says why on screen, instead of the ghost T-posing
   and the game crashing. A new time replaces it. Players without MECMP are not protected from those runs.
->>>>>>> upstream/main
 
 ### Dedicated server
 - **The Discord live message stays in sight.** On a busy day the joins, leaves and finished runs pushed the "who is
@@ -46,7 +44,6 @@
   (`webhook_live_bump_after`, `webhook_live_bump_minutes`; 0 turns either off). A webhook cannot see other people's
   messages, so chat alone does not move it.
 ### Connection and players
-- The Leave button stays on its own line when hosting diagnostics wrap, so it remains visible.
 - Timeouts and server resets keep clients reconnecting. Host-confirmed re-admission restores players
   after a missed kick or an unban; older departure packets cannot undo a newer admission.
 - Departure retries are spaced over separate ticks, lifecycle notices are written to the log, and

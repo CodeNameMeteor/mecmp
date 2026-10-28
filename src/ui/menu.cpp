@@ -92,6 +92,49 @@ void startSession(const std::string& join) {
     config::change([name, join](config::Settings& c) { c.name = name; c.join = join; });
 }
 
+void updateServerQueries(bool active) {
+    const auto cfg = config::get();
+    auto addresses = net::servers::split(cfg->servers);
+    const auto& mainServer = cfg->mainServer;
+    if (!mainServer.empty() && std::find(addresses.begin(), addresses.end(), mainServer) == addresses.end())
+        addresses.push_back(mainServer);
+    net::servers::update(addresses, active);
+}
+
+void quickJoinSection() {
+    const std::string mainServer = config::get()->mainServer;
+    if (mainServer.empty()) return;
+    const auto entries = net::servers::snapshot();
+    const auto server = std::find_if(entries.begin(), entries.end(), [&mainServer](const auto& e) {
+        return e.address == mainServer;
+    });
+    const bool otherVersion = server != entries.end() && server->answered && server->protocol != net::protocol::kProtocol;
+    const bool joining = net::running() && !net::hosting() && config::get()->join == mainServer;
+    const bool connected = joining && net::connectedToHost();
+    const char* label = connected ? "MECMP server (connected)###mainserver"
+                       : joining ? "MECMP server (connecting...)###mainserver"
+                                 : "Join MECMP server###mainserver";
+    ImGui::BeginDisabled(net::starting() || joining || otherVersion);
+    if (ImGui::Button(label)) {
+        snprintf(g_code, sizeof(g_code), "%s", mainServer.c_str());
+        startSession(mainServer);
+    }
+    ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip("%s", mainServer.c_str());
+    if (server != entries.end() && server->answered) {
+        if (server->pingMs >= 0)
+            ImGui::TextWrapped("Players: %d/%d | Ping: %d ms", server->players, server->maxPlayers, server->pingMs);
+        else
+            ImGui::TextWrapped("Players: %d/%d | Ping: n/a", server->players, server->maxPlayers);
+        if (otherVersion)
+            ImGui::TextWrapped("This server uses a different MECMP version.");
+    } else {
+        ImGui::TextWrapped("Players: n/a | Ping: n/a (no recent reply)");
+    }
+    ImGui::Spacing();
+}
+
 void sessionSection() {
     ImGui::SeparatorText("Session");
     const bool running = net::running();
@@ -152,7 +195,6 @@ void sessionSection() {
         else ImGui::TextColored(ImVec4(1.f, 0.5f, 0.3f, 1.f), "no connection to host");
     }
     if (running) {
-        ImGui::SameLine();
         if (ImGui::SmallButton("Leave")) net::leave();
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Stop this session and go offline");
     }
@@ -203,8 +245,10 @@ void serversSection() {
     ImGui::SeparatorText("Servers");
     const auto cfg = config::get();
     std::vector<std::string> saved = net::servers::split(cfg->servers);
-    net::servers::update(saved, true);
-    const auto entries = net::servers::snapshot();
+    auto entries = net::servers::snapshot();
+    entries.erase(std::remove_if(entries.begin(), entries.end(), [&saved](const auto& e) {
+        return std::find(saved.begin(), saved.end(), e.address) == saved.end();
+    }), entries.end());
     std::string remove;
     if (entries.empty()) ImGui::TextDisabled("No servers saved yet: add one by its address below.");
     if (!entries.empty() &&
@@ -1742,7 +1786,7 @@ void draw(bool open) {
         g_hintUntil = GetTickCount() + 10000;
     }
     static bool wasOpen = false;
-    if (wasOpen && !open) net::servers::update(net::servers::split(config::get()->servers), false); // stop asking
+    if (wasOpen && !open) updateServerQueries(false);
     wasOpen = open;
     if (!open) {
         // A short hint after start-up, top-left.
@@ -1756,6 +1800,7 @@ void draw(bool open) {
         }
         return;
     }
+    updateServerQueries(true);
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + vp->WorkSize.y * 0.5f),
                             ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
@@ -1765,6 +1810,7 @@ void draw(bool open) {
     char title[64];
     snprintf(title, sizeof(title), "MECMP %s###mecmp", app::kVersion);
     ImGui::Begin(title, nullptr, ImGuiWindowFlags_NoCollapse);
+    quickJoinSection();
     if (ImGui::BeginTabBar("##tabs")) {
         if (ImGui::BeginTabItem("Session")) {
             sessionSection();

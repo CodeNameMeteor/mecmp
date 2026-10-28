@@ -30,6 +30,10 @@ jobs:
           cl /nologo /std:c++17 /EHsc /W4 /utf-8 /DNOMINMAX /DMECMP_DEBUG_KEYS=0 /DMECMP_VERBOSE_DEFAULT=0 /Isrc tests/session_test.cpp src/server/relay.cpp src/core/config.cpp src/core/log.cpp src/net/upnp.cpp src/net/joincode.cpp src/net/protocol.cpp /Fe:session_test.exe /link ws2_32.lib
           if errorlevel 1 exit /b 1
           session_test.exe
+          if errorlevel 1 exit /b 1
+          cl /nologo /std:c++17 /EHsc /W4 /utf-8 /DNOMINMAX /DMECMP_DEBUG_KEYS=0 /DMECMP_VERBOSE_DEFAULT=0 /Isrc tests/main_server_config_test.cpp src/core/config.cpp src/core/log.cpp src/net/protocol.cpp /Fe:main_server_config_test.exe /link ws2_32.lib
+          if errorlevel 1 exit /b 1
+          main_server_config_test.exe
 
   portable-tests:
     runs-on: ubuntu-24.04

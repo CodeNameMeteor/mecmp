@@ -9,6 +9,9 @@
 #include "game/player_audio.h"
 #include "game/level.h"
 #include "game/models.h"
+#include "game/body_pose.h"
+#include "game/fingerprint.h"
+#include "game/replay_check.h"
 #include "net/net.h"
 
 #include <atomic>
@@ -18,10 +21,10 @@ namespace mecmp::game::hooks {
 namespace {
 
 using FactoryFn = void* (*)(void* creator, void* ci, void* a3, void* a4);
-enum Factory { kSpawner, kPamSpawner, kClientReplay, kClientRecording, kClientCharacter, kCustomize, kPresenceManager, kNamedChallenge, kChallengeMarker, kClientSpawner, kFactoryCount };
+enum Factory { kSpawner, kPamSpawner, kClientReplay, kClientCharacter, kCustomize, kPresenceManager, kNamedChallenge, kChallengeMarker, kClientSpawner, kFactoryCount };
 FactoryFn g_orig[kFactoryCount] = {};
 const char* const kNames[kFactoryCount] = {"ServerCharacterSpawnEntity", "PamServerCharacterSpawnEntity",
-                                           "PamClientReplayPlayerComponent", "PamClientReplayRecordingComponent", "PamClientCharacterEntity",
+                                           "PamClientReplayPlayerComponent", "PamClientCharacterEntity",
                                            "PamServerCustomizeProjectionCharacterEntity", "PamClientPresenceInfoManagerEntity",
                                            "PamServerNamedChallengeEntity", "PamServerChallengeMarkerEntity", "ClientCharacterSpawnEntity"};
 
@@ -123,12 +126,14 @@ void* clientReplayFactory(void* creator, void* ci, void* a3, void* a4) {
     return comp;
 }
 
-// The local player's recorder takes its bones from the data when it is built, so the data is patched before.
-void* clientRecordingFactory(void* creator, void* ci, void* a3, void* a4) {
-    if (ci) level::patchRecordingData(mem::readOr<uintptr_t>(reinterpret_cast<uintptr_t>(ci) + CI_Data));
-    void* comp = g_orig[kClientRecording](creator, ci, a3, a4);
-    if (comp) level::patchRecordingData(mem::readOr<uintptr_t>(reinterpret_cast<uintptr_t>(comp) + 0x10));
-    return comp;
+// The recording components' updater: its updateAll samples every recorder (the local player's records the full
+// skeleton pose into its keyframes). Right after it, the full body is copied from the same pose (game/body_pose.h).
+// The recorder itself keeps the game's own bones: it also records the player's runs.
+UpdateAllFn g_origRecordingUpdateAll = nullptr;
+
+void recordingUpdateAllHook(void* self, void* info) {
+    g_origRecordingUpdateAll(self, info);
+    body_pose::afterRecorderSample();
 }
 void* clientCharacterFactory(void* creator, void* ci, void* a3, void* a4) {
     void* ent = g_orig[kClientCharacter](creator, ci, a3, a4);
@@ -172,6 +177,54 @@ bool installFactory(Factory f, uintptr_t slotVa, uintptr_t expectedVa, FactoryFn
 // Puts back every pointer an install changed, newest first.
 void undoPatches(const std::vector<Patch>& undo) {
     for (auto it = undo.rbegin(); it != undo.rend(); ++it) mem::patchPointer(it->slot, it->original, nullptr);
+}
+
+// The projection spawner's download listener (time-trial ghosts): a recording with more bones than the game's is
+// refused before the game loads it (game/replay_check.h). The flag is given back for any other listener.
+using ListenerFn = void (*)(void* self, void* message, void* a3, void* a4);
+ListenerFn g_origReplayDownloaded = nullptr;
+
+void replayDownloadedHook(void* self, void* message, void* a3, void* a4) {
+    uint8_t* const refused = replay_check::beforeReplayDownloaded(message);
+    g_origReplayDownloaded(self, message, a3, a4);
+    replay_check::restore(refused);
+}
+
+// Optional: without it an old 85-bone time-trial ghost can still crash the game.
+void installReplayDownloadedHook(std::vector<Patch>& undo) {
+    if (!fingerprint::checkReplayCheck()) return;
+    const uintptr_t slot = rva(Slot_ProjectionReplayDownloaded);
+    uintptr_t current = 0;
+    if (!mem::read(slot, current) || current != rva(Fn_ProjectionReplayDownloaded)) {
+        MLOG("hook replay download: slot holds %p, expected %p; old full-body ghosts are not refused",
+             reinterpret_cast<void*>(current), reinterpret_cast<void*>(rva(Fn_ProjectionReplayDownloaded)));
+        return;
+    }
+    g_origReplayDownloaded = reinterpret_cast<ListenerFn>(current); // before the patch, as above
+    if (!mem::patchPointer(slot, reinterpret_cast<uintptr_t>(&replayDownloadedHook), nullptr)) {
+        MLOG("hook replay download: VirtualProtect failed (%lu)", GetLastError());
+        return;
+    }
+    undo.push_back({slot, current});
+    VLOG("hook replay download: installed");
+}
+
+// Optional: without it the game's 23 bones are sent (no full body).
+void installRecordingUpdaterHook(std::vector<Patch>& undo) {
+    const uintptr_t slot = rva(Slot_ClientReplayRecordingUpdateAll);
+    uintptr_t current = 0;
+    if (!mem::read(slot, current) || current != rva(Fn_ClientReplayRecordingUpdateAll)) {
+        MLOG("hook recording updater: slot holds %p, expected %p; the game's 23 bones are sent", reinterpret_cast<void*>(current),
+             reinterpret_cast<void*>(rva(Fn_ClientReplayRecordingUpdateAll)));
+        return;
+    }
+    g_origRecordingUpdateAll = reinterpret_cast<UpdateAllFn>(current); // before the patch, as above
+    if (!mem::patchPointer(slot, reinterpret_cast<uintptr_t>(&recordingUpdateAllHook), nullptr)) {
+        MLOG("hook recording updater: VirtualProtect failed (%lu)", GetLastError());
+        return;
+    }
+    undo.push_back({slot, current});
+    VLOG("hook recording updater: installed");
 }
 
 using PostUpdateFn = void (*)(void* world, void* updateInfo);
@@ -266,7 +319,8 @@ bool install(TickFn onTick, Installed* out) {
     const bool sp2 = installFactory(kPamSpawner, Slot_PamServerCharacterSpawnFactory, Fn_PamServerCharacterSpawnFactory, &pamSpawnerFactory, undo);
     got.spawners = sp1 && sp2;
     const bool replay = installFactory(kClientReplay, Slot_ClientReplayPlayerFactory, Fn_ClientReplayPlayerFactory, &clientReplayFactory, undo);
-    installFactory(kClientRecording, Slot_ClientReplayRecordingFactory, Fn_ClientReplayRecordingFactory, &clientRecordingFactory, undo);
+    installRecordingUpdaterHook(undo);
+    installReplayDownloadedHook(undo);
     const bool chars = installFactory(kClientCharacter, Slot_ClientCharacterFactory, Fn_ClientCharacterFactory, &clientCharacterFactory, undo);
     // Optional: without it the look catalogue is found by a memory scan instead.
     installFactory(kCustomize, Slot_CustomizeProjectionFactory, Fn_CustomizeProjectionCreate, &customizeFactory, undo);

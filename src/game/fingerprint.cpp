@@ -63,6 +63,31 @@ const Code kOwnSpawnerCode[] = {
     {"Entity init", Fn_Entity_init, 0, {0x44, 0x8B, 0x41, 0x18, 0x44, 0x89, 0xC0, 0xC1, 0xE8, 0x03, 0xA8, 0x01, 0x75, 0x12}, 14},
 };
 
+// The full-body pose (game/body_pose.h). Not part of check(): a mismatch only turns the full body off.
+const Code kBodyPoseCode[] = {
+    // lea r8,[rcx+58h]; mov rcx,[rcx+48h]: the recording updater samples a component's recorder with its pose handle
+    {"recording sample call", Code_RecordingSampleCall, 0, {0x4C, 0x8D, 0x41, 0x58, 0x48, 0x8B, 0x49, 0x48}, 8},
+    // mov rax,[rbp+28h]; shl rdx,5; movaps xmm0,[rcx+rax]: the recorder copies bones from the handle's local pose
+    {"recorder reads the local pose", Code_RecorderReadsLocalPose, 0,
+     {0x48, 0x8B, 0x45, 0x28, 0x48, 0xC1, 0xE2, 0x05, 0x0F, 0x28, 0x04, 0x01}, 12},
+    // mov [rdi+98h],rax: the recording component keeps the skeleton its recorder's setup is built for
+    {"recording component skeleton", Code_RecordingCompSkeleton, 0, {0x48, 0x89, 0x87, 0x98, 0x00, 0x00, 0x00}, 7},
+    // mov rax,[r9+0F0h]: the setup builder takes each bone's parent from the skeleton
+    {"setup builder parents", Code_SetupBuildParents, 0, {0x49, 0x8B, 0x81, 0xF0, 0x00, 0x00, 0x00}, 7},
+};
+
+// The replay safety net (game/replay_check.h). Not part of check(): a mismatch only leaves the safety net out.
+const Code kReplayCheckCode[] = {
+    // mov eax,[rdx+0Ch]; cmp eax,8C4A0D15h: the download response's type
+    {"replay download type", Fn_ProjectionReplayDownloaded, 0x1e, {0x8B, 0x42, 0x0C, 0x3D, 0x15, 0x0D, 0x4A, 0x8C}, 8},
+    // cmp byte [rdx+30h],0: its "succeeded" flag
+    {"replay download flag", Fn_ProjectionReplayDownloaded, 0x36, {0x80, 0x7A, 0x30, 0x00}, 4},
+    // mov eax,[rdx+50h]: its size
+    {"replay download size", Fn_ProjectionReplayDownloaded, 0x42, {0x8B, 0x42, 0x50}, 3},
+    // mov rdx,[rbx+48h]: its data
+    {"replay download data", Fn_ProjectionReplayDownloaded, 0x71, {0x48, 0x8B, 0x53, 0x48}, 4},
+};
+
 std::string hex(const unsigned char* b, size_t n) {
     std::string s;
     char t[4];
@@ -101,6 +126,32 @@ bool checkOwnSpawner() {
         unsigned char got[16] = {};
         if (!mem::read(rva(c.fn) + c.skip, got, c.n) || memcmp(got, c.bytes, c.n) != 0) {
             MLOG("build check: %s starts with %s, expected %s (own ghost spawner off)", c.what, hex(got, c.n).c_str(),
+                 hex(c.bytes, c.n).c_str());
+            ++bad;
+        }
+    }
+    return bad == 0;
+}
+
+bool checkBodyPose() {
+    int bad = 0;
+    for (const Code& c : kBodyPoseCode) {
+        unsigned char got[16] = {};
+        if (!mem::read(rva(c.fn) + c.skip, got, c.n) || memcmp(got, c.bytes, c.n) != 0) {
+            MLOG("build check: %s starts with %s, expected %s (full body off: the game's 23 bones are sent)", c.what,
+                 hex(got, c.n).c_str(), hex(c.bytes, c.n).c_str());
+            ++bad;
+        }
+    }
+    return bad == 0;
+}
+
+bool checkReplayCheck() {
+    int bad = 0;
+    for (const Code& c : kReplayCheckCode) {
+        unsigned char got[16] = {};
+        if (!mem::read(rva(c.fn) + c.skip, got, c.n) || memcmp(got, c.bytes, c.n) != 0) {
+            MLOG("build check: %s starts with %s, expected %s (replay safety net off)", c.what, hex(got, c.n).c_str(),
                  hex(c.bytes, c.n).c_str());
             ++bad;
         }

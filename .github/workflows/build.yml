@@ -90,6 +90,16 @@ jobs:
           g++ -std=c++17 -Wall -Wextra -Isrc -fsanitize=address,undefined -fno-sanitize-recover=undefined -g \
             tests/pose_test.cpp -o pose_test
           ./pose_test
+      - name: Full-body bone set test (Linux, sanitizers)
+        run: |
+          g++ -std=c++17 -Wall -Wextra -Isrc -fsanitize=address,undefined -fno-sanitize-recover=undefined -g \
+            tests/body_set_test.cpp -o body_set_test
+          ./body_set_test
+      - name: Replay header test (Linux, sanitizers)
+        run: |
+          g++ -std=c++17 -Wall -Wextra -Isrc -fsanitize=address,undefined -fno-sanitize-recover=undefined -g \
+            tests/replay_header_test.cpp -o replay_header_test
+          ./replay_header_test
 
   windows-build:
     runs-on: ubuntu-24.04

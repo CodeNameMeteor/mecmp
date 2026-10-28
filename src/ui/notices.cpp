@@ -9,6 +9,7 @@
 #include <unordered_map>
 
 #include "core/config.h"
+#include "game/replay_check.h"
 #include "imgui.h"
 #include "net/net.h"
 #include "ui/overlay.h"
@@ -61,6 +62,8 @@ void draw() {
     // Others' finished runs: "Foie finished the dash The View in 1:23.45 (new record)".
     for (const auto& text : net::takeResults())
         if (on) push(text);
+    // A time-trial ghost that was not loaded (game/replay_check.h). Shown even with notices off: the ghost is missing.
+    for (auto& text : game::replay_check::takeNotices()) push(std::move(text));
 
     const DWORD t = GetTickCount();
     while (!g_notices.empty() && t - g_notices.front().at >= kShowMs) g_notices.pop_front();

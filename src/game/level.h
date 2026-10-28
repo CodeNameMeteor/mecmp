@@ -23,13 +23,11 @@ void onClientSpawnerCreated(void* entity);  // a ClientCharacterSpawnEntity
 std::vector<void*> clientSpawners();
 void onForeignClientReplayComp(void* comp); // a client replay component that is not one of our ghosts'
 void forgetClientReplayComp(void* comp);    // ...that turned out to be one of ours after all
-// Bones the replay recorder and player record: the data is patched when its owner is created, before it is built.
-void patchRecordingData(uintptr_t compData);
-// The player data is shared with the game's own ghosts: patched for our ghosts' clients (`ours`), vanilla for the others.
+// The full-body target bones (their ancestors are sent too, body_set.h). Returns how many.
+uint32_t bodyTargets(const uint32_t*& list);
+// Bones our ghosts' replay players play: the data is patched when its owner is created, before it is built. The
+// player data is shared with the game's own ghosts: patched for our ghosts' clients (`ours`), vanilla for the others.
 void patchPlayerData(uintptr_t compData, bool ours);
-// The local recorder's setup. False if it lacks the bones we ask for (the mod loaded after the level), then ghost
-// clients stay vanilla as well.
-bool noteRecorderSetup(const BoneSetup& setup);
 
 // True when everything ghosts need is known (player + ghost spawner, a ghost client for the bones).
 bool complete();

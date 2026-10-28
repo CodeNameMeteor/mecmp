@@ -35,7 +35,8 @@ worlds in one process; the mod uses both.
 |---|---|
 | Character spawner factories | capture the player's spawner (`Characters/FaithCharacter`) and the city-ghost spawner (`Characters/Projection/ProjectionCharacter`); collect spawn-template looks for models |
 | Client replay player factory | claim our ghosts' client components (their data records the body set); others give the reference bone setup and keep vanilla data |
-| Client replay recording factory | the local recorder's data records the body set before the recorder is built |
+| Projection spawner download listener (vtable slot `0x141c7e9d8`) | refuses a time-trial ghost recorded with more bones than the game's (`game/replay_check.cpp`) |
+| Recording components' updater (`updateAll`, vtable slot `0x141c48cb0`) | right after the recorders sample, the full-body pose is copied from the same skeleton pose (`game/body_pose.cpp`) |
 | Client character factory | claim our ghosts' client characters (to make them visible) |
 | Look-picker factory (`PamServerCustomizeProjectionCharacterEntity`) | the echo look catalogue, without a memory scan (optional) |
 | `ServerGameWorld::postUpdate` | the per-tick update |
@@ -43,26 +44,41 @@ worlds in one process; the mod uses both.
 
 ## Local player (`game/local_player.cpp`)
 
-Position and facing come from the player's server character. The body pose comes from the
+Position and facing come from the player's server character. The pose's timing comes from the
 player's own replay recorder (`PamClientReplayRecordingComponent` +0x48), which always keeps
 the last ~15 s for the game's "create a time trial" feature. Its newest keyframe is one `{vec4 translation,
-quat rotation}` per recorded bone, exactly what a ghost's replay player plays.
+quat rotation}` per recorded bone, exactly what a ghost's replay player plays. The full body of that keyframe is
+taken by `game/body_pose.cpp` (below); without it the recorder's own 23 bones are sent.
 
 ### Pose sync (the bone set)
 
-The recorder and the ghost players record the bones named in their data (`RecordingBones`) plus all their
-ancestors. The mod replaces the game's 5-6 bones with one list (`kTargets` in `game/level.cpp`): fingers, toes,
-roll (twist) bones and the main body, 85 bones of the 182. The data is patched in the two factory hooks, before
-the objects are built; the player data only for our ghosts (the game's city and time-trial ghosts share it and keep
-their 23-bone replays). The face and the rig's procedural helpers are not sent.
+A recorder and a ghost's replay player record the bones named in their data (`RecordingBones`) plus all their
+ancestors. MECMP uses one list (`kTargets` in `game/level.cpp`): fingers, toes, roll (twist) bones and the main
+body, 85 bones of the 182 with their ancestors (`game/body_set.h`). The face and the rig's procedural helpers are
+not sent.
+
+- **Sending:** the player's recorder is not changed. It also streams the player's time-trial runs
+  (`ReplayRecorder_SampleAndStream` 0x143974390), writes shared time trials (`ReplayRecorder_SerializeRange`
+  0x143970820, from `PamClientCreateSharedHighlightEntity`) and the echo, all with its own setup, and the game's
+  ghosts play 23 bones: an 85-bone run T-posed them, and loading one onto a reused ghost overran its keyframe ring
+  (`ReplayPlayback_LoadRecording` 0x143973740 keeps an existing ring; crash 2026-10-27). Instead, right after the
+  recording updater samples (the hook above), `body_pose` copies the 85 bones from the pose the recorder copies its
+  own from: the component's pose handle (+0x58), whose +0x28 is the full local pose, indexed by skeleton bone. The
+  set is built from the skeleton the recorder's setup was built for (+0x98: bone count +0x08, parents at [+0xf0]),
+  as `ReplaySetup_Build` (0x143948610) does. `local_player` sends it with the recorder keyframe of the same time.
+- **Old full-body runs** (85-bone recordings from earlier betas) are still on the servers. `game/replay_check.cpp`
+  hooks the projection spawner's download listener (vtable slot `0x141c7e9d8`, `ProjectionSpawner_OnReplayDownloaded`
+  0x143a8a910) and reads the recording's header (big-endian: version 5, setup hash, bone count; `replay_header.h`).
+  More bones than the game's 23: the message's "succeeded" flag is cleared for the call, so the game takes its own
+  failed-download path (no ghost), and a notice says why.
+- **Playing:** the player data is patched in the client replay factory hook, before the object is built, and only
+  for our ghosts (the game's city and time-trial ghosts share it and keep their 23-bone replays).
 
 - A pose names its bones: each full STATE packet carries the skeleton index of every slot (`PlayerState::boneIdx`,
   from the recorder's setup at `Rec_Setup`), so sender and receiver need no shared table and any set works.
 - A ghost's server component takes the setup of its own client (`readOwnSetup`), because the client drops a pose whose
   bone count differs from its own. The pose is moved into that setup by index (`remapPose`); a bone the sender does not
   send takes the local player's own current value.
-- If the mod loaded after the level, the recorder was built before the patch and records the vanilla set
-  (`noteRecorderSetup`): the player patches are then undone and ghosts stay vanilla until the next level.
 
 ## Ghosts (`game/ghosts.cpp`)
 

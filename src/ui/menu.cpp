@@ -104,12 +104,17 @@ void updateServerQueries(bool active) {
 void quickJoinSection() {
     const std::string mainServer = config::get()->mainServer;
     if (mainServer.empty()) return;
+    const auto entries = net::servers::snapshot();
+    const auto server = std::find_if(entries.begin(), entries.end(), [&mainServer](const auto& e) {
+        return e.address == mainServer;
+    });
+    const bool otherVersion = server != entries.end() && server->answered && server->protocol != net::protocol::kProtocol;
     const bool joining = net::running() && !net::hosting() && config::get()->join == mainServer;
     const bool connected = joining && net::connectedToHost();
     const char* label = connected ? "MECMP server (connected)###mainserver"
                        : joining ? "MECMP server (connecting...)###mainserver"
                                  : "Join MECMP server###mainserver";
-    ImGui::BeginDisabled(net::starting() || joining);
+    ImGui::BeginDisabled(net::starting() || joining || otherVersion);
     if (ImGui::Button(label)) {
         snprintf(g_code, sizeof(g_code), "%s", mainServer.c_str());
         startSession(mainServer);
@@ -117,16 +122,12 @@ void quickJoinSection() {
     ImGui::EndDisabled();
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
         ImGui::SetTooltip("%s", mainServer.c_str());
-    const auto entries = net::servers::snapshot();
-    const auto server = std::find_if(entries.begin(), entries.end(), [&mainServer](const auto& e) {
-        return e.address == mainServer;
-    });
     if (server != entries.end() && server->answered) {
         if (server->pingMs >= 0)
             ImGui::TextWrapped("Players: %d/%d | Ping: %d ms", server->players, server->maxPlayers, server->pingMs);
         else
             ImGui::TextWrapped("Players: %d/%d | Ping: n/a", server->players, server->maxPlayers);
-        if (server->protocol != net::protocol::kProtocol)
+        if (otherVersion)
             ImGui::TextWrapped("This server uses a different MECMP version.");
     } else {
         ImGui::TextWrapped("Players: n/a | Ping: n/a (no recent reply)");

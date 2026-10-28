@@ -38,7 +38,6 @@
 namespace mecmp::ui::menu {
 namespace {
 
-constexpr const char* kMainServerAddress = "34.27.13.116:47800";
 char g_name[net::protocol::kMaxNameBytes + 1] = {}; // what fits on the wire
 char g_code[64] = {};
 char g_label[config::kWheels][config::kPingSlots][net::protocol::kMaxPingLabelBytes + 1] = {}; // the marker wheels' titles
@@ -92,44 +91,6 @@ void startSession(const std::string& join) {
     const std::string name = enteredName();
     net::startAsync(cfg->port, join, cfg->loopbackOffset, name);
     config::change([name, join](config::Settings& c) { c.name = name; c.join = join; });
-}
-
-void updateServerQueries(bool active) {
-    auto addresses = net::servers::split(config::get()->servers);
-    if (std::find(addresses.begin(), addresses.end(), kMainServerAddress) == addresses.end())
-        addresses.emplace_back(kMainServerAddress);
-    net::servers::update(addresses, active);
-}
-
-void quickJoinSection() {
-    const bool joining = net::running() && !net::hosting() && config::get()->join == kMainServerAddress;
-    const bool connected = joining && net::connectedToHost();
-    const char* label = connected ? "MECMP server (connected)###mainserver"
-                       : joining ? "MECMP server (connecting...)###mainserver"
-                                 : "Join MECMP server###mainserver";
-    ImGui::BeginDisabled(net::starting() || joining);
-    if (ImGui::Button(label)) {
-        snprintf(g_code, sizeof(g_code), "%s", kMainServerAddress);
-        startSession(kMainServerAddress);
-    }
-    ImGui::EndDisabled();
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-        ImGui::SetTooltip("%s", kMainServerAddress);
-    const auto entries = net::servers::snapshot();
-    const auto server = std::find_if(entries.begin(), entries.end(), [](const auto& e) {
-        return e.address == kMainServerAddress;
-    });
-    if (server != entries.end() && server->answered) {
-        if (server->pingMs >= 0)
-            ImGui::TextWrapped("Players: %d/%d | Ping: %d ms", server->players, server->maxPlayers, server->pingMs);
-        else
-            ImGui::TextWrapped("Players: %d/%d | Ping: n/a", server->players, server->maxPlayers);
-        if (server->protocol != net::protocol::kProtocol)
-            ImGui::TextWrapped("This server uses a different MECMP version.");
-    } else {
-        ImGui::TextWrapped("Players: n/a | Ping: n/a (no recent reply)");
-    }
-    ImGui::Spacing();
 }
 
 void sessionSection() {
@@ -192,6 +153,7 @@ void sessionSection() {
         else ImGui::TextColored(ImVec4(1.f, 0.5f, 0.3f, 1.f), "no connection to host");
     }
     if (running) {
+        ImGui::SameLine();
         if (ImGui::SmallButton("Leave")) net::leave();
         if (ImGui::IsItemHovered()) ImGui::SetTooltip("Stop this session and go offline");
     }
@@ -242,10 +204,8 @@ void serversSection() {
     ImGui::SeparatorText("Servers");
     const auto cfg = config::get();
     std::vector<std::string> saved = net::servers::split(cfg->servers);
-    auto entries = net::servers::snapshot();
-    entries.erase(std::remove_if(entries.begin(), entries.end(), [&saved](const auto& e) {
-        return std::find(saved.begin(), saved.end(), e.address) == saved.end();
-    }), entries.end());
+    net::servers::update(saved, true);
+    const auto entries = net::servers::snapshot();
     std::string remove;
     if (entries.empty()) ImGui::TextDisabled("No servers saved yet: add one by its address below.");
     if (!entries.empty() &&
@@ -639,15 +599,9 @@ void voiceStatus() {
     ImGui::Unindent();
 }
 
-// You tab: what the player shares or allows.
-void privacySection() {
+void doorsSection() {
     const auto cfg = config::get();
-    ImGui::SeparatorText("Privacy");
-    bool share = cfg->shareProfile;
-    if (ImGui::Checkbox("Share my EA profile", &share)) config::change([share](config::Settings& c) { c.shareProfile = share; });
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("Sends your EA online id and profile name to the players in your session, so their map\n"
-                          "shows your Runner Tag where you are. Off: you are not on their maps.");
+    ImGui::SeparatorText("Doors");
     bool doors = cfg->syncDoors;
     if (ImGui::Checkbox("Sync doors", &doors))
         config::change([doors](config::Settings& c) { c.syncDoors = doors; });
@@ -659,6 +613,17 @@ void privacySection() {
     if (ImGui::Button("Open door ahead")) game::doors::requestOpen();
     ImGui::EndDisabled();
     ImGui::TextDisabled("%s", game::doors::status().c_str());
+}
+
+// You tab: what the player shares or allows.
+void privacySection() {
+    const auto cfg = config::get();
+    ImGui::SeparatorText("Privacy");
+    bool share = cfg->shareProfile;
+    if (ImGui::Checkbox("Share my EA profile", &share)) config::change([share](config::Settings& c) { c.shareProfile = share; });
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Sends your EA online id and profile name to the players in your session, so their map\n"
+                          "shows your Runner Tag where you are. Off: you are not on their maps.");
     bool tod = cfg->syncTimeOfDay;
     if (ImGui::Checkbox("Use the host's time of day", &tod))
         config::change([tod](config::Settings& c) { c.syncTimeOfDay = tod; });
@@ -1796,7 +1761,7 @@ void draw(bool open) {
         g_hintUntil = GetTickCount() + 10000;
     }
     static bool wasOpen = false;
-    if (wasOpen && !open) updateServerQueries(false);
+    if (wasOpen && !open) net::servers::update(net::servers::split(config::get()->servers), false); // stop asking
     wasOpen = open;
     if (!open) {
         // A short hint after start-up, top-left.
@@ -1810,7 +1775,6 @@ void draw(bool open) {
         }
         return;
     }
-    updateServerQueries(true);
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + vp->WorkSize.y * 0.5f),
                             ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
@@ -1820,10 +1784,10 @@ void draw(bool open) {
     char title[64];
     snprintf(title, sizeof(title), "MECMP %s###mecmp", app::kVersion);
     ImGui::Begin(title, nullptr, ImGuiWindowFlags_NoCollapse);
-    quickJoinSection();
     if (ImGui::BeginTabBar("##tabs")) {
         if (ImGui::BeginTabItem("Session")) {
             sessionSection();
+            doorsSection();
             hostSettingsSection();
             serversSection();
             ImGui::EndTabItem();

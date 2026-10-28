@@ -14,6 +14,7 @@
 #include "game/camera.h"
 #include "game/door_policy.h"
 #include "game/level.h"
+#include "game/engine.h"
 #include "game/raycast.h"
 #include "net/net.h"
 
@@ -25,12 +26,6 @@ using DestroyFn = uintptr_t (*)(void*, uint32_t);
 using ReadFn = void (*)(void*, void*, int*, int*, void*);
 using GetFn = uint8_t (*)(uintptr_t, uintptr_t);
 using SetFn = uintptr_t (*)(uintptr_t, uintptr_t, uint8_t);
-constexpr uintptr_t kDriver = 0x141c43850, kAnt = 0x141b06770, kReader = 0x141b06e50, kBool = 0x141a435c8;
-constexpr uintptr_t kInitSlot = 0x141c438c8, kDestroySlot = 0x141c43888, kReadSlot = 0x141b7ad30,
-                    kSetSlot = 0x141a435d0;
-constexpr uintptr_t kInit = 0x143933cd0, kDestroy = 0x14392b200, kRead = 0x14342d510, kGet = 0x142c34a70,
-                    kSet = 0x142c3ea40;
-constexpr uintptr_t kManager = 0x1423dd0b8;
 constexpr size_t kMaxDrivers = 16384;
 struct Driver {
     uintptr_t address = 0, data = 0, ant = 0, mesh = 0, actor = 0;
@@ -271,13 +266,14 @@ void bank() {
     for (auto byte : bytes)
         hash = (hash ^ byte) * 1099511628211ULL;
     uint32_t closedId = 0, pulseId = 0;
-    if (count == 33340 && hash == 0xd70756f58c02cb00ULL) {
-        closedId = 0x85f3c;
-        pulseId = 0x86256;
-    } else if (count == 33341 && hash == 0xe20f1f8ac2e10d23ULL) {
-        closedId = 0x85f77;
-        pulseId = 0x86292;
-    } else {
+    for (const auto& fingerprint : kBanks) {
+        if (count == fingerprint.entries && hash == fingerprint.hash) {
+            closedId = fingerprint.closed;
+            pulseId = fingerprint.pulse;
+            break;
+        }
+    }
+    if (!closedId || !pulseId) {
         g_bankReady = false;
         return;
     }
@@ -302,7 +298,7 @@ bool bootstrap() {
     static uintptr_t cursor = 0x10000;
     static uint64_t started = 0, bytesRead = 0;
     static unsigned added = 0, unreadable = 0;
-    static std::vector<uint8_t> buffer(1024 * 1024);
+    static std::vector<uint8_t> buffer(64 * 1024);
     if (!started) {
         started = GetTickCount64();
         g_scan = 1;
@@ -311,12 +307,12 @@ bool bootstrap() {
     SYSTEM_INFO system{};
     GetSystemInfo(&system);
     while (cursor < reinterpret_cast<uintptr_t>(system.lpMaximumApplicationAddress)) {
-        if (GetTickCount64() - started > 120000 || bytesRead > 32ULL * 1024 * 1024 * 1024) {
+        if (GetTickCount64() - started >= 5000 || bytesRead >= 256ULL * 1024 * 1024) {
             g_scan = 3;
             MLOG("doors: bootstrap limited after %u drivers; some loaded doors may need a level reload", added);
             return true;
         }
-        if (GetTickCount64() - slice >= 40)
+        if (GetTickCount64() - slice >= 2)
             return false;
         MEMORY_BASIC_INFORMATION page{};
         if (!VirtualQuery(reinterpret_cast<void*>(cursor), &page, sizeof(page)) || !page.RegionSize) {
@@ -546,9 +542,11 @@ void maintain() {
         bank();
     }
     const auto world = level::serverWorld();
+    // The interrupted level is not scanned again: lifecycle hooks cover subsequent loads.
+    // Already-loaded doors missed here become available after the game reloads them.
     if (g_bootstrapWorld && world && world != g_bootstrapWorld)
         scanned = true;
-    if (!scanned && door_policy::bootstrapNeeded(g_bootstrapWorld, world) && g_world.load() && !level::inFrontEnd() &&
+    if (config::get()->doorBootstrapScan && !scanned && door_policy::bootstrapNeeded(g_bootstrapWorld, world) && g_world.load() && !level::inFrontEnd() &&
         now >= g_readyAt.load() && g_bankReady)
         scanned = bootstrap();
 }

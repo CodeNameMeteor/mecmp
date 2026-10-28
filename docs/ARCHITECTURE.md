@@ -424,14 +424,19 @@ reader is used only for the aimed door or queued applications, with a fast retur
 Registry walks, placement matching and network handoff happen on the game tick, never in that reader.
 Calls into an actor use the live arguments of the animation callback and validate its current registration.
 The adapter checks its function and slot fingerprints before installation, then uses `mem::patchPointer`.
-The bounded discovery scan runs only for the world already loaded when the hooks were installed.
+Door controls are in Session. Discovery uses lifecycle hooks. A late-injection heap scan is off by
+default; `[player] door_bootstrap_scan=1` opts into a bounded pass for the world already loaded when
+hooks were installed (5 seconds or 256 MiB, in 2 ms slices with 64 KiB reads). A read can exceed the
+slice budget. A level change ends the pass permanently; missed objects need a subsequent level load.
 
 The player host and dedicated server use the same bounded `doors::Authority`. Clients send interest
 and local opens; only the host sends authoritative states. Type 19 carries versioned 80-byte payloads.
 The 200-metre enter and 250-metre leave radii limit delivery, while acknowledgments and spaced retries
 recover lost packets. Incoming state is acknowledged separately from application in the game. Application
 tries at most three pulses, at least three seconds apart, per loaded object. Refused/locked doors do not
-keep retrying forever. Timed-out peers and restarted sessions lose their subscriptions.
+keep retrying forever. A successful opening marks that loaded object done: closing it later does not
+start another pulse cycle until the object reloads. Authority retains up to 8192 opened keys per session.
+Timed-out peers and restarted sessions lose their subscriptions.
 
 The saved sync switch stops both sending and applying shared openings. The button/key still works
 locally with sync off. During a run both remote application and the button/key are refused; on leaving

@@ -71,6 +71,7 @@ struct Settings {
     bool shareProfile = false;            // send your EA online id and profile name, so others' maps show your Runner Tag
     bool allowForcedSummon = false;       // a hard summon from the host (or a member it allows) takes you after a countdown
     bool doNotDisturb = false;            // blocks all incoming summons, go to's
+    bool doorBootstrapScan = false; // opt-in bounded heap scan after late injection
     bool syncDoors = true;
     std::string doorKey;
     bool syncTimeOfDay = true;            // joining a player host: use its time of day (game/time_of_day.h)

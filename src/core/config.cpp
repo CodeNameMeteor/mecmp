@@ -72,6 +72,8 @@ constexpr const char* kDefaultIni =
     "ask_before_go_to=0\r\n"
     "; 1 = share nearby ordinary door openings; 0 = keep door changes local in both directions\r\n"
     "sync_doors=1\r\n"
+    "; opt-in search for already-loaded doors after late injection; reload the level instead to avoid a scan.\r\n"
+    "door_bootstrap_scan=0\r\n"
     "; 1 = see the host's time of day (sky and light) while you join a player's session; 0 = keep your own\r\n"
     "sync_time_of_day=1\r\n"
     "; 1 = share your EA online id and profile name with the session, so the game's map shows your Runner Tag\r\n"
@@ -580,6 +582,7 @@ void load(const std::wstring& dir) {
     s.allowForcedSummon = readInt(ini, L"player", L"allow_forced_summon", 0) != 0;
     s.doNotDisturb = readInt(ini, L"player", L"do_not_disturb", 0) != 0;
     s.syncDoors = readInt(ini, L"player", L"sync_doors", 1) != 0;
+    s.doorBootstrapScan = readInt(ini, L"player", L"door_bootstrap_scan", 0) != 0;
     s.syncTimeOfDay = readInt(ini, L"player", L"sync_time_of_day", 1) != 0;
     s.askBeforeVisit = readInt(ini, L"player", L"ask_before_go_to", 0) != 0;
     s.shareProfile = readInt(ini, L"player", L"share_profile", 0) != 0;
@@ -766,6 +769,7 @@ void applyPending() {
     put(L"player", L"allow_forced_summon", snapshot->allowForcedSummon ? "1" : "0");
     put(L"player", L"do_not_disturb", snapshot->doNotDisturb ? "1" : "0");
     put(L"player", L"sync_doors", snapshot->syncDoors ? "1" : "0");
+    put(L"player", L"door_bootstrap_scan", snapshot->doorBootstrapScan ? "1" : "0");
     put(L"player", L"sync_time_of_day", snapshot->syncTimeOfDay ? "1" : "0");
     put(L"player", L"ask_before_go_to", snapshot->askBeforeVisit ? "1" : "0");
     put(L"player", L"share_profile", snapshot->shareProfile ? "1" : "0");

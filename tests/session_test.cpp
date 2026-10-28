@@ -31,6 +31,7 @@ static void resetSession(Role role = Role::Join) {
     g_hostAddr = address(47801);
     g_sendTo = {g_hostAddr};
     g_members.clear();
+    g_retiredHostSessions.clear();
     g_reserved.clear();
     g_remotes.clear();
     g_connectionNotices.clear();
@@ -461,7 +462,24 @@ static void testListenHostConfirmsItsOwnPlayer() {
     CHECK(g_remotes.at(200).announced && !g_remotes.at(200).departed);
 }
 
+static void testRetiredHosts() {
+    resetSession();
+    helloFrom(201, "New host", proto::kHelloHost);
+    CHECK(g_hostSession == 201);
+    helloFrom(200, "Old host", proto::kHelloHost);
+    CHECK(g_hostSession == 201);
+    departureFrom(201, g_session, proto::DepartureReason::SessionReset);
+    helloFrom(201, "Old host", proto::kHelloHost);
+    CHECK(running());
+    helloFrom(202, "Reset host", proto::kHelloHost);
+    CHECK(g_hostSession == 202);
+    resetSession();
+    helloFrom(200, "Host", proto::kHelloHost);
+    CHECK(g_hostSession == 200);
+}
+
 int main() {
+    testRetiredHosts();
     testListenHostConfirmsItsOwnPlayer();
     testRelayResetAndReadmission();
     testRelayReadmitsMissedKickAndUnban();

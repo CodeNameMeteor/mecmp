@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Quick connect
+- A button above the menu tabs connects to the configured main server and shows its player count and ping.
+  The default `[net] main_server=34.27.13.116:47800` also enables outbound status queries to that address
+  every 5 seconds while the menu is open, even if it is not saved in the server list. Set it empty to
+  disable the button and its automatic queries. Saved servers keep their existing query behavior.
+- The built-in main-server address is not saved as an override, so future builds can update the default.
+  Custom addresses and an empty value remain saved. Quick connect is disabled for a server reporting
+  a different protocol version, matching the saved-server list.
+- Leave stays on its own row when hosting diagnostics wrap.
+
 ### Doors
 - Ordinary doors opened by kicking, barging or pushing can share their open state through a player host
   or dedicated server. Players receive nearby updates within 200 metres, with a 250-metre leave radius,

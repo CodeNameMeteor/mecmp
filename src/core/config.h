@@ -15,6 +15,8 @@
 
 namespace mecmp::config {
 
+inline constexpr char kDefaultMainServer[] = "34.27.13.116:47800";
+
 // The marker wheels (hold the marker key): wheels of up to nine marker types each. Three come
 // ready-made, and two more can be added in the menu. A slot's title and icon are yours, so every
 // player's wheels can say something different. Every wheel keeps nine slots on file; a wheel shows
@@ -57,6 +59,7 @@ struct Settings {
     // [net]
     bool netEnabled = true;
     uint16_t port = 47800;
+    std::string mainServer = kDefaultMainServer; // quick connect; empty disables the button and its queries
     std::string join;                     // join code or ip:port of the host; empty = host a session
     bool autoStart = false;               // start that session when the game starts (else wait for the menu)
     // A dedicated server that introduces hosts and joiners for hole punching (no port forwarding for most
@@ -168,7 +171,8 @@ const std::wstring& dir(); // folder of mecmp.dll / mecmp.ini (with trailing bac
 // Queues a change (any thread). `persist`: also write the user-editable settings to mecmp.ini.
 void change(std::function<void(Settings&)> edit, bool persist = true);
 // Mod thread: applies queued changes in order and saves once if any asked for it.
-void applyPending();
+// flush bypasses the write debounce for pending persistent changes.
+void applyPending(bool flush = false);
 
 // "faith" -> 0, "echo:1a2b3c4d" -> 0x1a2b3c4d: the look sent to other players.
 uint32_t lookHash(const std::string& look);

@@ -94,3 +94,9 @@ NetworkOnPlayerSpawnedMessage (0xcab70d78) is built on the stack in FUN_14338066
 passes through the local message manager, so the Network-category listener could not fire (confirmed by the 15:52-15:59
 log: no arrival line in 3 level loads). MECMP now listens for the trigger itself (category 0xf3c93dd3, type 0x40fa3f03; new
 character set, old clear, 'same' flag clear, player is not AI and not made-for-character). Untested in game.
+
+### Settle delay removed; map refresh kept (2026-11-15, user's logs e2b10af6, 45b9c8b5)
+The 1.5 s wait after the player's character appears is gone: spawns 40 ms after the trigger survived (two level loads).
+The show-again/re-look on OnHideMap was removed and put back: without it the ghost vanished after the map closed (no lost
+or respawn line, so the character still existed, only hidden). User's guess: the game hides all ghosts when the map closes
+(to remove the map's echo). Not checked in Ghidra yet: what OnHideMap / the Your Echo screen does to client ghosts.

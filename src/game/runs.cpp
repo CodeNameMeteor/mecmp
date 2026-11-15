@@ -129,6 +129,7 @@ bool registerOn(uintptr_t contextGlobal, Listener& l, std::atomic<uintptr_t>& do
     reinterpret_cast<RegisterFn>(rva(Fn_RegisterListener))(manager, kCategorySocialPlay, &l, 0xff);
     if (&l == &g_serverListener) reinterpret_cast<RegisterFn>(rva(Fn_RegisterListener))(manager, kCategoryNetwork, &l, 0xff);
     done = manager;
+    if (&l == &g_serverListener) MLOG("runs: listening for the Network category on the server message manager %p", reinterpret_cast<void*>(manager));
     VLOG("runs: listening for finished runs on the %s message manager",
          &l == &g_clientListener ? "client" : "server");
     return true;

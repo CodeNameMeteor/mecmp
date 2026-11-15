@@ -121,3 +121,8 @@ closes. Not seen in the GridNode recordings (no events on a ghost). Fix tried: t
 (`g_gameHidGhost`) and the next tick calls setVisible(true) on our ghosts again, so the gap shrinks to about a tick instead
 of waiting for the 1 s refresh. The refresh on OnHideMap stays. Untested. Unknown: who writes the property (and why it is
 false); the property's name (hash 0x35bc69ab) is not resolved.
+Result (log 26d94fcc, user): with the next-tick re-show the user saw no flicker after map closes (hides logged 0.24 s after
+4 of 7 closes, 3 characters each: two of ours and one more ghost-data character). Seen in the same log, not fixed: two
+ghosts (two remote players) both logged "bus id 992a50" and both claimed their client characters by that bus id; they were
+claimed 0 ms after their own spawn so they did not mix up, but it is the ambiguity plan 1.3 is about. Open question: is the
+look re-apply on map close still needed now that visibility is handled? (Try removing it, keep the re-show.)

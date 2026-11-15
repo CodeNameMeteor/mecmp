@@ -531,7 +531,9 @@ void* characterFromPlayerManager() {
         if (!ch || !isKindOf(reinterpret_cast<void*>(ch), TI_ServerCharacterEntity) ||
             mem::readOr<uintptr_t>(ch + Character_Player) != p)
             continue;
-        if (mem::readOr<uint8_t>(p + ServerPlayer_IsHuman)) return reinterpret_cast<void*>(ch);
+        // +0x1398 marks a wrapper player made for a character; the server's message handlers skip
+        // those, so a real player has it clear (Ghidra: FUN_143358f00 setter, FUN_143380660 checks).
+        if (!mem::readOr<uint8_t>(p + ServerPlayer_MadeForCharacter)) return reinterpret_cast<void*>(ch);
         if (!fallback) fallback = reinterpret_cast<void*>(ch);
     }
     return fallback;

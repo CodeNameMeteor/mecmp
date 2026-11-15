@@ -76,3 +76,14 @@ pass 3; the recording updater is pass 1 (before pass 6).
   setup = comp's expectedBones). The rig table is kept at comp +0x1d0. After it the component also sizes a pose buffer
   (+0x1d8, count*0x20) and the received-pose vector (+0x180/+0x188). So 1.4 option 1 is not a single call: those two must
   be redone too. Option 2 (patch around the game's create call) is confirmed correct in timing: the data is read at init.
+
+## Players and characters (GridNode scratch/block-l-2026-11-15.md, spot-checked in Ghidra)
+Checked: `ServerPlayer +0x1398` is set by `FUN_143358f00` and tested by nearly every case of the server player message
+handler `FUN_143380660` (non-zero: return early). `addPlayer` `FUN_143349ce0` picks the human vector (+0x268) or the AI
+vector (+0x4a0) by `+0x1399`, not +0x1398. So +0x1398 is "made for a character" (a wrapper), not "is human"; a real
+player has it clear. `ServerPlayer_IsHuman` is renamed `ServerPlayer_MadeForCharacter`, and `characterFromPlayerManager()`
+now prefers entries with it clear (it preferred set ones before: wrong). Still untested in game.
+Not re-checked: the sender of NetworkOnPlayerSpawnedMessage (`FUN_143380660` is the server player message handler, not the
+sender), and the L4 answer: early ghost deletion is `PamServerReplayEntity` StopReplay (0x1439741d0) unspawning the
+spawner's LAST character, not the spawner's own update. If true, plan 1.2 (do not spawn from the city ghost spawner while
+only MECMP ghosts are in its list) applies; not done yet.

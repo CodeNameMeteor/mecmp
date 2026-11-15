@@ -175,7 +175,7 @@ constexpr size_t Character_Player = 0x250;
 constexpr uintptr_t Global_ServerGameContext = 0x14253d670;
 constexpr size_t ServerGameContext_PlayerManager = 0x68;
 constexpr size_t PlayerManager_PlayersBegin = 0x268, PlayerManager_PlayersEnd = 0x270;
-constexpr size_t ServerPlayer_IsHuman = 0x1398, ServerPlayer_Character = 0x1478;
+constexpr size_t ServerPlayer_MadeForCharacter = 0x1398, ServerPlayer_Character = 0x1478;
 // A character's own entity bus (server and client) and the u32 at bus +0x58 (& 0x1ffffff). The server and client
 // characters have the same value, but it is not unique per character: every ghost from one spawner has the same
 // one (the low bits of the spawner's data pointer, seen in game 2026-10-23). It only says "a ghost of this kind".

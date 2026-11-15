@@ -511,7 +511,35 @@ bool characterExists(void* character, uintptr_t expectedData) {
            (!expectedData || head[Character_Data / 8] == expectedData);
 }
 
+namespace {
+// The local player's character through the server's player manager: no spawner has to have been found first.
+// A player counts only when its character points back at it. Null when the manager is not there (yet).
+void* characterFromPlayerManager() {
+    const uintptr_t ctx = mem::readOr<uintptr_t>(rva(Global_ServerGameContext));
+    const uintptr_t mgr = ctx ? mem::readOr<uintptr_t>(ctx + ServerGameContext_PlayerManager) : 0;
+    uintptr_t range[2] = {};
+    if (!mgr || !mem::read(mgr + PlayerManager_PlayersBegin, range, sizeof(range))) return nullptr;
+    const uintptr_t begin = range[0], end = range[1];
+    if (!begin || end <= begin || (end - begin) / 8 > 32) return nullptr;
+    uintptr_t players[32];
+    const size_t count = (end - begin) / 8;
+    if (!mem::read(begin, players, count * 8)) return nullptr;
+    void* fallback = nullptr;
+    for (size_t i = 0; i < count; ++i) {
+        const uintptr_t p = players[i];
+        const uintptr_t ch = p ? mem::readOr<uintptr_t>(p + ServerPlayer_Character) : 0;
+        if (!ch || !isKindOf(reinterpret_cast<void*>(ch), TI_ServerCharacterEntity) ||
+            mem::readOr<uintptr_t>(ch + Character_Player) != p)
+            continue;
+        if (mem::readOr<uint8_t>(p + ServerPlayer_IsHuman)) return reinterpret_cast<void*>(ch);
+        if (!fallback) fallback = reinterpret_cast<void*>(ch);
+    }
+    return fallback;
+}
+} // namespace
+
 void* playerCharacter() {
+    if (void* viaManager = characterFromPlayerManager()) return viaManager;
     void* spawner = playerSpawner();
     if (!spawner) return nullptr;
     // The spawner's vtable (is it still a spawner?) and its list of characters, in one read.

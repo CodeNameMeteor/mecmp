@@ -43,6 +43,9 @@ constexpr uintptr_t Vtbl_PamServerChallengeMarkerEntity = 0x141c7e3e8;
 constexpr size_t Marker_ContentId = 0x80, Marker_Name = 0xb8;
 constexpr size_t kContentIdSize = 0x18;
 constexpr size_t Msg_Category = 0x08, Msg_Type = 0x0c;
+// Category ids are the djb2-xor hash of the category name too ("Network" 0xc67d277b: the game's own server player manager
+// listens on it). NetworkOnPlayerSpawnedMessage: Faith is really in the level (GridNode startup recording).
+constexpr uint32_t kCategoryNetwork = 0xc67d277b, kTypeOnPlayerSpawned = 0xcab70d78;
 constexpr size_t Fin_ContentId = 0x48, Fin_Delta = 0x50, Fin_HadRecord = 0x54, Fin_Value = 0x58, Fin_NewRecord = 0x60;
 
 constexpr size_t Ent_ChallengeData = 0x80;
@@ -124,6 +127,7 @@ bool registerOn(uintptr_t contextGlobal, Listener& l, std::atomic<uintptr_t>& do
     if (done.load() == manager) return true;
     using RegisterFn = char (*)(uintptr_t manager, uint32_t category, Listener* listener, uint32_t filter);
     reinterpret_cast<RegisterFn>(rva(Fn_RegisterListener))(manager, kCategorySocialPlay, &l, 0xff);
+    if (&l == &g_serverListener) reinterpret_cast<RegisterFn>(rva(Fn_RegisterListener))(manager, kCategoryNetwork, &l, 0xff);
     done = manager;
     VLOG("runs: listening for finished runs on the %s message manager",
          &l == &g_clientListener ? "client" : "server");
@@ -368,6 +372,10 @@ void onMessage(Listener* self, const void* message) {
     uint32_t category = 0, type = 0;
     memcpy(&category, m + Msg_Category, 4);
     memcpy(&type, m + Msg_Type, 4);
+    if (category == kCategoryNetwork) {
+        if (type == kTypeOnPlayerSpawned) ghosts::onPlayerSpawnedMessage();
+        return;
+    }
     if (category != kCategorySocialPlay) return;
     dumpMessage(m, type);
     // The map (and its "Your Echo" screen) can leave other players' ghosts invisible when it closes.

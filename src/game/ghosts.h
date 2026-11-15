@@ -45,6 +45,7 @@ void requestHideAll();        // F12: hide all ghosts and pause auto spawning
 // The map closed (OnHideMap; any thread): ghosts are shown again and their look re-applied, as F7 does, at once and
 // once more a moment later.
 void gameScreenClosed();
+void onPlayerSpawnedMessage(); // NetworkOnPlayerSpawnedMessage: the player's character is really in the level
 // Looks: each ghost shows its player's own look (sent with their name). Changes are picked up by the
 // tick and tried at once. Call this when the echo look list was found: looks that waited for it are
 // tried on the next ticks instead of after the slow retry. Any thread.

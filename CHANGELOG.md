@@ -13,6 +13,11 @@
   used to retire a good spawner).
 - A ghost's playback state, forced flag and skipRoot are now set on the game's client update thread, not from the
   server tick.
+- The local player's character is found through the game's player manager, so it no longer waits for the player
+  spawner to be found. The spawner path stays as a fallback.
+- Ghosts are spawned once the game says the player has spawned (about 5 s after the level starts at the latest),
+  instead of after a fixed 3 s.
+- The pause-menu check reads the game's UI system global.
 
 ### Quick connect
 - A button above the menu tabs connects to the configured main server and shows its player count and ping.

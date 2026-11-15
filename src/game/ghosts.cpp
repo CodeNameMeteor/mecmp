@@ -33,7 +33,10 @@ constexpr uint32_t kHideAfterMs = 5000; // hide a ghost whose player stopped sen
 constexpr DWORD kSpawnGapMs = 2000;
 constexpr DWORD kMinSpawnGapMs = 200;
 constexpr DWORD kClaimWindowMs = 1500;  // client objects created this soon after our spawn are ours
-constexpr uint64_t kSettleTicks = 90;   // ~3 s after a level starts before spawning
+// Spawning waits for NetworkOnPlayerSpawnedMessage; when it does not come this long after the level starts (~5 s), it
+// goes on anyway. The fixed ~3 s wait this replaces was a guess at the same moment.
+constexpr uint64_t kSpawnedTimeoutTicks = 150;
+std::atomic<uint32_t> g_playerSpawnedSeq{0}; // messages seen; compared with the count at the level's start
 constexpr uint64_t kPlayerSettleTicks = 45; // ~1.5 s after the player's character appears (see tick)
 // A ghost whose player left is hidden and handed to the next player that needs one (a player who
 // reconnects gets theirs back). One that nobody has taken for kDespawnAfterMs is despawned through its
@@ -1006,6 +1009,10 @@ void renderFrame() {
         poke(pose, buf, bones * 0x20);
     }
 }
+void onPlayerSpawnedMessage() {
+    ++g_playerSpawnedSeq;
+    MLOG("ghost: the player spawned message arrived");
+}
 void setEnabled(bool enabled) { g_enabled = enabled; }
 
 namespace {
@@ -1227,6 +1234,12 @@ void tick(uint64_t tick, uint64_t ticksInLevel) {
         lastPlayer = playerChar;
         playerSince = ticksInLevel;
     }
+    // A new level starts the tick count again: messages from before it do not count.
+    static uint64_t lastTicksInLevel = ~0ull;
+    static uint32_t seqAtLevelStart = 0;
+    if (ticksInLevel < lastTicksInLevel) seqAtLevelStart = g_playerSpawnedSeq.load();
+    lastTicksInLevel = ticksInLevel;
+    const bool playerSpawned = g_playerSpawnedSeq.load() != seqAtLevelStart;
     const bool playerSettled = playerChar && ticksInLevel - playerSince >= kPlayerSettleTicks;
     if (playerSettled) { // the right spawner before any spawn (the hooks and scans may have changed it)
         const void* ours[kMaxGhosts];
@@ -1242,7 +1255,7 @@ void tick(uint64_t tick, uint64_t ticksInLevel) {
     // Every present player needs a ghost: hand them a free one, else spawn (one per kSpawnGapMs).
     // Never in the main menu: its "Your Echo" preview is spawned from a projection spawner there, and a
     // ghost of ours from it took the preview's place (and its look).
-    const bool canSpawn = g_enabled && !g_paused && config::get()->autoSpawn && ticksInLevel >= kSettleTicks &&
+    const bool canSpawn = g_enabled && !g_paused && config::get()->autoSpawn && (playerSpawned || ticksInLevel >= kSpawnedTimeoutTicks) &&
                           !level::inFrontEnd() &&
                           level::spawnerAlive(level::ghostSpawner()) && playerSettled;
     if (canSpawn) {

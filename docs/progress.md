@@ -13,6 +13,15 @@ Plan: MECMP-implementation-plan-2026-11-15.md (against main 7195f45). Nothing he
 - 2.2 partly: playback state, forced flag and skipRoot pokes moved from `fixClient` to `settleClientPlayback`, called from
   `beforeClientReplayUpdate` for every ghost with a client component.
 
+- 3.5: `level::playerCharacter()` tries the player manager first (`*0x14253d670 + 0x68` -> vector at +0x268/+0x270 ->
+  ServerPlayer +0x1478 character, +0x1398 isHuman, character +0x250 must point back; Server_ctor 0x14333a650 stores the
+  manager at +0x68, read in Ghidra), then the spawner path as before.
+- 3.1: the server listener also subscribes to category Network (0xc67d277b) and counts NetworkOnPlayerSpawnedMessage
+  (0xcab70d78; category and type ids are djb2-xor hashes of the names, which reproduce MECMP's known ids). Spawning now
+  needs that message since the level started, or 150 ticks (5 s). The 1.5 s `kPlayerSettleTicks` wait stays until 1.2 /
+  L4 explain the early deletion. UNVERIFIED: that this message goes through the SERVER manager and fires on every
+  level load (GridNode only saw it at first boot). The log line "the player spawned message arrived" shows it.
+
 ## Not done yet
 - 2.2 rest: the anchor/pose pin in `fixClient` (non-posing and parked ghosts) still runs on the server tick; it needs the
   net state and the park position on the client thread.

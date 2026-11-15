@@ -169,6 +169,13 @@ constexpr size_t SpawnerData_Template = 0x198;   // -> CharacterSpawnTemplateDat
 constexpr size_t Template_Customization = 0x18;  // -> CustomizeCharacterData
 constexpr size_t Character_Data = 0x30;          // PamCharacterEntityData
 constexpr size_t Character_Player = 0x250;
+// The server's player manager: *Global_ServerGameContext + 0x68 (Server_ctor 0x14333a650 stores it there and at +0x20,
+// read in Ghidra 2026-11-15). Its players are a vector<ServerPlayer*> (GridNode, confirmed); a ServerPlayer holds its
+// character at +0x1478 and a human flag at +0x1398, and the character points back at it (Character_Player).
+constexpr uintptr_t Global_ServerGameContext = 0x14253d670;
+constexpr size_t ServerGameContext_PlayerManager = 0x68;
+constexpr size_t PlayerManager_PlayersBegin = 0x268, PlayerManager_PlayersEnd = 0x270;
+constexpr size_t ServerPlayer_IsHuman = 0x1398, ServerPlayer_Character = 0x1478;
 // A character's own entity bus (server and client) and the u32 at bus +0x58 (& 0x1ffffff). The server and client
 // characters have the same value, but it is not unique per character: every ghost from one spawner has the same
 // one (the low bits of the spawner's data pointer, seen in game 2026-10-23). It only says "a ghost of this kind".

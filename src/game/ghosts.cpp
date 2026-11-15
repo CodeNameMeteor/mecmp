@@ -37,7 +37,6 @@ constexpr DWORD kClaimWindowMs = 1500;  // client objects created this soon afte
 // goes on anyway. The fixed ~3 s wait this replaces was a guess at the same moment.
 constexpr uint64_t kSpawnedTimeoutTicks = 150;
 std::atomic<uint32_t> g_playerSpawnedSeq{0}; // messages seen; compared with the count at the level's start
-constexpr uint64_t kPlayerSettleTicks = 45; // ~1.5 s after the player's character appears (see tick)
 // A ghost whose player left is hidden and handed to the next player that needs one (a player who
 // reconnects gets theirs back). One that nobody has taken for kDespawnAfterMs is despawned through its
 // spawner, as the game takes a replay ghost away (see despawnGhost). The level never holds more than
@@ -164,7 +163,6 @@ std::vector<EarlyComp> g_earlyComps;
 // in the same parent bus.
 constexpr int32_t kFirstBusId = 0x40, kLastBusId = 0x7f;
 int32_t g_nextBusId = kFirstBusId; // game thread
-std::atomic<DWORD> g_refreshAt1{0}, g_refreshAt2{0}; // gameScreenClosed: when to show ghosts again (0: not asked)
 std::atomic<bool> g_paused{false};
 std::atomic<bool> g_enabled{true};
 std::mutex g_motionM;                  // guards g_motion (written by the game thread, read by status())
@@ -1078,40 +1076,6 @@ void tick(uint64_t tick, uint64_t ticksInLevel) {
     (void)tick;
     const double t0 = nowUs();
     handleRequests();
-    // The "Your Echo" screen (in the map / pause menu) leaves other players' ghosts invisible when it closes (seen
-    // 2026-10-23: the ghost stayed gone until F7, which shows ghosts again and re-applies their look). So when a game
-    // menu closes, each ghost that should be seen is shown again and its look applied again, as F7 does.
-    {
-        static bool menuWas = false;
-        const bool menu = hooks::gameMenuOpen();
-        // The map is not a game menu here (gameMenuOpen stays false for it): its OnHideMap message asks for the same,
-        // at once and again 1 s later (the ghost was seen to vanish just after the map closed).
-        const DWORD now = GetTickCount();
-        bool screenClosed = false;
-        for (auto* due : {&g_refreshAt1, &g_refreshAt2}) {
-            const DWORD at = due->load();
-            if (at && static_cast<int32_t>(now - at) >= 0) {
-                *due = 0;
-                screenClosed = true;
-            }
-        }
-        if ((menuWas && !menu) || screenClosed) {
-            size_t n = 0;
-            {
-                std::lock_guard<std::mutex> lock(g_m);
-                for (auto& g : g_ghosts)
-                    if (!g.hidden && g.character) {
-                        g.visibleCalls = 0;
-                        g.lookKey.clear();
-                        g.lookTriedAt = 0;
-                        ++n;
-                    }
-            }
-            if (n) MLOG("ghost: %s closed: %llu ghost(s) shown again and their look re-applied", screenClosed ? "the map" : "a game menu",
-                        static_cast<unsigned long long>(n));
-        }
-        menuWas = menu;
-    }
     {   // Diagnostic: the city-ghost spawner's list (the game's echo lives there), on change.
         static std::string lastText;
         static void* lastSp = nullptr;
@@ -1222,17 +1186,15 @@ void tick(uint64_t tick, uint64_t ticksInLevel) {
         }
     }
 
-    // The game deletes a ghost spawned in the first moments after the player's own character appears
-    // (seen 0.6 s after it, every level load; the next spawn stays). Wait a little after that (1.5 s; a ghost the
-    // game deletes anyway is found gone and spawned again).
+    // The game used to delete a ghost spawned in the first moments after the player's own character appeared
+    // (seen 0.6 s after it, 2026-11-15); we waited 1.5 s then. Spawning on the player-spawned trigger replaced that
+    // wait. If a ghost is deleted anyway it is found gone and spawned again.
     static void* lastPlayer = nullptr;
-    static uint64_t playerSince = 0;
     void* const playerChar = level::playerCharacter();
     if (playerChar != lastPlayer) {
         VLOG("level: player character %p -> %p (%llu ticks into the level)", lastPlayer, playerChar,
              static_cast<unsigned long long>(ticksInLevel));
         lastPlayer = playerChar;
-        playerSince = ticksInLevel;
     }
     // A new level starts the tick count again: messages from before it do not count.
     static uint64_t lastTicksInLevel = ~0ull;
@@ -1240,7 +1202,7 @@ void tick(uint64_t tick, uint64_t ticksInLevel) {
     if (ticksInLevel < lastTicksInLevel) seqAtLevelStart = g_playerSpawnedSeq.load();
     lastTicksInLevel = ticksInLevel;
     const bool playerSpawned = g_playerSpawnedSeq.load() != seqAtLevelStart;
-    const bool playerSettled = playerChar && ticksInLevel - playerSince >= kPlayerSettleTicks;
+    const bool playerSettled = playerChar != nullptr;
     if (playerSettled) { // the right spawner before any spawn (the hooks and scans may have changed it)
         const void* ours[kMaxGhosts];
         size_t k = 0;
@@ -1413,11 +1375,6 @@ void levelChanged() {
 void requestSpawnOrRefresh() { g_reqSpawn = true; }
 void lookListArrived() { retryLooksNow(); }
 void requestHideAll() { g_reqHide = true; }
-void gameScreenClosed() {
-    const DWORD now = GetTickCount();
-    g_refreshAt1 = now ? now : 1;
-    g_refreshAt2 = (now + 1000) ? now + 1000 : 1;
-}
 
 
 uintptr_t clientCharacter(uint32_t peer) {

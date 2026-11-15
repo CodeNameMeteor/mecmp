@@ -351,7 +351,15 @@ bool install(TickFn onTick, Installed* out) {
 }
 
 bool gameMenuOpen() {
-    const uintptr_t ui = g_uiSystem.load();
+    // The global is the source; the object the update hook saw is only a fallback, and a difference is logged
+    // once so a game run shows whether the hook can go.
+    const uintptr_t global = mem::readOr<uintptr_t>(rva(Global_PamUISystem));
+    const uintptr_t hooked = g_uiSystem.load();
+    static std::atomic<bool> noted{false};
+    if (global && hooked && global != hooked && !noted.exchange(true))
+        MLOG("hooks: UI system global %p differs from the object the update hook saw (%p)", reinterpret_cast<void*>(global),
+             reinterpret_cast<void*>(hooked));
+    const uintptr_t ui = global ? global : hooked;
     uintptr_t controller = 0;
     int32_t counts[2] = {};
     if (!ui || !mem::read(ui + UISystem_PauseController, controller) || !controller ||

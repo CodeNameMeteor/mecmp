@@ -36,6 +36,8 @@ constexpr uintptr_t Fn_ServerChallengeMarkerCreator = 0x143a83460;
 constexpr uintptr_t Slot_PresenceInfoManagerCreator = 0x141c74cb8; // creator vtable slot -> the create thunk
 constexpr uintptr_t Fn_PresenceInfoManagerCreator = 0x143a41850;
 constexpr size_t UISystem_PauseController = 0x8c8;
+// The PamUISystem global (getter 0x143269ae0); GridNode read it in Ghidra and tested it with the pause menu.
+constexpr uintptr_t Global_PamUISystem = 0x1424157f0;
 constexpr uintptr_t kTypeInfoListHead = 0x14215d028;
 constexpr uintptr_t kServerGameWorld = 0x1425469e0; // ServerGameWorld* (null between levels)
 // world +0x20 = its ServerLevel (base ctor 0x143114e40); level +0x108 = LevelData (an asset: name at

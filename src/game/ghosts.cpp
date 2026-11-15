@@ -774,7 +774,8 @@ bool onClientReplayComp(void* comp) {
                 if (g.clientComp == comp) return true;
                 if (g.clientComp) break; // already has one: not ours to replace
                 g.clientComp = comp;
-                MLOG("ghost: player %08x claimed clientComp %p (by its owner)", g.peer, comp);
+                MLOG("ghost: player %08x claimed clientComp %p (by its owner, updater slot %d)", g.peer, comp,
+                     mem::readOr<int32_t>(reinterpret_cast<uintptr_t>(comp) + CRP_UpdaterSlot, -1));
                 closeClaimIfDone(g);
                 return true;
             }
@@ -785,7 +786,8 @@ bool onClientReplayComp(void* comp) {
             if (g.peer == peer && !g.clientComp) {
                 if (owner && g.clientChar && reinterpret_cast<uintptr_t>(g.clientChar) != owner) continue;
                 g.clientComp = comp;
-                MLOG("ghost: player %08x claimed clientComp %p (claim window)", g.peer, comp);
+                MLOG("ghost: player %08x claimed clientComp %p (claim window, updater slot %d)", g.peer, comp,
+                     mem::readOr<int32_t>(reinterpret_cast<uintptr_t>(comp) + CRP_UpdaterSlot, -1));
                 if (!owner) MLOG("ghost: claimed replay component %p without a known owner", comp);
                 closeClaimIfDone(g);
                 return true;

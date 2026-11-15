@@ -185,7 +185,8 @@ constexpr size_t SRP_PlaybackState = 0x38, SRP_Setup = 0xb0, SRP_Pose = 0x178, S
 // received pose +0x180, skipRoot +0x2e6. Own bone setup +0x200 (count, indices [+0x210]), built at init from the
 // data's RecordingBones; the received pose only counts when the server's bone count equals it (+0x2e4).
 constexpr size_t CRP_PlaybackState = 0x40, CRP_PlaybackForced = 0xb0, CRP_Setup = 0xb8,
-                 CRP_ReceivedPose = 0x180, CRP_OwnSetup = 0x200, CRP_CountOk = 0x2e4, CRP_SkipRoot = 0x2e6;
+                 CRP_ReceivedPose = 0x180, CRP_OwnSetup = 0x200, CRP_CountOk = 0x2e4, CRP_SkipRoot = 0x2e6,
+                 CRP_UpdaterSlot = 0x300; // 0: updater in pass 6 (default), 1: pass 5 (moved there by StartEchoReplay)
 // The local player's replay recorder is sampled by its recording component's updater (vtable 0x141c48ca0, updateAll
 // slot +0x10: PamClientReplayRecordingComponent_updateAll 0x14394dac0), which calls ReplayRecorder_SampleAndStream
 // (0x143974390) with the component's recorder (+0x48) and pose handle (+0x58). The handle's +0x28 is the character's

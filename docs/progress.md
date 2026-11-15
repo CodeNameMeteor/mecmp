@@ -43,3 +43,21 @@ Plan: MECMP-implementation-plan-2026-11-15.md (against main 7195f45). Nothing he
   +0x10 index array, +0x28 inverse map, +0x38 parent array, +0x78 flags). Needs a4 (the rig): 1.4 option 1 is feasible
   only if MECMP can get that object from the client component's data.
 - 0.6 not checked.
+
+## Updaters (GridNode scratch/block-a-2026-11-15.md, spot-checked in Ghidra) - answers question A2
+Checked: `updateAll` 0x14394da40 walks only ITS OWN component list (updater +0x28/+0x30) and calls
+`PamClientReplayPlayerComponent_update` on each; `FUN_14394f600` (from StartEchoReplay with skipRoot=1) moves a component
+from the pass-6 updater (`DAT_142578588`) to the pass-5 one (`DAT_142578590`) and sets comp +0x300 = 1; `vf37`
+(component init) registers it by +0x300 and builds the setup from the data's +0x70 / +0x78 lists.
+Taken from the report, not re-checked: both updaters share vtable 0x141c49190 (so MECMP's one patched slot is called
+twice a frame, once per pass); `UpdateInfo` +0x10 is the pass number; pass 5 runs before `Client_updateFrame`, pass 6 after
+pass 3; the recording updater is pass 1 (before pass 6).
+- Part 4.1 (audit "once per frame"): each component is written to by exactly one updater, so the second hook call per frame
+  is redundant for a pass-6 component. A ghost the game moved to pass 5 (echo) has +0x300 == 1: writing only before pass 6
+  would put its pose one frame late, a plausible cause of MECMP's "less smooth" note (`ghosts.cpp` renderFrame). Not changed.
+  The claimed-clientComp log lines now print +0x300 so a game run shows whether ghosts ever sit in pass 5. If they never do,
+  writing once (pass 6) is safe; if they do, filter by +0x300 against `info->pass` in the hook.
+- 0.8 / 1.4 detail from `vf37`: ReplaySetup_Build(arena = FUN_143164c80(comp), &data+0x70, &data+0x78, rig, 0xffffffff,
+  setup = comp's expectedBones). The rig table is kept at comp +0x1d0. After it the component also sizes a pose buffer
+  (+0x1d8, count*0x20) and the received-pose vector (+0x180/+0x188). So 1.4 option 1 is not a single call: those two must
+  be redone too. Option 2 (patch around the game's create call) is confirmed correct in timing: the data is read at init.

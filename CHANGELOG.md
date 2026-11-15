@@ -4,6 +4,8 @@
 
 ### Ghost fixes (GridNode implementation plan, step 1-2)
 - Ghost pose buffers are allocated once per ghost instead of on every bone-setup change (memory leak).
+- Custom ghost looks no longer copy the game preset's header (reference count and flags) into MECMP's own look data;
+  the count is set high and the no-free flag is set, so the game can never free MECMP's memory.
 - Faith's placeholder body pieces are put back to the game's own contents on a level change.
 - Ghost poses are no longer written from the render thread; if the client updater hook cannot be installed,
   ghosts stay server-driven.

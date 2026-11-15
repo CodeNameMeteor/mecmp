@@ -103,8 +103,10 @@ uintptr_t makeCustomization(const std::vector<uintptr_t>& visuals, uintptr_t vta
     auto block = [](size_t n) { return static_cast<uint8_t*>(calloc(1, n)); };
     uint8_t* ccd = block(PamCustomizeCharacterData_Size);
     if (!ccd) return 0;
-    // Pam presets carry material and animation parameters beyond the base customization.
-    if (preset && vtable == rva(Vtbl_PamCustomizeCharacterData) && !mem::read(preset, ccd, PamCustomizeCharacterData_Size)) {
+    // Pam presets carry material and animation parameters beyond the base customization. Copied from +0x18 on:
+    // the header (vtable, reference count and flags at +0x08/+0x0a) is the preset's own, not ours.
+    if (preset && vtable == rva(Vtbl_PamCustomizeCharacterData) &&
+        !mem::read(preset + 0x18, ccd + 0x18, PamCustomizeCharacterData_Size - 0x18)) {
         free(ccd);
         return 0;
     }
@@ -120,6 +122,11 @@ uintptr_t makeCustomization(const std::vector<uintptr_t>& visuals, uintptr_t vta
         *reinterpret_cast<uintptr_t*>(groups + 8 + i * 8) = reinterpret_cast<uintptr_t>(g + 8);
     }
     *reinterpret_cast<uintptr_t*>(ccd) = vtable;
+    // DataContainer_release (0x142a91cd0): +0x08 is a u16 reference count, +0x0a u16 flags; at zero it runs the destructor
+    // and, unless flag 0x2000 is set, poolFrees the object, which would be our calloc memory. Nothing on the apply path
+    // releases it (gate 0.5, Ghidra 2026-11-15), so this is only a guard: a count it cannot reach and the no-free flag.
+    *reinterpret_cast<uint16_t*>(ccd + 0x08) = 0x4000;
+    *reinterpret_cast<uint16_t*>(ccd + 0x0a) = 0x2000;
     static const char kName[] = "MECMP/GhostModel";
     *reinterpret_cast<const char**>(ccd + Asset_Name) = kName;
     *reinterpret_cast<uintptr_t*>(ccd + 0x18) = reinterpret_cast<uintptr_t>(groups + 8);

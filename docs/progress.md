@@ -158,3 +158,14 @@ it is built (+0x100 and the 0x80 flag), so those are no runtime switch.
 Not shown: that the hair is one of those entries, what else sets entry +8, or what FUN_143912b50 returns for a ghost. Parking
 (kParkDepth / kParkMs) stays until a test confirms it: set entry +8 of every entry on a hidden ghost from the client updater
 hook and look whether the hair goes. Plan 3.6 itself says parking works today.
+
+### 2.6 (done, untested; gate 0.5 checked in Ghidra, 2026-11-15)
+Gate 0.5: `onCharacterSpawned` (0x1432aa460) does add and release a reference, but on the spawn template's data container
+(spawner +0x30 -> vtbl[1]), not on our CustomizeCharacterData, and the pair is balanced. The apply path
+(`PamServerCharacterEntity_applyCustomization` 0x14336cf00 -> `applyCustomizeData` 0x14336c860) only reads +0x18, +0x20,
++0x30, +0x31 and never touches +0x08. So no extra reference is needed to keep the data alive.
+`DataContainer_release` (0x142a91cd0): +0x08 is a u16 reference count and +0x0a u16 flags; at zero it runs the destructor and,
+without flag 0x2000, poolFrees the object. `makeCustomization` now copies the preset from +0x18 (not its header) and sets
+count 0x4000 and flags 0x2000 itself, so a stray release can neither reach zero nor free our calloc memory.
+Not done: keeping the cache across levels keyed by asset name. The cached data points at the old level's VisualUnlockAssets,
+which may be gone; reuse needs a check that the pieces still exist. The per-level leak stays (one small block set per look).

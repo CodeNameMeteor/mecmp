@@ -100,3 +100,7 @@ The 1.5 s wait after the player's character appears is gone: spawns 40 ms after 
 The show-again/re-look on OnHideMap was removed and put back: without it the ghost vanished after the map closed (no lost
 or respawn line, so the character still existed, only hidden). User's guess: the game hides all ghosts when the map closes
 (to remove the map's echo). Not checked in Ghidra yet: what OnHideMap / the Your Echo screen does to client ghosts.
+OnHideMap (0x5b61f030) in Ghidra: only two code references to the constant. The message ctor FUN_144737390 and one
+listener, FUN_143a49660 (OnShowMap -> FUN_143a4af60, OnHideMap -> FUN_143a40a50 + FUN_143a8c6f0), which belongs to
+PamClientPlayerTagComponent (player tags / presence info), not to ghosts. So no game code hides client ghosts in direct
+reaction to OnHideMap; whatever hides them runs from another path (map/Your Echo screen state). Keep the refresh.

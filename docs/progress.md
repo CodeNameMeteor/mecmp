@@ -25,7 +25,8 @@ Plan: MECMP-implementation-plan-2026-11-15.md (against main 7195f45). Nothing he
 ## Not done yet (updated 2026-11-15)
 - 3.6: replace the 1000 m parking hide with an attachment flag. Checked (see "0.6 / 3.6"), not implemented: needs a test
   that the hair is one of the customization component's attachment entries.
-- 3.3 (act at spawner insertion, not a 250 ms poll), 3.4 (heap scans -> data registry), 1.4 (shared data patched in place),
+- 3.3 follow-up: remove the OnHideMap double refresh only after a game test shows the safety-net log line never fires.
+- 3.4 (heap scans -> data registry), 1.4 (shared data patched in place),
   1.1 (own spawner), 2.10 per-ghost look-apply time (`lastLookApply`; unclear what the plan wants, left alone).
 - 2.6 third bullet: keep the look cache across levels (see "2.6").
 - 3.1 as first written here is superseded by "3.1 correction" below: the trigger is ServerPlayerChangedCharacterMessage.
@@ -181,3 +182,15 @@ bytes, from the dump); on a mismatch it logs and falls back to the old write. Un
 while the server tick frees it (the old write had the same kind of race, but never freed anything). Test: join with a second
 player, look for a ghost that was adopted from the city ghosts (not our own spawner); it should follow the player as before,
 and the log should show no "build check: ReplayPlayback_Stop" line.
+
+### 3.3 (done, untested)
+`ClientCharacterSpawnEntity` vtable +0xd8 (`onCharacterSpawned`, 0x1432aa460, Ghidra: applies the spawn template to the
+character, then `ClientSpawnEntity_addSpawned`) is wrapped by `onCharacterSpawnedHook` (`hookSpawnerAdd`, installed next to
+`hookSetVisibleLog`; only if the slot still holds that function, else it logs and does nothing). After the game's add it
+reorders that one spawner's list: our ghost characters first, the game's own last (`gameCharactersLast`, `game/spawn_order.h`,
+host test `tests/spawn_order_test.cpp`, passes). Our character is claimed when it is created, which is before this add, so
+it is already known. The hook uses try_lock on g_m and skips on contention. The 250 ms pass stays as a safety net and its log
+line now says "reordered by the safety net". The OnHideMap double refresh is NOT removed (the plan: only after a game test
+shows the safety net never fires).
+Unverified: that the claim really happens before the add in every spawn path (the log line shows it if not), and which
+thread calls the add.

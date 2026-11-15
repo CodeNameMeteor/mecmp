@@ -22,6 +22,7 @@
 #include "game/motion_stats.h"
 #include "game/pose_math.h"
 #include "game/pose_remap.h"
+#include "game/spawn_order.h"
 #include "net/net.h"
 #include "net/pose_limits.h"
 
@@ -207,6 +208,8 @@ uintptr_t componentOwner(uintptr_t comp) {
 }
 
 using SetVisibleFn = void (*)(void*, uint64_t);
+using OnSpawnedFn = bool (*)(void*, void*);
+OnSpawnedFn g_origOnSpawned = nullptr; // ClientCharacterSpawnEntity::onCharacterSpawned before our hook (3.3)
 SetVisibleFn g_origSetVisible = nullptr; // set once the slot is swapped (the game's own function)
 thread_local bool g_ownVisibleCall = false;
 std::atomic<int> g_visibleLogLeft{40};
@@ -946,6 +949,24 @@ void setCharacterDataType(uintptr_t runtimeTypeInfo) { g_tiCharData = runtimeTyp
 // ghosts and a character of the game's, ours go first and the game's stay last, in their order. Only pointers inside
 // the list move, and +0xd0 (the last one's bus) stays right because the last one does not change. Client game thread
 // (the replay updater, where the map's replay runs), at most every 0.25 s.
+// Reorders one spawner's list as above. True when it had to change something.
+static bool reorderClientSpawnerList(void* sp, const std::vector<uintptr_t>& mine) {
+    uintptr_t list[2] = {};
+    if (!mem::read(reinterpret_cast<uintptr_t>(sp) + ClientSpawner_Spawned, list, sizeof(list)) || list[1] <= list[0] ||
+        (list[1] - list[0]) % 8 || (list[1] - list[0]) / 8 > 64)
+        return false;
+    const size_t n = (list[1] - list[0]) / 8;
+    uintptr_t items[64];
+    if (!mem::read(list[0], items, n * 8)) return false;
+    std::vector<uintptr_t> order;
+    if (!gameCharactersLast(std::vector<uintptr_t>(items, items + n), mine, order)) return false;
+    poke(list[0], order.data(), n * 8);
+    poke<uintptr_t>(reinterpret_cast<uintptr_t>(sp) + ClientSpawner_LastBus, mem::readOr<uintptr_t>(order.back() + Character_Bus));
+    return true;
+}
+
+// The safety net: every 0.25 s, all lists. Since the spawn hook (3.3) reorders a list as a character is added, this
+// should find nothing; when it does, the log line says the hook missed it (or is not installed).
 static void keepGameClientCharactersLast() {
     static DWORD lastAt = 0;
     const DWORD now = GetTickCount();
@@ -958,25 +979,26 @@ static void keepGameClientCharactersLast() {
             if (g.clientChar) mine.push_back(reinterpret_cast<uintptr_t>(g.clientChar));
     }
     if (mine.empty()) return;
-    for (void* sp : level::clientSpawners()) {
-        uintptr_t list[2] = {};
-        if (!mem::read(reinterpret_cast<uintptr_t>(sp) + ClientSpawner_Spawned, list, sizeof(list)) || list[1] <= list[0] ||
-            (list[1] - list[0]) % 8 || (list[1] - list[0]) / 8 > 64)
-            continue;
-        const size_t n = (list[1] - list[0]) / 8;
-        uintptr_t items[64];
-        if (!mem::read(list[0], items, n * 8)) continue;
-        std::vector<uintptr_t> ours, theirs;
-        for (size_t i = 0; i < n; ++i)
-            (std::find(mine.begin(), mine.end(), items[i]) != mine.end() ? ours : theirs).push_back(items[i]);
-        if (ours.empty() || theirs.empty()) continue;
-        if (std::find(ours.begin(), ours.end(), items[n - 1]) == ours.end()) continue; // the game's is last already
-        std::vector<uintptr_t> order = ours;
-        order.insert(order.end(), theirs.begin(), theirs.end());
-        poke(list[0], order.data(), n * 8);
-        poke<uintptr_t>(reinterpret_cast<uintptr_t>(sp) + ClientSpawner_LastBus, mem::readOr<uintptr_t>(order.back() + Character_Bus));
-        MLOG("ghost: client spawner %p list reordered: the game's own character is last again", sp);
-    }
+    for (void* sp : level::clientSpawners())
+        if (reorderClientSpawnerList(sp, mine))
+            MLOG("ghost: client spawner %p list reordered by the safety net (spawn hook %s): the game's own character is last again",
+                 sp, g_origOnSpawned ? "installed, missed it" : "not installed");
+}
+
+// Wraps ClientCharacterSpawnEntity vtable +0xd8 (onCharacterSpawned, 0x1432aa460): once the game has added a character
+// to the list, that one list is put in order. Our ghost's client character is claimed when it is created, before this
+// add, so it is already in g_ghosts. try_lock: never wait for g_m inside a game call; the safety net covers a miss.
+static bool onCharacterSpawnedHook(void* spawner, void* character) {
+    const bool added = g_origOnSpawned(spawner, character);
+    std::unique_lock<std::mutex> lock(g_m, std::try_to_lock);
+    if (!lock.owns_lock()) return added;
+    std::vector<uintptr_t> mine;
+    for (const auto& g : g_ghosts)
+        if (g.clientChar) mine.push_back(reinterpret_cast<uintptr_t>(g.clientChar));
+    lock.unlock();
+    if (!mine.empty() && reorderClientSpawnerList(spawner, mine))
+        VLOG("ghost: client spawner %p list reordered as a character was added: the game's own character is last", spawner);
+    return added;
 }
 
 void beforeClientReplayUpdate() {
@@ -1482,6 +1504,19 @@ void hookSetVisibleLog() {
     g_origSetVisible = reinterpret_cast<SetVisibleFn>(current);
     if (mem::patchPointer(slot, reinterpret_cast<uintptr_t>(&setVisibleHook), nullptr)) MLOG("hook ghost setVisible log: installed");
     else g_origSetVisible = nullptr;
+}
+void hookSpawnerAdd() {
+    if (g_origOnSpawned) return;
+    const uintptr_t slot = rva(Vtbl_ClientCharacterSpawnEntity) + Vtbl_ClientSpawnerOnSpawned;
+    uintptr_t current = 0;
+    if (!mem::read(slot, current) || current != rva(Fn_ClientSpawnerOnSpawned)) {
+        MLOG("hook client spawner add: slot holds %p, expected %p (not installed, the 250 ms pass keeps the order)",
+             reinterpret_cast<void*>(current), reinterpret_cast<void*>(rva(Fn_ClientSpawnerOnSpawned)));
+        return;
+    }
+    g_origOnSpawned = reinterpret_cast<OnSpawnedFn>(current);
+    if (mem::patchPointer(slot, reinterpret_cast<uintptr_t>(&onCharacterSpawnedHook), nullptr)) MLOG("hook client spawner add: installed");
+    else g_origOnSpawned = nullptr;
 }
 void requestSpawnOrRefresh() { g_reqSpawn = true; }
 void lookListArrived() { retryLooksNow(); }

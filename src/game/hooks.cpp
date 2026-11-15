@@ -343,6 +343,7 @@ bool install(TickFn onTick, Installed* out) {
     got.tick = true;
     hookUpdaters(); // the vtable is in the game image, so this does not wait for a component
     ghosts::hookSetVisibleLog();
+    ghosts::hookSpawnerAdd();
     if (out) *out = got;
     if (player_audio::kEnabled) player_audio::install();
     if (got.spawners && got.ghostClients) MLOG("hooks: all installed");

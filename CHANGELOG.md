@@ -4,6 +4,8 @@
 
 ### Ghost fixes (GridNode implementation plan, step 1-2)
 - Ghost pose buffers are allocated once per ghost instead of on every bone-setup change (memory leak).
+- A ghost's client character is put ahead of the game's own (so the map's echo never takes a ghost) at the moment the game
+  adds it to its spawner, instead of up to 0.25 s later; the timed pass stays as a safety net.
 - A ghost taken over from the game's own replays has its recording stopped properly (decoder and keyframe buffer released)
   instead of only its playback state being zeroed.
 - Custom ghost looks no longer copy the game preset's header (reference count and flags) into MECMP's own look data;

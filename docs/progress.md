@@ -1,8 +1,12 @@
 # Progress: GridNode implementation plan (branch gn/implementation-plan)
 
-Plan: MECMP-implementation-plan-2026-11-15.md (against main 7195f45). Nothing here was compiled or game-tested.
+Plan: MECMP-implementation-plan-2026-11-15.md (against main 7195f45). PR #118 (first batch) is merged into main; the rest is in
+the draft PR after it. Nothing was compiled in the container; see docs/handover.md for the status table of every item, why each
+open item is open, and the test checklist. Open research questions: docs/research-requests.md.
 
-## Done (untested)
+The lists below are the working log, in the order the work was done. handover.md is the current summary.
+
+## Done (log; 3.1 and 3.5 tested, the rest untested)
 - Step 1: 1.5 (client spawner vtable comment: add +0xd8, remove +0xe0), 1.1 comment on `g_ownSpawner`,
   2.5 (skip ghost when pose read fails), 2.10 (`g_placed` duplicate push).
 - Step 2: 2.1 (`preparePose` allocates once at kMaxBones), 2.3 (render-thread fallback removed), 2.7

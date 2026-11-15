@@ -36,6 +36,8 @@ constexpr uintptr_t Fn_ServerChallengeMarkerCreator = 0x143a83460;
 constexpr uintptr_t Slot_PresenceInfoManagerCreator = 0x141c74cb8; // creator vtable slot -> the create thunk
 constexpr uintptr_t Fn_PresenceInfoManagerCreator = 0x143a41850;
 constexpr size_t UISystem_PauseController = 0x8c8;
+// The PamUISystem global (getter 0x143269ae0); GridNode read it in Ghidra and tested it with the pause menu.
+constexpr uintptr_t Global_PamUISystem = 0x1424157f0;
 constexpr uintptr_t kTypeInfoListHead = 0x14215d028;
 constexpr uintptr_t kServerGameWorld = 0x1425469e0; // ServerGameWorld* (null between levels)
 // world +0x20 = its ServerLevel (base ctor 0x143114e40); level +0x108 = LevelData (an asset: name at
@@ -97,7 +99,8 @@ constexpr uintptr_t Fn_ClientCharacterFactory = 0x143910d20;
 // ClientCharacterSpawnEntity's creator slot and create function (the client side of a character spawner). Its
 // spawned client characters are a vector at +0xb0/+0xb8; the client replay entity (the map's echo) takes the last
 // one (0x1432a60e0 <- 0x14394b1d0, on CharacterSpawned 0xa29c98e6) and starts its replay on that character. Add:
-// vtable +0xf8 (0x143239bb0); remove: vtable +0x100 (0x143234e20).
+// vtable +0xd8 (onCharacterSpawned); remove: vtable +0xe0. Both client spawner classes; GridNode checked these in the
+// image and in call traces (2026-10-29). The earlier +0xf8/+0x100 were wrong.
 constexpr uintptr_t Slot_ClientCharacterSpawnFactory = 0x141b2ad88;
 constexpr uintptr_t Fn_ClientCharacterSpawnFactory = 0x1432a67c0;
 constexpr uintptr_t Vtbl_ClientCharacterSpawnEntity = 0x141b2ac20;
@@ -158,13 +161,27 @@ constexpr size_t Spawner_Data = 0x30;     // CharacterSpawnReferenceObjectData
 constexpr size_t Spawner_BusCounter = 0xf4; // next child bus id when SpawnInfo::busId is -1 (& 0x7f)
 constexpr size_t Spawner_Spawned = 0x148; // vector<character*> begin/end
 constexpr size_t Spawner_Enabled = 0x2a4;
+// createCharacter (0x143390a30) refuses to spawn while the float at +0xf0 is above 0.01 AND bit 8 of the u32 at +0x108 is
+// set (a spawn cooldown; read in Ghidra 2026-11-15). Only a spawn without a given bus id also checks belowMaxCount.
+constexpr size_t Spawner_Cooldown = 0xf0, Spawner_Flags = 0x108;
+constexpr uint32_t Spawner_CooldownFlag = 8;
 constexpr size_t SpawnerData_Template = 0x198;   // -> CharacterSpawnTemplateData
 constexpr size_t Template_Customization = 0x18;  // -> CustomizeCharacterData
 constexpr size_t Character_Data = 0x30;          // PamCharacterEntityData
 constexpr size_t Character_Player = 0x250;
+// The server's player manager: *Global_ServerGameContext + 0x68 (Server_ctor 0x14333a650 stores it there and at +0x20,
+// read in Ghidra 2026-11-15). Its players are a vector<ServerPlayer*> (GridNode, confirmed); a ServerPlayer holds its
+// character at +0x1478 and a made-for-character flag at +0x1398 (clear for real players), and the character points back
+// at it (Character_Player).
+constexpr uintptr_t Global_ServerGameContext = 0x14253d670;
+constexpr size_t ServerGameContext_PlayerManager = 0x68;
+constexpr size_t PlayerManager_PlayersBegin = 0x268, PlayerManager_PlayersEnd = 0x270;
+constexpr size_t ServerPlayer_IsAi = 0x1399, ServerPlayer_MadeForCharacter = 0x1398, ServerPlayer_Character = 0x1478;
 // A character's own entity bus (server and client) and the u32 at bus +0x58 (& 0x1ffffff). The server and client
 // characters have the same value, but it is not unique per character: every ghost from one spawner has the same
-// one (the low bits of the spawner's data pointer, seen in game 2026-10-23). It only says "a ghost of this kind".
+// one (the low bits of the spawner's data pointer, seen in game 2026-10-23; two ghosts of one spawner logged the same
+// value again 2026-11-15). It only says "a ghost of this kind". (createCharacter's own bus gets
+// (busId + 0x1ffff80) & 0x1ffffff in entityObject_initWithParentTransform, but that is not the value read here.)
 constexpr size_t Character_Bus = 0x28;
 constexpr size_t Bus_Id = 0x58;
 constexpr uint32_t Bus_IdMask = 0x1ffffff;
@@ -182,7 +199,8 @@ constexpr size_t SRP_PlaybackState = 0x38, SRP_Setup = 0xb0, SRP_Pose = 0x178, S
 // received pose +0x180, skipRoot +0x2e6. Own bone setup +0x200 (count, indices [+0x210]), built at init from the
 // data's RecordingBones; the received pose only counts when the server's bone count equals it (+0x2e4).
 constexpr size_t CRP_PlaybackState = 0x40, CRP_PlaybackForced = 0xb0, CRP_Setup = 0xb8,
-                 CRP_ReceivedPose = 0x180, CRP_OwnSetup = 0x200, CRP_CountOk = 0x2e4, CRP_SkipRoot = 0x2e6;
+                 CRP_ReceivedPose = 0x180, CRP_OwnSetup = 0x200, CRP_CountOk = 0x2e4, CRP_SkipRoot = 0x2e6,
+                 CRP_UpdaterSlot = 0x300; // 0: updater in pass 6 (default), 1: pass 5 (moved there by StartEchoReplay)
 // The local player's replay recorder is sampled by its recording component's updater (vtable 0x141c48ca0, updateAll
 // slot +0x10: PamClientReplayRecordingComponent_updateAll 0x14394dac0), which calls ReplayRecorder_SampleAndStream
 // (0x143974390) with the component's recorder (+0x48) and pose handle (+0x58). The handle's +0x28 is the character's
@@ -207,6 +225,8 @@ constexpr uintptr_t Code_SetupBuildParents = 0x1439487ac;     // mov rax,[r9+0F0
 constexpr uintptr_t Slot_ProjectionReplayDownloaded = 0x141c7e9d8;
 constexpr uintptr_t Fn_ProjectionReplayDownloaded = 0x143a8a910;
 constexpr uint32_t kReplayDownloadedType = 0x8c4a0d15;
+// ServerPlayerChangedCharacterMessage (type 0x40fa3f03): player, old and new character, 'same' flag.
+constexpr size_t ChangedCharMsg_Player = 0x30, ChangedCharMsg_Old = 0x38, ChangedCharMsg_New = 0x40, ChangedCharMsg_Same = 0x48;
 constexpr size_t ReplayMsg_Type = 0x0c, ReplayMsg_Ok = 0x30, ReplayMsg_Data = 0x48, ReplayMsg_Size = 0x50;
 // Local replay recorder (PamClientReplayRecordingComponent +0x48): keyframe ring.
 constexpr size_t Rec_Stride = 0x68, Rec_Capacity = 0x70, Rec_Base = 0x78, Rec_Head = 0x88;

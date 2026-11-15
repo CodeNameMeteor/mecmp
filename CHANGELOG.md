@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### Ghost fixes (GridNode implementation plan, step 1-2)
+- Ghost pose buffers are allocated once per ghost instead of on every bone-setup change (memory leak).
+- Faith's placeholder body pieces are put back to the game's own contents on a level change.
+- Ghost poses are no longer written from the render thread; if the client updater hook cannot be installed,
+  ghosts stay server-driven.
+- A failed pose read no longer writes an identity pose at the origin; the ghost is skipped for that frame.
+- The map no longer records the same player slot twice.
+- A ghost spawner that is on its spawn cooldown is waited for instead of counted as a failure (three failures
+  used to retire a good spawner).
+- A ghost's playback state, forced flag and skipRoot are now set on the game's client update thread, not from the
+  server tick.
+- The local player's character is found through the game's player manager, so it no longer waits for the player
+  spawner to be found. The spawner path stays as a fallback.
+- Ghosts are spawned once the game says the player has spawned (about 5 s after the level starts at the latest),
+  instead of after a fixed 3 s.
+- The pause-menu check reads the game's UI system global.
+- A pose is no longer written into a ghost whose client rejects it (bone count mismatch); the server replicates it again.
+- A ghost that the game hides when the map closes is shown again on the next tick (it used to stay gone for up to a
+  second). The hook that sees this (`PamClientCharacterEntity::setVisible`) also logs the caller of the first 40 hides.
+- Ghosts spawn right after the game's player-spawned trigger (a character change on the server's player manager), without
+  the 1.5 s wait that followed it before.
+
 ### Quick connect
 - A button above the menu tabs connects to the configured main server and shows its player count and ping.
   The default `[net] main_server=34.27.13.116:47800` also enables outbound status queries to that address

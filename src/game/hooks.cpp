@@ -98,7 +98,7 @@ void hookUpdaters() {
     if (!mem::read(slot, current)) return;
     if (current != rva(Fn_ClientReplayUpdateAll)) {
         static bool warned = false;
-        if (!warned) MLOG("hook client replay updater: slot holds %p, expected %p; poses stay written per frame",
+        if (!warned) MLOG("hook client replay updater: slot holds %p, expected %p; ghosts stay server-driven (replicated poses)",
                           reinterpret_cast<void*>(current), reinterpret_cast<void*>(rva(Fn_ClientReplayUpdateAll)));
         warned = true;
         return;
@@ -342,6 +342,7 @@ bool install(TickFn onTick, Installed* out) {
     }
     got.tick = true;
     hookUpdaters(); // the vtable is in the game image, so this does not wait for a component
+    ghosts::hookSetVisibleLog();
     if (out) *out = got;
     if (player_audio::kEnabled) player_audio::install();
     if (got.spawners && got.ghostClients) MLOG("hooks: all installed");
@@ -351,7 +352,15 @@ bool install(TickFn onTick, Installed* out) {
 }
 
 bool gameMenuOpen() {
-    const uintptr_t ui = g_uiSystem.load();
+    // The global is the source; the object the update hook saw is only a fallback, and a difference is logged
+    // once so a game run shows whether the hook can go.
+    const uintptr_t global = mem::readOr<uintptr_t>(rva(Global_PamUISystem));
+    const uintptr_t hooked = g_uiSystem.load();
+    static std::atomic<bool> noted{false};
+    if (global && hooked && global != hooked && !noted.exchange(true))
+        MLOG("hooks: UI system global %p differs from the object the update hook saw (%p)", reinterpret_cast<void*>(global),
+             reinterpret_cast<void*>(hooked));
+    const uintptr_t ui = global ? global : hooked;
     uintptr_t controller = 0;
     int32_t counts[2] = {};
     if (!ui || !mem::read(ui + UISystem_PauseController, controller) || !controller ||

@@ -1,9 +1,13 @@
 #include "game/ghosts.h"
+#if defined(_MSC_VER)
+#include <intrin.h>
+#endif
 
 #include <algorithm>
 #include <atomic>
 #include <cstring>
 #include <map>
+#include <set>
 #include <unordered_map>
 #include <mutex>
 #include <vector>
@@ -32,8 +36,10 @@ constexpr uint32_t kHideAfterMs = 5000; // hide a ghost whose player stopped sen
 constexpr DWORD kSpawnGapMs = 2000;
 constexpr DWORD kMinSpawnGapMs = 200;
 constexpr DWORD kClaimWindowMs = 1500;  // client objects created this soon after our spawn are ours
-constexpr uint64_t kSettleTicks = 90;   // ~3 s after a level starts before spawning
-constexpr uint64_t kPlayerSettleTicks = 45; // ~1.5 s after the player's character appears (see tick)
+// Spawning waits for NetworkOnPlayerSpawnedMessage; when it does not come this long after the level starts (~5 s), it
+// goes on anyway. The fixed ~3 s wait this replaces was a guess at the same moment.
+constexpr uint64_t kSpawnedTimeoutTicks = 150;
+std::atomic<uint32_t> g_playerSpawnedSeq{0}; // messages seen; compared with the count at the level's start
 // A ghost whose player left is hidden and handed to the next player that needs one (a player who
 // reconnects gets theirs back). One that nobody has taken for kDespawnAfterMs is despawned through its
 // spawner, as the game takes a replay ghost away (see despawnGhost). The level never holds more than
@@ -197,11 +203,43 @@ uintptr_t componentOwner(uintptr_t comp) {
     return coll ? mem::readOr<uintptr_t>(coll) : 0;
 }
 
+using SetVisibleFn = void (*)(void*, uint64_t);
+SetVisibleFn g_origSetVisible = nullptr; // set once the slot is swapped (the game's own function)
+thread_local bool g_ownVisibleCall = false;
+std::atomic<int> g_visibleLogLeft{40};
+std::atomic<bool> g_gameHidGhost{false}; // the game hid a ghost character: the next tick shows ours again
+
+// Hook on PamClientCharacterEntity::setVisible. The game hides our ghosts about 0.25 s after the map closes: its
+// character handler (vf2, caller 0x1439199c1) reacts to a property (0x35bc69ab) change by calling setVisible with the
+// property's value (2026-11-15 log). The hook only notes it (the next tick shows our ghosts again) and logs the
+// first calls with the caller's image VA. The game's call still goes through.
+void setVisibleHook(void* ent, uint64_t visible) {
+    if (!g_ownVisibleCall && !(visible & 1) && clientCharIsGhost(ent)) g_gameHidGhost = true;
+    if (!g_ownVisibleCall && !(visible & 1) && g_visibleLogLeft.load() > 0 && clientCharIsGhost(ent)) {
+        --g_visibleLogLeft;
+#if defined(_MSC_VER)
+        const uintptr_t ret = reinterpret_cast<uintptr_t>(_ReturnAddress());
+#else
+        const uintptr_t ret = reinterpret_cast<uintptr_t>(__builtin_return_address(0));
+#endif
+        MLOG("ghost: the game hid ghost character %p (caller 0x%llx, thread %lu)", ent,
+             static_cast<unsigned long long>(ret - mem::moduleBase() + 0x140000000ull), GetCurrentThreadId());
+    }
+    g_origSetVisible(ent, visible);
+}
+
 bool setClientVisible(void* ent, bool visible) {
     if (!clientCharIsGhost(ent)) return false;
-    uintptr_t vt = 0, fn = 0;
-    if (!mem::read(reinterpret_cast<uintptr_t>(ent), vt) || !mem::read(vt + Vtbl_ClientSetVisible, fn) || !inImage(fn)) return false;
-    reinterpret_cast<void (*)(void*, uint64_t)>(fn)(ent, visible ? 1 : 0);
+    SetVisibleFn fn = g_origSetVisible;
+    if (!fn) {
+        uintptr_t vt = 0, slot = 0;
+        if (!mem::read(reinterpret_cast<uintptr_t>(ent), vt) || !mem::read(vt + Vtbl_ClientSetVisible, slot) || !inImage(slot))
+            return false;
+        fn = reinterpret_cast<SetVisibleFn>(slot);
+    }
+    g_ownVisibleCall = true;
+    fn(ent, visible ? 1 : 0);
+    g_ownVisibleCall = false;
     return true;
 }
 
@@ -252,39 +290,53 @@ uintptr_t blueprintCharacterData(uintptr_t bp) {
     return 0;
 }
 
+// Server replay components whose pose buffers preparePose sized to kMaxBones (server game thread only).
+std::set<const uint8_t*> g_poseRoom;
+
 // Gives the ghost's server replay component a pose buffer with the bone setup `want` (the ghost client's own,
-// so the bone count it checks matches). Rebuilt when the setup differs; the old buffers stay in the
-// component's arena. Buffers come from the component's own engine allocators, so its destructor frees them.
+// so the bone count it checks matches). The index, flag and pose buffers are allocated once per component at
+// kMaxBones capacity, from the component's own engine allocators; a later setup change only rewrites their
+// contents and the counts. Nothing is freed here, and nothing the engine built is overwritten without being
+// reused, so this is correct whichever buffers the component's destructor releases.
 bool preparePose(uint8_t* c, const level::BoneSetup& want) {
-    const uint32_t currentN = *reinterpret_cast<uint32_t*>(c + SRP_Setup);
-    if (*reinterpret_cast<void**>(c + SRP_Pose)) {
-        const auto* cur = *reinterpret_cast<const uint32_t* const*>(c + SRP_Setup + 0x10);
-        if (currentN == want.count && cur && memcmp(cur, want.indices, want.count * 4) == 0) return true;
-        *reinterpret_cast<void**>(c + SRP_Pose) = nullptr;
-    }
     const uint32_t N = want.count;
-    VLOG("ghost: pose setup of %p now has %u bones", c, N);
+    if (N == 0 || N > kMaxBones) return false;
     uint8_t* S = c + SRP_Setup;
-    if (!*reinterpret_cast<void**>(S + 0x10)) *reinterpret_cast<void**>(S + 0x08) = nullptr;
-    if (!*reinterpret_cast<void**>(S + 0x78)) *reinterpret_cast<void**>(S + 0x90) = nullptr;
-    auto* idx = static_cast<uint32_t*>(engineAlloc(reinterpret_cast<void**>(S + 0x08), N * 4, 4));
-    const uint32_t flagCap = (N + 15) & ~15u;
-    auto* flags = static_cast<uint8_t*>(engineAlloc(reinterpret_cast<void**>(S + 0x90), flagCap, 4));
-    auto* pose = static_cast<float*>(engineAlloc(reinterpret_cast<void**>(c + SRP_PoseArena), N * 0x20, 16));
-    if (!idx || !flags || !pose) return false;
-    for (uint32_t i = 0; i < N; ++i) {
-        idx[i] = want.indices[i];
-        flags[i] = want.flags[i];
+    auto** poseP = reinterpret_cast<float**>(c + SRP_Pose);
+    auto** idxP = reinterpret_cast<uint32_t**>(S + 0x10);
+    auto** flagsP = reinterpret_cast<uint8_t**>(S + 0x78);
+    const uint32_t flagCap = (kMaxBones + 15) & ~15u;
+    // Ours (or the engine's, if large enough) when all three buffers already hold kMaxBones: reuse them.
+    const bool roomy = *poseP && *idxP && *flagsP &&
+                       reinterpret_cast<uint8_t*>(*reinterpret_cast<float**>(c + SRP_PoseCap)) -
+                               reinterpret_cast<uint8_t*>(*poseP) >= static_cast<ptrdiff_t>(kMaxBones * 0x20) &&
+                       *reinterpret_cast<uint8_t**>(S + 0x88) - *flagsP >= static_cast<ptrdiff_t>(flagCap) &&
+                       *reinterpret_cast<void**>(c + SRP_Pose) && g_poseRoom.count(c) != 0;
+    if (!roomy) {
+        if (!*idxP) *reinterpret_cast<void**>(S + 0x08) = nullptr;
+        if (!*flagsP) *reinterpret_cast<void**>(S + 0x90) = nullptr;
+        auto* idx = static_cast<uint32_t*>(engineAlloc(reinterpret_cast<void**>(S + 0x08), kMaxBones * 4, 4));
+        auto* flags = static_cast<uint8_t*>(engineAlloc(reinterpret_cast<void**>(S + 0x90), flagCap, 4));
+        auto* pose = static_cast<float*>(engineAlloc(reinterpret_cast<void**>(c + SRP_PoseArena), kMaxBones * 0x20, 16));
+        if (!idx || !flags || !pose) return false;
+        *idxP = idx;
+        *flagsP = flags;
+        *reinterpret_cast<uint8_t**>(S + 0x88) = flags + flagCap;
+        *poseP = pose;
+        *reinterpret_cast<float**>(c + SRP_PoseCap) = pose + kMaxBones * 8;
+        g_poseRoom.insert(c);
     }
-    memset(pose, 0, N * 0x20);
-    *reinterpret_cast<uint32_t**>(S + 0x10) = idx;
+    const uint32_t currentN = *reinterpret_cast<uint32_t*>(S);
+    if (currentN == N && memcmp(*idxP, want.indices, N * 4) == 0) return true;
+    VLOG("ghost: pose setup of %p now has %u bones", c, N);
+    for (uint32_t i = 0; i < N; ++i) {
+        (*idxP)[i] = want.indices[i];
+        (*flagsP)[i] = want.flags[i];
+    }
+    memset(*poseP, 0, N * 0x20);
     *reinterpret_cast<uint32_t*>(S + 0x18) = N;
-    *reinterpret_cast<uint8_t**>(S + 0x78) = flags;
-    *reinterpret_cast<uint8_t**>(S + 0x80) = flags + N;
-    *reinterpret_cast<uint8_t**>(S + 0x88) = flags + flagCap;
-    *reinterpret_cast<float**>(c + SRP_Pose) = pose;
-    *reinterpret_cast<float**>(c + SRP_PoseEnd) = pose + N * 8;
-    *reinterpret_cast<float**>(c + SRP_PoseCap) = pose + N * 8;
+    *reinterpret_cast<uint8_t**>(S + 0x80) = *flagsP + N;
+    *reinterpret_cast<float**>(c + SRP_PoseEnd) = *poseP + N * 8;
     *reinterpret_cast<uint32_t*>(S) = N; // count last
     return true;
 }
@@ -403,10 +455,7 @@ void drive(Ghost& g, const net::PlayerState& input) {
 void fixClient(Ghost& g, const net::PlayerState& st) {
     thread_local ClientCompView v;
     if (!readClientComp(g.clientComp, g.clientChar, v)) return;
-    const uintptr_t c = reinterpret_cast<uintptr_t>(g.clientComp);
-    if (v.at<uint32_t>(CRP_PlaybackState) != 0) poke<uint32_t>(c + CRP_PlaybackState, 0);
-    if (v.at<uint8_t>(CRP_PlaybackForced) != 0) poke<uint8_t>(c + CRP_PlaybackForced, 0);
-    if (v.at<uint8_t>(CRP_SkipRoot) != 0) poke<uint8_t>(c + CRP_SkipRoot, 0);
+    // Playback state, forced flag and skipRoot are settled on the client thread (settleClientPlayback).
     // Driven every rendered frame (renderFrame): the anchor is set there, for the frame's own moment.
     if (g.posing && GetTickCount() - g.posingSince > kReplicateMs) return;
     const uintptr_t pose = v.pose();
@@ -422,6 +471,18 @@ void fixClient(Ghost& g, const net::PlayerState& st) {
         poke(pose, bones, sizeof(bones));
         break;
     }
+}
+
+// Keeps a ghost's client component from playing its own replay: playback stopped, not forced, root not skipped.
+// Written from the client replay updater hook, on the thread that reads these fields, just before it does (the
+// server tick used to poke them, which raced with the client update).
+void settleClientPlayback(void* comp, void* owner) {
+    thread_local ClientCompView v;
+    if (!readClientComp(comp, owner, v)) return;
+    const uintptr_t c = reinterpret_cast<uintptr_t>(comp);
+    if (v.at<uint32_t>(CRP_PlaybackState) != 0) poke<uint32_t>(c + CRP_PlaybackState, 0);
+    if (v.at<uint8_t>(CRP_PlaybackForced) != 0) poke<uint8_t>(c + CRP_PlaybackForced, 0);
+    if (v.at<uint8_t>(CRP_SkipRoot) != 0) poke<uint8_t>(c + CRP_SkipRoot, 0);
 }
 
 void setGhostShader(Ghost& ghost, bool enabled) {
@@ -548,6 +609,19 @@ void* spawnGhost(uint32_t peer, const std::string& name, uint32_t look, uint8_t 
     void* const own = level::ownGhostSpawner();
     void* const spawner = level::spawnerAlive(own) ? own : city;
     const bool fromOwn = spawner == own;
+    // The spawner refuses while its cooldown runs. That is not a bad spawner: wait for the next try and do not
+    // count it as a failure (three in a row would blacklist it). The game's own fields are left alone.
+    {
+        uint32_t flags = 0;
+        float cooldown = 0.f;
+        const uintptr_t sp = reinterpret_cast<uintptr_t>(spawner);
+        if (mem::read(sp + Spawner_Cooldown, cooldown) && mem::read(sp + Spawner_Flags, flags) && cooldown > 0.01f &&
+            (flags & Spawner_CooldownFlag)) {
+            static DWORD lastCooldownNote = 0;
+            if (noteDue(lastCooldownNote)) MLOG("ghost: the spawner %p is on cooldown (%.2f); %08x waits", spawner, cooldown, peer);
+            return nullptr;
+        }
+    }
     // The data the ghosts are recognised by; put back if this spawner gives no character (a failed spawn from
     // another spawner made every ghost look destroyed: they froze where they were).
     const uintptr_t dataBefore = g_ghostCharData.load();
@@ -759,7 +833,8 @@ bool onClientReplayComp(void* comp) {
                 if (g.clientComp == comp) return true;
                 if (g.clientComp) break; // already has one: not ours to replace
                 g.clientComp = comp;
-                MLOG("ghost: player %08x claimed clientComp %p (by its owner)", g.peer, comp);
+                MLOG("ghost: player %08x claimed clientComp %p (by its owner, updater slot %d)", g.peer, comp,
+                     mem::readOr<int32_t>(reinterpret_cast<uintptr_t>(comp) + CRP_UpdaterSlot, -1));
                 closeClaimIfDone(g);
                 return true;
             }
@@ -770,7 +845,8 @@ bool onClientReplayComp(void* comp) {
             if (g.peer == peer && !g.clientComp) {
                 if (owner && g.clientChar && reinterpret_cast<uintptr_t>(g.clientChar) != owner) continue;
                 g.clientComp = comp;
-                MLOG("ghost: player %08x claimed clientComp %p (claim window)", g.peer, comp);
+                MLOG("ghost: player %08x claimed clientComp %p (claim window, updater slot %d)", g.peer, comp,
+                     mem::readOr<int32_t>(reinterpret_cast<uintptr_t>(comp) + CRP_UpdaterSlot, -1));
                 if (!owner) MLOG("ghost: claimed replay component %p without a known owner", comp);
                 closeClaimIfDone(g);
                 return true;
@@ -888,6 +964,17 @@ static void keepGameClientCharactersLast() {
 void beforeClientReplayUpdate() {
     ++g_updaterCalls;
     keepGameClientCharactersLast();
+    if (level::serverWorld() && !level::inFrontEnd()) {
+        struct Pair { void* comp; void* ch; };
+        Pair pairs[kMaxGhosts];
+        size_t n = 0;
+        {
+            std::lock_guard<std::mutex> lock(g_m);
+            for (const auto& g : g_ghosts)
+                if (n < kMaxGhosts && g.clientComp) pairs[n++] = {g.clientComp, g.clientChar};
+        }
+        for (size_t i = 0; i < n; ++i) settleClientPlayback(pairs[i].comp, pairs[i].ch);
+    }
     renderFrame();
 }
 
@@ -931,6 +1018,7 @@ void renderFrame() {
                 if (noteDue(lastReject))
                     MLOG("ghost: client of %08x rejects the pose (server sends %u, client expects %u)", targets[i].peer,
                          st.boneCount, bones);
+                continue; // the server tick sees the same flag and replicates again (drive)
             }
             if (skip && (skipPeer != targets[i].peer || skipCount != st.boneCount)) {
                 static DWORD lastNote = 0; // a mismatch repeats every frame: one note per 10 s
@@ -948,18 +1036,17 @@ void renderFrame() {
             if (skip || !idxPtr || !mem::read(idxPtr, idx, bones * 4)) continue;
         }
         float buf[kMaxBones][8];
-        if (!mem::read(pose, buf, bones * 0x20)) {
-            for (uint32_t b = 0; b < bones; ++b) {
-                buf[b][0] = buf[b][1] = buf[b][2] = 0.f; buf[b][3] = 1.f;
-                buf[b][4] = buf[b][5] = buf[b][6] = 0.f; buf[b][7] = 1.f;
-            }
-        }
+        if (!mem::read(pose, buf, bones * 0x20)) continue; // an identity pose at the origin would be written otherwise
         fillPose(buf, idx, bones, st);
         for (uint32_t b = 0; b < bones; ++b)
             if ((idx[b] & 0xff) == 1) placeAnchor(&buf[0][0], static_cast<int>(b), st.pos); // the body's anchor
         prof::Scope s(prof::RenderWrite);
         poke(pose, buf, bones * 0x20);
     }
+}
+void onPlayerSpawnedMessage() {
+    ++g_playerSpawnedSeq;
+    MLOG("ghost: the player got a character (the game's player-spawned trigger)");
 }
 void setEnabled(bool enabled) { g_enabled = enabled; }
 
@@ -1170,19 +1257,24 @@ void tick(uint64_t tick, uint64_t ticksInLevel) {
         }
     }
 
-    // The game deletes a ghost spawned in the first moments after the player's own character appears
-    // (seen 0.6 s after it, every level load; the next spawn stays). Wait a little after that (1.5 s; a ghost the
-    // game deletes anyway is found gone and spawned again).
+    // The game used to delete a ghost spawned in the first moments after the player's own character appeared
+    // (seen 0.6 s after it, 2026-11-15); we waited 1.5 s then. Spawning on the player-spawned trigger replaced that
+    // wait (2026-11-15 log: spawns 40 ms after the trigger survive). If a ghost is deleted anyway it is found gone
+    // and spawned again.
     static void* lastPlayer = nullptr;
-    static uint64_t playerSince = 0;
     void* const playerChar = level::playerCharacter();
     if (playerChar != lastPlayer) {
         VLOG("level: player character %p -> %p (%llu ticks into the level)", lastPlayer, playerChar,
              static_cast<unsigned long long>(ticksInLevel));
         lastPlayer = playerChar;
-        playerSince = ticksInLevel;
     }
-    const bool playerSettled = playerChar && ticksInLevel - playerSince >= kPlayerSettleTicks;
+    // A new level starts the tick count again: messages from before it do not count.
+    static uint64_t lastTicksInLevel = ~0ull;
+    static uint32_t seqAtLevelStart = 0;
+    if (ticksInLevel < lastTicksInLevel) seqAtLevelStart = g_playerSpawnedSeq.load();
+    lastTicksInLevel = ticksInLevel;
+    const bool playerSpawned = g_playerSpawnedSeq.load() != seqAtLevelStart;
+    const bool playerSettled = playerChar != nullptr;
     if (playerSettled) { // the right spawner before any spawn (the hooks and scans may have changed it)
         const void* ours[kMaxGhosts];
         size_t k = 0;
@@ -1197,7 +1289,7 @@ void tick(uint64_t tick, uint64_t ticksInLevel) {
     // Every present player needs a ghost: hand them a free one, else spawn (one per kSpawnGapMs).
     // Never in the main menu: its "Your Echo" preview is spawned from a projection spawner there, and a
     // ghost of ours from it took the preview's place (and its look).
-    const bool canSpawn = g_enabled && !g_paused && config::get()->autoSpawn && ticksInLevel >= kSettleTicks &&
+    const bool canSpawn = g_enabled && !g_paused && config::get()->autoSpawn && (playerSpawned || ticksInLevel >= kSpawnedTimeoutTicks) &&
                           !level::inFrontEnd() &&
                           level::spawnerAlive(level::ghostSpawner()) && playerSettled;
     if (canSpawn) {
@@ -1248,6 +1340,7 @@ void tick(uint64_t tick, uint64_t ticksInLevel) {
         ghosts = g_ghosts;
     }
     static net::PlayerState st; // large; game thread only
+    const bool gameHid = g_gameHidGhost.exchange(false); // the game hid a ghost character since the last tick
     for (size_t i = 0; i < ghosts.size(); ++i) {
         Ghost& g = ghosts[i];
         if (!g.character) continue;
@@ -1272,7 +1365,7 @@ void tick(uint64_t tick, uint64_t ticksInLevel) {
             {
                 static const DWORD kAt[] = {300, 1000, 2500, 5000};
                 const DWORD due = g.visibleCalls < 4 ? kAt[g.visibleCalls] : 5000u + 3000u * static_cast<DWORD>(g.visibleCalls - 3);
-                if (g.hidden || since >= due) {
+                if (g.hidden || since >= due || gameHid) {
                     setClientVisible(g.clientChar, true);
                     ++g.visibleCalls;
                     g.hidden = false;
@@ -1352,6 +1445,15 @@ void levelChanged() {
     for (auto& k : g_knownCharData) k = 0;
 }
 
+void hookSetVisibleLog() {
+    if (g_origSetVisible) return;
+    const uintptr_t slot = rva(Vtbl_PamClientCharacterEntity) + Vtbl_ClientSetVisible;
+    uintptr_t current = 0;
+    if (!mem::read(slot, current) || !inImage(current)) return; // the startup fingerprint check already matched it
+    g_origSetVisible = reinterpret_cast<SetVisibleFn>(current);
+    if (mem::patchPointer(slot, reinterpret_cast<uintptr_t>(&setVisibleHook), nullptr)) MLOG("hook ghost setVisible log: installed");
+    else g_origSetVisible = nullptr;
+}
 void requestSpawnOrRefresh() { g_reqSpawn = true; }
 void lookListArrived() { retryLooksNow(); }
 void requestHideAll() { g_reqHide = true; }

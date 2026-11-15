@@ -35,8 +35,10 @@ constexpr int kMaxSpawnFails = 3;
 std::mutex g_patchM;
 std::vector<std::pair<uintptr_t, uintptr_t>> g_playerPatched;
 // The ghost spawner MECMP made for itself (ownGhostSpawner): a copy of the city-ghost spawner (same data, same
-// bus), so ghosts no longer come from the spawner whose last character is the game's "Your Echo". Server game
-// thread only, except the hook check (g_makingOwn is only true inside that thread's own creation call).
+// bus). Known not to work as intended: the game finds a replay's spawner by its data in a bus (GridNode), so a
+// second spawner with the same data and bus is found INSTEAD of the game's own, rather than leaving it alone.
+// A working one needs its own data object registered in the data registry. Off by default. Server game thread
+// only, except the hook check (g_makingOwn is only true inside that thread's own creation call).
 void* g_ownSpawner = nullptr;
 void* g_ownFrom = nullptr;          // the city-ghost spawner it was copied from
 uintptr_t g_ownFromData = 0;
@@ -509,7 +511,37 @@ bool characterExists(void* character, uintptr_t expectedData) {
            (!expectedData || head[Character_Data / 8] == expectedData);
 }
 
+namespace {
+// The local player's character through the server's player manager: no spawner has to have been found first.
+// A player counts only when its character points back at it. Null when the manager is not there (yet).
+void* characterFromPlayerManager() {
+    const uintptr_t ctx = mem::readOr<uintptr_t>(rva(Global_ServerGameContext));
+    const uintptr_t mgr = ctx ? mem::readOr<uintptr_t>(ctx + ServerGameContext_PlayerManager) : 0;
+    uintptr_t range[2] = {};
+    if (!mgr || !mem::read(mgr + PlayerManager_PlayersBegin, range, sizeof(range))) return nullptr;
+    const uintptr_t begin = range[0], end = range[1];
+    if (!begin || end <= begin || (end - begin) / 8 > 32) return nullptr;
+    uintptr_t players[32];
+    const size_t count = (end - begin) / 8;
+    if (!mem::read(begin, players, count * 8)) return nullptr;
+    void* fallback = nullptr;
+    for (size_t i = 0; i < count; ++i) {
+        const uintptr_t p = players[i];
+        const uintptr_t ch = p ? mem::readOr<uintptr_t>(p + ServerPlayer_Character) : 0;
+        if (!ch || !isKindOf(reinterpret_cast<void*>(ch), TI_ServerCharacterEntity) ||
+            mem::readOr<uintptr_t>(ch + Character_Player) != p)
+            continue;
+        // +0x1398 marks a wrapper player made for a character; the server's message handlers skip
+        // those, so a real player has it clear (Ghidra: FUN_143358f00 setter, FUN_143380660 checks).
+        if (!mem::readOr<uint8_t>(p + ServerPlayer_MadeForCharacter)) return reinterpret_cast<void*>(ch);
+        if (!fallback) fallback = reinterpret_cast<void*>(ch);
+    }
+    return fallback;
+}
+} // namespace
+
 void* playerCharacter() {
+    if (void* viaManager = characterFromPlayerManager()) return viaManager;
     void* spawner = playerSpawner();
     if (!spawner) return nullptr;
     // The spawner's vtable (is it still a spawner?) and its list of characters, in one read.

@@ -1018,6 +1018,7 @@ void renderFrame() {
                 if (noteDue(lastReject))
                     MLOG("ghost: client of %08x rejects the pose (server sends %u, client expects %u)", targets[i].peer,
                          st.boneCount, bones);
+                continue; // the server tick sees the same flag and replicates again (drive)
             }
             if (skip && (skipPeer != targets[i].peer || skipCount != st.boneCount)) {
                 static DWORD lastNote = 0; // a mismatch repeats every frame: one note per 10 s

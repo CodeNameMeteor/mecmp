@@ -126,3 +126,9 @@ Result (log 26d94fcc, user): with the next-tick re-show the user saw no flicker 
 ghosts (two remote players) both logged "bus id 992a50" and both claimed their client characters by that bus id; they were
 claimed 0 ms after their own spawn so they did not mix up, but it is the ambiguity plan 1.3 is about. Open question: is the
 look re-apply on map close still needed now that visibility is handled? (Try removing it, keep the re-show.)
+
+### 2.4 (done, untested)
+renderFrame no longer writes a pose when the client's count flag (+0x2e4) is 0 (the client drops it anyway); drive already
+sees the same flag on the next server tick and replicates again. The plan's "never fall back to referenceSetup once a ghost
+has its own setup" was already true (drive keeps the ghost's current setup first). +0x2e5 (hasPose) not read: no verified
+offset in engine.h.

@@ -132,3 +132,12 @@ renderFrame no longer writes a pose when the client's count flag (+0x2e4) is 0 (
 sees the same flag on the next server tick and replicates again. The plan's "never fall back to referenceSetup once a ghost
 has its own setup" was already true (drive keeps the ghost's current setup first). +0x2e5 (hasPose) not read: no verified
 offset in engine.h.
+
+### 0.4 / 1.3 / 3.2 (Ghidra, 2026-11-15)
+createCharacter (0x143390a30) passes busId (or the spawner counter & 0x7f when -1) to fb_EntityBus_create, and
+entityObject_initWithParentTransform stores `(id + 0x1ffff80) & 0x1ffffff` at that bus's +0x58: the audit's formula is real for
+the bus created there. MECMP reads character +0x28 -> bus +0x58 and sees one value per spawner (logs 2026-11-15: two ghosts of
+the city-ghost spawner, both 992a50; earlier single ghosts cac3a0, 16c7d60, ...), so what it reads is not that bus or
+not that field: GridNode's reading holds for what MECMP uses. The claim code already copes: a bus-id match is used only
+when exactly one ghost is waiting for its client character; two waiting ghosts fall back to the claim window. No code change.
+Unchecked: which object character +0x28 points to.

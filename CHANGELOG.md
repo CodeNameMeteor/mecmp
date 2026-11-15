@@ -18,6 +18,7 @@
 - Ghosts are spawned once the game says the player has spawned (about 5 s after the level starts at the latest),
   instead of after a fixed 3 s.
 - The pause-menu check reads the game's UI system global.
+- A pose is no longer written into a ghost whose client rejects it (bone count mismatch); the server replicates it again.
 
 ### Quick connect
 - A button above the menu tabs connects to the configured main server and shows its player count and ping.

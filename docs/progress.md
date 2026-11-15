@@ -22,12 +22,13 @@ Plan: MECMP-implementation-plan-2026-11-15.md (against main 7195f45). Nothing he
   L4 explain the early deletion. UNVERIFIED: that this message goes through the SERVER manager and fires on every
   level load (GridNode only saw it at first boot). The log line "the player spawned message arrived" shows it.
 
-## Not done yet
-- 2.2 rest: the anchor/pose pin in `fixClient` (non-posing and parked ghosts) still runs on the server tick; it needs the
-  net state and the park position on the client thread.
-- 2.10 per-ghost look-apply time (`ghosts.cpp` `lastLookApply`): the static also caps mesh rebuilds to one per
-  tick; per-ghost `lookTriedAt` already exists. Unclear what the plan wants; left alone.
-- Steps 3-7 as in the plan; step 6/7 items wait on the Part 0 Ghidra checks.
+## Not done yet (updated 2026-11-15)
+- 3.6: replace the 1000 m parking hide with an attachment flag. Checked (see "0.6 / 3.6"), not implemented: needs a test
+  that the hair is one of the customization component's attachment entries.
+- 3.3 (act at spawner insertion, not a 250 ms poll), 3.4 (heap scans -> data registry), 1.4 (shared data patched in place),
+  1.1 (own spawner), 2.10 per-ghost look-apply time (`lastLookApply`; unclear what the plan wants, left alone).
+- 2.6 third bullet: keep the look cache across levels (see "2.6").
+- 3.1 as first written here is superseded by "3.1 correction" below: the trigger is ServerPlayerChangedCharacterMessage.
 
 ## Part 0 results (Ghidra, MirrorsEdgeCatalyst_dump_SCY.exe, 2026-11-15)
 - 0.1 confirmed. Server replay component dtor (0x14396bb10, `this` = component - 0x30) frees only the CURRENT pointers:
@@ -169,3 +170,14 @@ without flag 0x2000, poolFrees the object. `makeCustomization` now copies the pr
 count 0x4000 and flags 0x2000 itself, so a stray release can neither reach zero nor free our calloc memory.
 Not done: keeping the cache across levels keyed by asset name. The cached data points at the old level's VisualUnlockAssets,
 which may be gone; reuse needs a check that the pieces still exist. The per-level leak stays (one small block set per look).
+
+### 2.9 (done, untested)
+`drive` no longer only writes `SRP_PlaybackState = 0`: `stopServerPlayback` calls `ReplayPlayback_Stop` (0x143970cc0, on
+component + 0x30) when the state is non-zero, then writes 0. Ghidra: Stop does nothing when state (+8) is 0; otherwise it
+releases the decoder (+0x30, vtable +0xb8, poolFree), zeroes +0x30/+0x10/+0x20/+0x08 and frees the keyframe ring (+0x48).
+So a ghost adopted from the game with a loaded recording no longer keeps both. The client keeps the plain write (plan H8:
+the client's stop tells the game the replay is done). The call is guarded by `fingerprint::checkReplayStop()` (first 12
+bytes, from the dump); on a mismatch it logs and falls back to the old write. Unverified: that no game thread uses the ring
+while the server tick frees it (the old write had the same kind of race, but never freed anything). Test: join with a second
+player, look for a ghost that was adopted from the city ghosts (not our own spawner); it should follow the player as before,
+and the log should show no "build check: ReplayPlayback_Stop" line.

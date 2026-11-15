@@ -88,6 +88,13 @@ const Code kReplayCheckCode[] = {
     {"replay download data", Fn_ProjectionReplayDownloaded, 0x71, {0x48, 0x8B, 0x53, 0x48}, 4},
 };
 
+// ReplayPlayback_Stop (ghosts.cpp stopServerPlayback). Not part of check(): a mismatch only falls back to writing the state.
+const Code kReplayStopCode[] = {
+    // push rbx; sub rsp,20h; cmp dword [rcx+8],0; mov rbx,rcx; jz +56h
+    {"ReplayPlayback_Stop", Fn_ReplayPlayback_Stop, 0,
+     {0x53, 0x48, 0x83, 0xEC, 0x20, 0x83, 0x79, 0x08, 0x00, 0x48, 0x89, 0xCB}, 12},
+};
+
 std::string hex(const unsigned char* b, size_t n) {
     std::string s;
     char t[4];
@@ -153,6 +160,19 @@ bool checkReplayCheck() {
         if (!mem::read(rva(c.fn) + c.skip, got, c.n) || memcmp(got, c.bytes, c.n) != 0) {
             MLOG("build check: %s starts with %s, expected %s (replay safety net off)", c.what, hex(got, c.n).c_str(),
                  hex(c.bytes, c.n).c_str());
+            ++bad;
+        }
+    }
+    return bad == 0;
+}
+
+bool checkReplayStop() {
+    int bad = 0;
+    for (const Code& c : kReplayStopCode) {
+        unsigned char got[16] = {};
+        if (!mem::read(rva(c.fn) + c.skip, got, c.n) || memcmp(got, c.bytes, c.n) != 0) {
+            MLOG("build check: %s starts with %s, expected %s (server playback is only zeroed, not stopped)", c.what,
+                 hex(got, c.n).c_str(), hex(c.bytes, c.n).c_str());
             ++bad;
         }
     }

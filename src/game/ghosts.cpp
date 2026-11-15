@@ -15,6 +15,7 @@
 #include "core/config.h"
 #include "core/log.h"
 #include "game/engine.h"
+#include "game/fingerprint.h"
 #include "game/hooks.h"
 #include "game/level.h"
 #include "game/models.h"
@@ -391,6 +392,18 @@ bool noteDue(DWORD& last, DWORD ms = 10000) {
 }
 
 // Server side: the streamed pose into the ghost's replay component, replicated to clients.
+// The server must not replay a recording over the pose we write. Zeroing the state alone leaves a ghost adopted from
+// the game with its decoder and keyframe ring still allocated, so ReplayPlayback_Stop does it (it also clears the
+// state). Server side only: the client's own stop tells the game the replay is done, so the client keeps the plain write.
+void stopServerPlayback(uint8_t* comp) {
+    auto* state = reinterpret_cast<uint32_t*>(comp + SRP_PlaybackState);
+    if (*state == 0) return;
+    using StopFn = void (*)(void*);
+    static const bool canStop = fingerprint::checkReplayStop();
+    if (canStop) reinterpret_cast<StopFn>(rva(Fn_ReplayPlayback_Stop))(comp + SRP_Playback);
+    *state = 0;
+}
+
 void drive(Ghost& g, const net::PlayerState& input) {
     net::PlayerState st = input;
     if (!net::limitPose(st)) return;
@@ -427,7 +440,7 @@ void drive(Ghost& g, const net::PlayerState& input) {
     const uint32_t N = *reinterpret_cast<uint32_t*>(c + SRP_Setup);
     auto* pose = *reinterpret_cast<float**>(c + SRP_Pose);
     if (!pose || N == 0 || N > kMaxBones) return;
-    *reinterpret_cast<uint32_t*>(c + SRP_PlaybackState) = 0; // no server replay overwriting the pose
+    stopServerPlayback(c); // no server replay overwriting the pose
     const int traj = trajectorySlot(c, N);
     if (st.boneCount > 0) {
         float tempBuf[kMaxBones][8];

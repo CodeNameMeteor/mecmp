@@ -193,6 +193,10 @@ constexpr size_t World_PhysicsManager = 0x50, PhysManager_Holder = 0xf0, PhysHol
 constexpr size_t Phys_HavokWorld = 0x10, HavokWorld_FilterOwner = 0x150, FilterOwner_Filter = 0x4d0;
 
 // PamServerReplayPlayerComponent: playback object at +0x30 (state at +0x38, 1 = playing).
+// ReplayPlayback_Stop(playback = component + SRP_Playback): if the state is non-zero, releases the decoder, frees the
+// keyframe ring and clears the state.
+constexpr uintptr_t Fn_ReplayPlayback_Stop = 0x143970cc0;
+constexpr size_t SRP_Playback = 0x30;
 constexpr size_t SRP_PlaybackState = 0x38, SRP_Setup = 0xb0, SRP_Pose = 0x178, SRP_PoseEnd = 0x180,
                  SRP_PoseCap = 0x188, SRP_PoseArena = 0x190, SRP_NetState = 0x1a0;
 // PamClientReplayPlayerComponent: own playback at +0x38 (state +0x40, forced +0xb0, setup +0xb8),

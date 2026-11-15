@@ -26,7 +26,7 @@ Plan: MECMP-implementation-plan-2026-11-15.md (against main 7195f45). Nothing he
 - 3.6: replace the 1000 m parking hide with an attachment flag. Checked (see "0.6 / 3.6"), not implemented: needs a test
   that the hair is one of the customization component's attachment entries.
 - 3.3 follow-up: remove the OnHideMap double refresh only after a game test shows the safety-net log line never fires.
-- 3.4 (heap scans -> data registry), 1.4 (shared data patched in place),
+- 3.4 beyond the check below (replace the scans), 1.4 (shared data patched in place),
   1.1 (own spawner), 2.10 per-ghost look-apply time (`lastLookApply`; unclear what the plan wants, left alone).
 - 2.6 third bullet: keep the look cache across levels (see "2.6").
 - 3.1 as first written here is superseded by "3.1 correction" below: the trigger is ServerPlayerChangedCharacterMessage.
@@ -194,3 +194,27 @@ line now says "reordered by the safety net". The OnHideMap double refresh is NOT
 shows the safety net never fires).
 Unverified: that the claim really happens before the add in every spawn path (the log line shows it if not), and which
 thread calls the add.
+
+### 3.4 research and check (Ghidra 2026-11-15; check done, untested; scans NOT replaced yet)
+The plan's "object table 0x142105510" is real but is a field, not the registry. The registry object is at 0x1421054b0
+(`Registry_Object`); Ghidra's label "JumpTuningRoot" on 0x142105510 is wrong. From `FUN_143119500` (adds a loaded partition's
+containers, called with the partition's container array at +0x18 and a u16 partition id) and `FUN_14311b8e0` (removes them):
+- 0x142105510 / +8 / +0x10: begin / end / capacity of a sorted vector of 16-byte entries `{u64 key, DataContainer*}`;
+  key = partition << 40 | classId << 16 | index; classId = u16 at +0x28 of the object's type (the object's vtable slot 0, as in
+  `Registry::typeOf`). The runtime dump has begin 0x14e7a1110, end 0x14e7a9b10 = 2208 entries (GridNode counted 3,618 in a level).
+- 0x1421054b0 / +8 / +0x10: a second sorted vector, 8-byte {u32 partition << 16 | classId, u16 running index} (the per-class counter).
+- 0x1421054e0: red-black tree of all container pointers (count at 0x142105500). 0x142105540: red-black tree of listeners (node +0x20
+  context, +0x28 function); `0x143134420(registry, &{context, fn})` inserts into it. Dispatch (both functions): `fn(context,
+  vector<DataContainer*>*, u16 partition, bool added)`: 1 on load, 0 on unload (read from the call, not verified in game).
+- The loader holds a lock around all of this (0x1423f7390, taken by FUN_142a9f970, released by FUN_142aa1840). The mod does not
+  take it, so a read can be torn while a level loads: `registry::objects` checks the three pointers, and callers check each object.
+- Entities (`FUN_143164d50`, ClassInfo_firstInWorld): the head of a class's list in a world is the pointer at
+  `world + (classId + 6) * 0x10`. Not followed further (`nextSubclass` not read). Components are still not known to be in such lists (T5).
+Done in code (no behaviour change): `models::reset()` now clears `g_seen` (the look-picker entities of the old level; it runs
+before the new level's entities are created, like the other factory-hooked lists cleared in `level::reset`);
+`game/data_registry.h/.cpp` reads the table (engine.h `Registry_*`); `findPieces` ends its heap scan with `compareWithRegistry`,
+which logs "registry check: MATCH" when the registry holds exactly the live pieces the scan picked and none it missed (else
+"DIFFERENT (send this log)" with up to five names each way, and the class id of `VisualUnlockAsset`). Host test:
+`tests/data_registry_test.cpp` (key decoding, table plausibility; passes).
+Next, only after MATCH logs from a few levels: replace the scan in `findPieces` with the registry (keep the scan as a fallback
+that logs when used), then a listener (`Fn_Registry_AddListener`) for unloads; then `scanForCatalogue`; entities last.

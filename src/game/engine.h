@@ -263,6 +263,18 @@ struct alignas(16) SpawnInfo {
 static_assert(offsetof(SpawnInfo, player) == 0x40 && offsetof(SpawnInfo, busId) == 0x5c &&
               offsetof(SpawnInfo, useTransform) == 0x61, "SpawnInfo layout");
 
+// The game's data registry (Ghidra 2026-11-15: FUN_143119500 adds a loaded data partition's containers, FUN_14311b8e0 removes
+// them, under the lock at 0x1423f7390). Object at 0x1421054b0. Its sorted vector of loaded containers starts at 0x142105510
+// (begin, +8 end, +0x10 capacity; Ghidra names it JumpTuningRoot, wrongly): 16-byte entries {u64 key, DataContainer*},
+// key = partition << 40 | classId << 16 | index, classId = the u16 at +0x28 of the object's type (vtable slot 0).
+// Listeners: 0x143134420(registry, &{context, fn}) adds one; fn(context, vector<DataContainer*>*, u16 partition, bool added).
+constexpr uintptr_t Registry_Object = 0x1421054b0;
+constexpr uintptr_t Registry_Objects = 0x142105510;
+constexpr uintptr_t Registry_Lock = 0x1423f7390;
+constexpr uintptr_t Fn_Registry_AddListener = 0x143134420;
+// Entities of a class in a world: the head is at world + (classId + 6) * 0x10 (FUN_143164d50, ClassInfo_firstInWorld).
+constexpr size_t World_ClassHeads = 0x60, World_ClassHeadStride = 0x10;
+
 // --- Helpers --------------------------------------------------------------------------------------
 inline bool inImage(uintptr_t a) {
     const uintptr_t base = mem::moduleBase();

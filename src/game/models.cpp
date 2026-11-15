@@ -5,14 +5,17 @@
 #include <atomic>
 #include <cctype>
 #include <cstddef>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <map>
 #include <memory>
 #include <mutex>
+#include <set>
 
 #include "core/config.h"
 #include "core/log.h"
+#include "game/data_registry.h"
 #include "game/engine.h"
 #include "game/level.h"
 #include "net/protocol.h"
@@ -169,6 +172,13 @@ void noteTemplate(uintptr_t spawnerData, const std::string& spawnerName) {
     VLOG("model: found '%s'", name.c_str());
 }
 
+// Look-picker entities seen being created (factory hook), newest first. Cleared on a level change (reset): they
+// belong to the level; a stale one would fail the vtable and data checks in readCatalogue anyway.
+namespace {
+std::mutex g_seenM;
+std::vector<uintptr_t> g_seen;
+} // namespace
+
 void reset() {
     std::lock_guard<std::mutex> lock(g_m);
     g_models.clear();
@@ -180,6 +190,8 @@ void reset() {
     g_ownForget = true;
     ++g_levelCount;
     g_echoes =std::make_shared<const std::vector<Echo>>(); // level data may go with the level: found again by findEchoes()
+    std::lock_guard<std::mutex> seenLock(g_seenM);
+    g_seen.clear();
 }
 
 namespace {
@@ -579,6 +591,52 @@ void tick() {
          static_cast<unsigned long long>(now.size()));
 }
 
+// 3.4 check, log only: the game's data registry (registry::objects) should hold exactly the live pieces the heap scan
+// below picks, and none it missed. Nothing here changes what findPieces returns; the log line says whether the registry
+// could replace the scan ("MATCH"), so that can be decided from a real session.
+static void compareWithRegistry(uintptr_t vt, const std::map<std::string, std::vector<uintptr_t>>& seen,
+                                const std::map<std::string, uintptr_t>& picked) {
+    const DWORD t0 = GetTickCount();
+    std::vector<registry::Object> objs;
+    if (!registry::objects(objs)) {
+        MLOG("registry check: the object table is not readable or not plausible (layout changed?)");
+        return;
+    }
+    std::map<std::string, std::vector<uintptr_t>> pieces;
+    std::set<uint16_t> classes;
+    for (const auto& o : objs) {
+        if (mem::readOr<uintptr_t>(o.object) != vt) continue;
+        const std::string name = lower(assetName(o.object));
+        if (name.find("/unlock_") == std::string::npos) continue;
+        pieces[name].push_back(o.object);
+        classes.insert(registry::classIdOf(o.key));
+    }
+    size_t pickedMissing = 0, registryOnly = 0, several = 0;
+    for (const auto& p : picked) {
+        const auto it = pieces.find(p.first);
+        if (it != pieces.end() && std::find(it->second.begin(), it->second.end(), p.second) != it->second.end()) continue;
+        if (pickedMissing++ < 5) MLOG("registry check: picked piece '%s' (%p) is not in the registry", p.first.c_str(), reinterpret_cast<void*>(p.second));
+    }
+    for (const auto& p : pieces) {
+        if (p.second.size() > 1) ++several;
+        if (seen.count(p.first)) continue;
+        if (registryOnly++ < 5) MLOG("registry check: '%s' is in the registry but the heap scan did not find it", p.first.c_str());
+    }
+    std::string ids;
+    for (uint16_t c : classes) {
+        char t[16];
+        snprintf(t, sizeof(t), "%s0x%x", ids.empty() ? "" : ",", c);
+        ids += t;
+    }
+    const bool match = pickedMissing == 0 && registryOnly == 0 && !pieces.empty();
+    MLOG("registry check: %s: %llu objects in the registry, %llu pieces (class id %s), heap scan %llu names, picked pieces missing "
+         "from the registry %llu, registry-only names %llu, registry names with several objects %llu (%u ms)",
+         match ? "MATCH" : "DIFFERENT (send this log)", static_cast<unsigned long long>(objs.size()),
+         static_cast<unsigned long long>(pieces.size()), ids.empty() ? "-" : ids.c_str(), static_cast<unsigned long long>(seen.size()),
+         static_cast<unsigned long long>(pickedMissing), static_cast<unsigned long long>(registryOnly),
+         static_cast<unsigned long long>(several), static_cast<unsigned>(GetTickCount() - t0));
+}
+
 bool findPieces() {
     if (!g_piecesNeeded.load()) return true;
     {
@@ -644,6 +702,7 @@ bool findPieces() {
         }
         found.emplace(s.first, pick);
     }
+    compareWithRegistry(vt, seen, found);
     // First-person twins rely on RenderIn1p being where it was found to be: checked on the pieces the
     // player wears (live for certain), which come in both kinds.
     size_t firstPerson = 0, wrong = 0;
@@ -726,11 +785,6 @@ uint32_t defaultEcho() {
 }
 
 namespace {
-// Look-picker entities seen being created (factory hook). Never cleared: a stale entry fails the vtable
-// and data checks below, and the newest come first.
-std::mutex g_seenM;
-std::vector<uintptr_t> g_seen;
-
 // The catalogue of one look-picker entity: entity +0x28 data, data +0x20 meta, meta +0x18 array.
 bool readCatalogue(uintptr_t ent, std::vector<Echo>& found) {
     if (mem::readOr<uintptr_t>(ent) != rva(Vtbl_PamServerCustomizeProjectionCharacterEntity)) return false;

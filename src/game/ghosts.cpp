@@ -1011,7 +1011,7 @@ void renderFrame() {
 }
 void onPlayerSpawnedMessage() {
     ++g_playerSpawnedSeq;
-    MLOG("ghost: the player spawned message arrived");
+    MLOG("ghost: the player got a character (the game's player-spawned trigger)");
 }
 void setEnabled(bool enabled) { g_enabled = enabled; }
 

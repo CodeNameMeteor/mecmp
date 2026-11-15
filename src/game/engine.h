@@ -175,7 +175,7 @@ constexpr size_t Character_Player = 0x250;
 constexpr uintptr_t Global_ServerGameContext = 0x14253d670;
 constexpr size_t ServerGameContext_PlayerManager = 0x68;
 constexpr size_t PlayerManager_PlayersBegin = 0x268, PlayerManager_PlayersEnd = 0x270;
-constexpr size_t ServerPlayer_MadeForCharacter = 0x1398, ServerPlayer_Character = 0x1478;
+constexpr size_t ServerPlayer_IsAi = 0x1399, ServerPlayer_MadeForCharacter = 0x1398, ServerPlayer_Character = 0x1478;
 // A character's own entity bus (server and client) and the u32 at bus +0x58 (& 0x1ffffff). The server and client
 // characters have the same value, but it is not unique per character: every ghost from one spawner has the same
 // one (the low bits of the spawner's data pointer, seen in game 2026-10-23). It only says "a ghost of this kind".
@@ -222,6 +222,8 @@ constexpr uintptr_t Code_SetupBuildParents = 0x1439487ac;     // mov rax,[r9+0F0
 constexpr uintptr_t Slot_ProjectionReplayDownloaded = 0x141c7e9d8;
 constexpr uintptr_t Fn_ProjectionReplayDownloaded = 0x143a8a910;
 constexpr uint32_t kReplayDownloadedType = 0x8c4a0d15;
+// ServerPlayerChangedCharacterMessage (type 0x40fa3f03): player, old and new character, 'same' flag.
+constexpr size_t ChangedCharMsg_Player = 0x30, ChangedCharMsg_Old = 0x38, ChangedCharMsg_New = 0x40, ChangedCharMsg_Same = 0x48;
 constexpr size_t ReplayMsg_Type = 0x0c, ReplayMsg_Ok = 0x30, ReplayMsg_Data = 0x48, ReplayMsg_Size = 0x50;
 // Local replay recorder (PamClientReplayRecordingComponent +0x48): keyframe ring.
 constexpr size_t Rec_Stride = 0x68, Rec_Capacity = 0x70, Rec_Base = 0x78, Rec_Head = 0x88;

@@ -87,3 +87,10 @@ Not re-checked: the sender of NetworkOnPlayerSpawnedMessage (`FUN_143380660` is 
 sender), and the L4 answer: early ghost deletion is `PamServerReplayEntity` StopReplay (0x1439741d0) unspawning the
 spawner's LAST character, not the spawner's own update. If true, plan 1.2 (do not spawn from the city ghost spawner while
 only MECMP ghosts are in its list) applies; not done yet.
+
+### 3.1 correction (verified in Ghidra, from GridNode's report)
+NetworkOnPlayerSpawnedMessage (0xcab70d78) is built on the stack in FUN_143380660's ServerPlayerChangedCharacterMessage
+(0x40fa3f03) branch (ctor FUN_144663ac0, only caller) and sent to the peers by FUN_1433bfc20 on `*(ctx+0x70)`. It never
+passes through the local message manager, so the Network-category listener could not fire (confirmed by the 15:52-15:59
+log: no arrival line in 3 level loads). MECMP now listens for the trigger itself (category 0xf3c93dd3, type 0x40fa3f03; new
+character set, old clear, 'same' flag clear, player is not AI and not made-for-character). Untested in game.

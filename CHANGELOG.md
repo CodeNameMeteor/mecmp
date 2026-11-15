@@ -18,8 +18,6 @@
 - Ghosts are spawned once the game says the player has spawned (about 5 s after the level starts at the latest),
   instead of after a fixed 3 s.
 - The pause-menu check reads the game's UI system global.
-- Ghosts are no longer shown again and re-looked after the map or a game menu closes (the map echo bug is fixed), and
-  spawn as soon as the game's player-spawned trigger arrives instead of 1.5 s later.
 
 ### Quick connect
 - A button above the menu tabs connects to the configured main server and shows its player count and ping.

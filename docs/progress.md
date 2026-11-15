@@ -94,8 +94,3 @@ NetworkOnPlayerSpawnedMessage (0xcab70d78) is built on the stack in FUN_14338066
 passes through the local message manager, so the Network-category listener could not fire (confirmed by the 15:52-15:59
 log: no arrival line in 3 level loads). MECMP now listens for the trigger itself (category 0xf3c93dd3, type 0x40fa3f03; new
 character set, old clear, 'same' flag clear, player is not AI and not made-for-character). Untested in game.
-
-### Map refresh and settle delay removed (2026-11-15, user's log e2b10af6)
-The map echo bug is fixed (user), so the show-again/re-look on OnHideMap and menu close is gone, and the 1.5 s wait after the
-player's character appears is gone (spawn on the player-changed-character trigger). Untested: if a ghost vanishes after the
-map closes, or is deleted ~0.6 s after a level load (see L4, StopReplay), restore those two (git history: 14bfa9b/c7b5950).

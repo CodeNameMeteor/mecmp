@@ -389,6 +389,8 @@ void onMessage(Listener* self, const void* message) {
     }
     if (category != kCategorySocialPlay) return;
     dumpMessage(m, type);
+    // The map (and its "Your Echo" screen) can leave other players' ghosts invisible when it closes.
+    if (type == 0x5b61f030) ghosts::gameScreenClosed(); // OnHideMap
     if (type == kTypeFinished) onFinished(m);
     else if (type == kTypeChallengeFinished) onTimeTrialFinished(m);
     else if (type == kTypeStarted) onStarted(m);

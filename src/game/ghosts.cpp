@@ -1,4 +1,7 @@
 #include "game/ghosts.h"
+#if defined(_MSC_VER)
+#include <intrin.h>
+#endif
 
 #include <algorithm>
 #include <atomic>
@@ -200,11 +203,40 @@ uintptr_t componentOwner(uintptr_t comp) {
     return coll ? mem::readOr<uintptr_t>(coll) : 0;
 }
 
+using SetVisibleFn = void (*)(void*, uint64_t);
+SetVisibleFn g_origSetVisible = nullptr; // set once the slot is swapped (the game's own function)
+thread_local bool g_ownVisibleCall = false;
+std::atomic<int> g_visibleLogLeft{40};
+
+// Diagnostic hook on PamClientCharacterEntity::setVisible: logs who hides one of our ghosts (the map closing
+// made them vanish for a moment, 2026-11-15). Only the game's own hide calls are logged, with the caller's
+// image VA for Ghidra. Behaviour is unchanged.
+void setVisibleHook(void* ent, uint64_t visible) {
+    if (!g_ownVisibleCall && !(visible & 1) && g_visibleLogLeft.load() > 0 && clientCharIsGhost(ent)) {
+        --g_visibleLogLeft;
+#if defined(_MSC_VER)
+        const uintptr_t ret = reinterpret_cast<uintptr_t>(_ReturnAddress());
+#else
+        const uintptr_t ret = reinterpret_cast<uintptr_t>(__builtin_return_address(0));
+#endif
+        MLOG("ghost: the game hid ghost character %p (caller 0x%llx, thread %lu)", ent,
+             static_cast<unsigned long long>(ret - mem::moduleBase() + 0x140000000ull), GetCurrentThreadId());
+    }
+    g_origSetVisible(ent, visible);
+}
+
 bool setClientVisible(void* ent, bool visible) {
     if (!clientCharIsGhost(ent)) return false;
-    uintptr_t vt = 0, fn = 0;
-    if (!mem::read(reinterpret_cast<uintptr_t>(ent), vt) || !mem::read(vt + Vtbl_ClientSetVisible, fn) || !inImage(fn)) return false;
-    reinterpret_cast<void (*)(void*, uint64_t)>(fn)(ent, visible ? 1 : 0);
+    SetVisibleFn fn = g_origSetVisible;
+    if (!fn) {
+        uintptr_t vt = 0, slot = 0;
+        if (!mem::read(reinterpret_cast<uintptr_t>(ent), vt) || !mem::read(vt + Vtbl_ClientSetVisible, slot) || !inImage(slot))
+            return false;
+        fn = reinterpret_cast<SetVisibleFn>(slot);
+    }
+    g_ownVisibleCall = true;
+    fn(ent, visible ? 1 : 0);
+    g_ownVisibleCall = false;
     return true;
 }
 
@@ -1408,6 +1440,15 @@ void levelChanged() {
     for (auto& k : g_knownCharData) k = 0;
 }
 
+void hookSetVisibleLog() {
+    if (g_origSetVisible) return;
+    const uintptr_t slot = rva(Vtbl_PamClientCharacterEntity) + Vtbl_ClientSetVisible;
+    uintptr_t current = 0;
+    if (!mem::read(slot, current) || !inImage(current)) return; // the startup fingerprint check already matched it
+    g_origSetVisible = reinterpret_cast<SetVisibleFn>(current);
+    if (mem::patchPointer(slot, reinterpret_cast<uintptr_t>(&setVisibleHook), nullptr)) MLOG("hook ghost setVisible log: installed");
+    else g_origSetVisible = nullptr;
+}
 void requestSpawnOrRefresh() { g_reqSpawn = true; }
 void lookListArrived() { retryLooksNow(); }
 void requestHideAll() { g_reqHide = true; }

@@ -104,3 +104,10 @@ OnHideMap (0x5b61f030) in Ghidra: only two code references to the constant. The 
 listener, FUN_143a49660 (OnShowMap -> FUN_143a4af60, OnHideMap -> FUN_143a40a50 + FUN_143a8c6f0), which belongs to
 PamClientPlayerTagComponent (player tags / presence info), not to ghosts. So no game code hides client ghosts in direct
 reaction to OnHideMap; whatever hides them runs from another path (map/Your Echo screen state). Keep the refresh.
+
+### Diagnostic: who hides a ghost (2026-11-15)
+Recordings `map` and `mp-map` (GridNode) hold no event aimed at a ghost character when the map closes; the user sees the
+ghost vanish briefly (our show on OnHideMap and +1 s, and the 3 s re-show, bring it back). So `ghosts.cpp` now swaps the
+`PamClientCharacterEntity::setVisible` slot (0x3d8) for a wrapper that logs the game's own hide calls on our ghost characters
+(not ours): "ghost: the game hid ghost character ... (caller 0x14..., thread ...)", at most 40 lines. Behaviour unchanged.
+Untested. Next: open Ghidra at the caller VA to see what code hides it.

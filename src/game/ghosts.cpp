@@ -207,11 +207,14 @@ using SetVisibleFn = void (*)(void*, uint64_t);
 SetVisibleFn g_origSetVisible = nullptr; // set once the slot is swapped (the game's own function)
 thread_local bool g_ownVisibleCall = false;
 std::atomic<int> g_visibleLogLeft{40};
+std::atomic<bool> g_gameHidGhost{false}; // the game hid a ghost character: the next tick shows ours again
 
-// Diagnostic hook on PamClientCharacterEntity::setVisible: logs who hides one of our ghosts (the map closing
-// made them vanish for a moment, 2026-11-15). Only the game's own hide calls are logged, with the caller's
-// image VA for Ghidra. Behaviour is unchanged.
+// Hook on PamClientCharacterEntity::setVisible. The game hides our ghosts about 0.25 s after the map closes: its
+// character handler (vf2, caller 0x1439199c1) reacts to a property (0x35bc69ab) change by calling setVisible with the
+// property's value (2026-11-15 log). The hook only notes it (the next tick shows our ghosts again) and logs the
+// first calls with the caller's image VA. The game's call still goes through.
 void setVisibleHook(void* ent, uint64_t visible) {
+    if (!g_ownVisibleCall && !(visible & 1) && clientCharIsGhost(ent)) g_gameHidGhost = true;
     if (!g_ownVisibleCall && !(visible & 1) && g_visibleLogLeft.load() > 0 && clientCharIsGhost(ent)) {
         --g_visibleLogLeft;
 #if defined(_MSC_VER)
@@ -1336,6 +1339,7 @@ void tick(uint64_t tick, uint64_t ticksInLevel) {
         ghosts = g_ghosts;
     }
     static net::PlayerState st; // large; game thread only
+    const bool gameHid = g_gameHidGhost.exchange(false); // the game hid a ghost character since the last tick
     for (size_t i = 0; i < ghosts.size(); ++i) {
         Ghost& g = ghosts[i];
         if (!g.character) continue;
@@ -1360,7 +1364,7 @@ void tick(uint64_t tick, uint64_t ticksInLevel) {
             {
                 static const DWORD kAt[] = {300, 1000, 2500, 5000};
                 const DWORD due = g.visibleCalls < 4 ? kAt[g.visibleCalls] : 5000u + 3000u * static_cast<DWORD>(g.visibleCalls - 3);
-                if (g.hidden || since >= due) {
+                if (g.hidden || since >= due || gameHid) {
                     setClientVisible(g.clientChar, true);
                     ++g.visibleCalls;
                     g.hidden = false;

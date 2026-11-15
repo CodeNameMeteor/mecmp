@@ -111,3 +111,13 @@ ghost vanish briefly (our show on OnHideMap and +1 s, and the 3 s re-show, bring
 `PamClientCharacterEntity::setVisible` slot (0x3d8) for a wrapper that logs the game's own hide calls on our ghost characters
 (not ours): "ghost: the game hid ghost character ... (caller 0x14..., thread ...)", at most 40 lines. Behaviour unchanged.
 Untested. Next: open Ghidra at the caller VA to see what code hides it.
+
+### Who hides a ghost: found (2026-11-15, log a3c329bf)
+The setVisible log shows the game hiding both ghost client characters ~0.25 s after OnHideMap (some closes, not all), always
+from caller 0x1439199c1 = `fb::PamClientCharacterEntity::vf2` (vtable slot 2, 0x143919960), on one thread. vf2 is a property-change
+handler: for property 0x35bc69ab it reads that property's bool (via the entity bus) and calls vtbl->setVisible(value); for
+0x7c46ea68 it does something else (vf_0xe0 / vf105). So the game sets a bool property false on the character when the map
+closes. Not seen in the GridNode recordings (no events on a ghost). Fix tried: the setVisible hook notes the game's hide
+(`g_gameHidGhost`) and the next tick calls setVisible(true) on our ghosts again, so the gap shrinks to about a tick instead
+of waiting for the 1 s refresh. The refresh on OnHideMap stays. Untested. Unknown: who writes the property (and why it is
+false); the property's name (hash 0x35bc69ab) is not resolved.

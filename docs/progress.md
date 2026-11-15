@@ -148,3 +148,13 @@ Unchecked: which object character +0x28 points to.
 once renderFrame drives the pose every frame). A parked ghost's anchor moves the same way. Test: hide a ghost (player leaves
 or F12) and show it again; the body should drop below the map and come back, and no ghost should be left standing where the
 player was.
+
+### 0.6 / 3.6 (Ghidra, 2026-11-15): checked, not implemented
+`fb::PamClientCharacterCustomizationComponent::vf64` (0x14391cf60) runs every update: after the base `vf64` it walks the
+16-byte entries of the vector at component +0x340/+0x348 and writes `entry[0] + 0xca = (entry[8] == 0 && FUN_143912b50() == 0)`.
+So an attachment's visibility byte is rewritten each update from a flag at entry +8: a nonzero flag would keep it hidden
+without a per-frame write. The mesh builder (0x143947e10) only bakes component +0x334 / +0x335 into each render instance when
+it is built (+0x100 and the 0x80 flag), so those are no runtime switch.
+Not shown: that the hair is one of those entries, what else sets entry +8, or what FUN_143912b50 returns for a ghost. Parking
+(kParkDepth / kParkMs) stays until a test confirms it: set entry +8 of every entry on a hidden ghost from the client updater
+hook and look whether the hair goes. Plan 3.6 itself says parking works today.

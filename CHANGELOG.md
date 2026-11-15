@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Ghost fixes (GridNode implementation plan, step 1-2)
+- Ghost pose buffers are allocated once per ghost instead of on every bone-setup change (memory leak).
+- Faith's placeholder body pieces are put back to the game's own contents on a level change.
+- Ghost poses are no longer written from the render thread; if the client updater hook cannot be installed,
+  ghosts stay server-driven.
+- A failed pose read no longer writes an identity pose at the origin; the ghost is skipped for that frame.
+- The map no longer records the same player slot twice.
+
 ### Quick connect
 - A button above the menu tabs connects to the configured main server and shows its player count and ping.
   The default `[net] main_server=34.27.13.116:47800` also enables outbound status queries to that address

@@ -98,7 +98,7 @@ void hookUpdaters() {
     if (!mem::read(slot, current)) return;
     if (current != rva(Fn_ClientReplayUpdateAll)) {
         static bool warned = false;
-        if (!warned) MLOG("hook client replay updater: slot holds %p, expected %p; poses stay written per frame",
+        if (!warned) MLOG("hook client replay updater: slot holds %p, expected %p; ghosts stay server-driven (replicated poses)",
                           reinterpret_cast<void*>(current), reinterpret_cast<void*>(rva(Fn_ClientReplayUpdateAll)));
         warned = true;
         return;

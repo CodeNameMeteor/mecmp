@@ -468,7 +468,10 @@ void setOwnLook(uint32_t echoHash, uint8_t outfit, bool enabled) {
 }
 
 void tick() {
-    if (g_ownForget.exchange(false)) g_own = Own{};
+    if (g_ownForget.exchange(false)) {
+        restoreDonors(); // g_own = Own{} would drop the donors and leave the game's ErrorTemplate pieces overwritten
+        g_own = Own{};
+    }
     const uint64_t want = g_ownWanted.load();
     // What to make of the player: nothing while it is off or simply "Faith, as in the game".
     const uint64_t wish = (want & kOwnOn) && (want & ~kOwnOn) ? want : 0;

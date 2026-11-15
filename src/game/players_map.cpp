@@ -133,13 +133,14 @@ void updateManager(uintptr_t mgr, const std::vector<net::RemoteInfo>& players, b
         // assignSlot copies it with MOVAPS (0x143a40681): it must be 16-byte aligned. A plain float[4] on the stack is
         // only 4-byte aligned in an MSVC Release build, and the game crashed there.
         alignas(16) const float pos[4] = {st.pos[0], st.pos[1], st.pos[2], 0.f};
-        if (!slot || !placed(mgr, w.oid.id)) {
+        const bool isPlaced = placed(mgr, w.oid.id);
+        if (!slot || !isPlaced) {
             // A slot of its own (or the friend slot the game already gave them, raised to our priority): the
             // game spawns the marker prefab for a slot the first time it is used.
             auto assign = reinterpret_cast<AssignSlotFn>(rva(Fn_PresenceInfoManager_assignSlot));
             slot = reinterpret_cast<uintptr_t>(assign(reinterpret_cast<void*>(mgr), &w.oid, pos, kPriority));
             if (!slot) continue; // every slot holds someone of a higher or equal priority
-            g_placed.push_back({mgr, w.oid.id});
+            if (!isPlaced) g_placed.push_back({mgr, w.oid.id});
             MLOG("map: player %08x is on the map%s", w.p->id, w.p->loopback ? " (solo test: under your own profile)" : "");
         }
         mem::write(slot + Slot_Pos, pos, sizeof(pos));

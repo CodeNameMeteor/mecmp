@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cstring>
 #include <map>
+#include <set>
 #include <unordered_map>
 #include <mutex>
 #include <vector>
@@ -252,39 +253,53 @@ uintptr_t blueprintCharacterData(uintptr_t bp) {
     return 0;
 }
 
+// Server replay components whose pose buffers preparePose sized to kMaxBones (server game thread only).
+std::set<const uint8_t*> g_poseRoom;
+
 // Gives the ghost's server replay component a pose buffer with the bone setup `want` (the ghost client's own,
-// so the bone count it checks matches). Rebuilt when the setup differs; the old buffers stay in the
-// component's arena. Buffers come from the component's own engine allocators, so its destructor frees them.
+// so the bone count it checks matches). The index, flag and pose buffers are allocated once per component at
+// kMaxBones capacity, from the component's own engine allocators; a later setup change only rewrites their
+// contents and the counts. Nothing is freed here, and nothing the engine built is overwritten without being
+// reused, so this is correct whichever buffers the component's destructor releases.
 bool preparePose(uint8_t* c, const level::BoneSetup& want) {
-    const uint32_t currentN = *reinterpret_cast<uint32_t*>(c + SRP_Setup);
-    if (*reinterpret_cast<void**>(c + SRP_Pose)) {
-        const auto* cur = *reinterpret_cast<const uint32_t* const*>(c + SRP_Setup + 0x10);
-        if (currentN == want.count && cur && memcmp(cur, want.indices, want.count * 4) == 0) return true;
-        *reinterpret_cast<void**>(c + SRP_Pose) = nullptr;
-    }
     const uint32_t N = want.count;
-    VLOG("ghost: pose setup of %p now has %u bones", c, N);
+    if (N == 0 || N > kMaxBones) return false;
     uint8_t* S = c + SRP_Setup;
-    if (!*reinterpret_cast<void**>(S + 0x10)) *reinterpret_cast<void**>(S + 0x08) = nullptr;
-    if (!*reinterpret_cast<void**>(S + 0x78)) *reinterpret_cast<void**>(S + 0x90) = nullptr;
-    auto* idx = static_cast<uint32_t*>(engineAlloc(reinterpret_cast<void**>(S + 0x08), N * 4, 4));
-    const uint32_t flagCap = (N + 15) & ~15u;
-    auto* flags = static_cast<uint8_t*>(engineAlloc(reinterpret_cast<void**>(S + 0x90), flagCap, 4));
-    auto* pose = static_cast<float*>(engineAlloc(reinterpret_cast<void**>(c + SRP_PoseArena), N * 0x20, 16));
-    if (!idx || !flags || !pose) return false;
-    for (uint32_t i = 0; i < N; ++i) {
-        idx[i] = want.indices[i];
-        flags[i] = want.flags[i];
+    auto** poseP = reinterpret_cast<float**>(c + SRP_Pose);
+    auto** idxP = reinterpret_cast<uint32_t**>(S + 0x10);
+    auto** flagsP = reinterpret_cast<uint8_t**>(S + 0x78);
+    const uint32_t flagCap = (kMaxBones + 15) & ~15u;
+    // Ours (or the engine's, if large enough) when all three buffers already hold kMaxBones: reuse them.
+    const bool roomy = *poseP && *idxP && *flagsP &&
+                       reinterpret_cast<uint8_t*>(*reinterpret_cast<float**>(c + SRP_PoseCap)) -
+                               reinterpret_cast<uint8_t*>(*poseP) >= static_cast<ptrdiff_t>(kMaxBones * 0x20) &&
+                       *reinterpret_cast<uint8_t**>(S + 0x88) - *flagsP >= static_cast<ptrdiff_t>(flagCap) &&
+                       *reinterpret_cast<void**>(c + SRP_Pose) && g_poseRoom.count(c) != 0;
+    if (!roomy) {
+        if (!*idxP) *reinterpret_cast<void**>(S + 0x08) = nullptr;
+        if (!*flagsP) *reinterpret_cast<void**>(S + 0x90) = nullptr;
+        auto* idx = static_cast<uint32_t*>(engineAlloc(reinterpret_cast<void**>(S + 0x08), kMaxBones * 4, 4));
+        auto* flags = static_cast<uint8_t*>(engineAlloc(reinterpret_cast<void**>(S + 0x90), flagCap, 4));
+        auto* pose = static_cast<float*>(engineAlloc(reinterpret_cast<void**>(c + SRP_PoseArena), kMaxBones * 0x20, 16));
+        if (!idx || !flags || !pose) return false;
+        *idxP = idx;
+        *flagsP = flags;
+        *reinterpret_cast<uint8_t**>(S + 0x88) = flags + flagCap;
+        *poseP = pose;
+        *reinterpret_cast<float**>(c + SRP_PoseCap) = pose + kMaxBones * 8;
+        g_poseRoom.insert(c);
     }
-    memset(pose, 0, N * 0x20);
-    *reinterpret_cast<uint32_t**>(S + 0x10) = idx;
+    const uint32_t currentN = *reinterpret_cast<uint32_t*>(S);
+    if (currentN == N && memcmp(*idxP, want.indices, N * 4) == 0) return true;
+    VLOG("ghost: pose setup of %p now has %u bones", c, N);
+    for (uint32_t i = 0; i < N; ++i) {
+        (*idxP)[i] = want.indices[i];
+        (*flagsP)[i] = want.flags[i];
+    }
+    memset(*poseP, 0, N * 0x20);
     *reinterpret_cast<uint32_t*>(S + 0x18) = N;
-    *reinterpret_cast<uint8_t**>(S + 0x78) = flags;
-    *reinterpret_cast<uint8_t**>(S + 0x80) = flags + N;
-    *reinterpret_cast<uint8_t**>(S + 0x88) = flags + flagCap;
-    *reinterpret_cast<float**>(c + SRP_Pose) = pose;
-    *reinterpret_cast<float**>(c + SRP_PoseEnd) = pose + N * 8;
-    *reinterpret_cast<float**>(c + SRP_PoseCap) = pose + N * 8;
+    *reinterpret_cast<uint8_t**>(S + 0x80) = *flagsP + N;
+    *reinterpret_cast<float**>(c + SRP_PoseEnd) = *poseP + N * 8;
     *reinterpret_cast<uint32_t*>(S) = N; // count last
     return true;
 }
@@ -948,12 +963,7 @@ void renderFrame() {
             if (skip || !idxPtr || !mem::read(idxPtr, idx, bones * 4)) continue;
         }
         float buf[kMaxBones][8];
-        if (!mem::read(pose, buf, bones * 0x20)) {
-            for (uint32_t b = 0; b < bones; ++b) {
-                buf[b][0] = buf[b][1] = buf[b][2] = 0.f; buf[b][3] = 1.f;
-                buf[b][4] = buf[b][5] = buf[b][6] = 0.f; buf[b][7] = 1.f;
-            }
-        }
+        if (!mem::read(pose, buf, bones * 0x20)) continue; // an identity pose at the origin would be written otherwise
         fillPose(buf, idx, bones, st);
         for (uint32_t b = 0; b < bones; ++b)
             if ((idx[b] & 0xff) == 1) placeAnchor(&buf[0][0], static_cast<int>(b), st.pos); // the body's anchor

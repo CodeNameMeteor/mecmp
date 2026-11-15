@@ -646,9 +646,6 @@ HRESULT STDMETHODCALLTYPE presentHook(IDXGISwapChain* sc, UINT sync, UINT flags)
     // A test present (is the window visible?) shows nothing: no frame is drawn for it.
     if (flags & DXGI_PRESENT_TEST) return g_origPresent(sc, sync, flags);
     if (!g_ready && !g_swapChain) g_ready = init(sc);
-    // Ghosts move every frame, not per server tick. Normally written by the client replay updater
-    // (on the game's thread, just before it reads them); from here only until that hook is in.
-    if (g_ready && sc == g_swapChain && !game::hooks::clientUpdateHooked()) game::ghosts::renderFrame();
     if (g_ready && sc == g_swapChain && g_rtv) {
         prof::Scope scope(prof::Overlay);
         updateFontScale();

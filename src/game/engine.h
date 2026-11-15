@@ -97,7 +97,8 @@ constexpr uintptr_t Fn_ClientCharacterFactory = 0x143910d20;
 // ClientCharacterSpawnEntity's creator slot and create function (the client side of a character spawner). Its
 // spawned client characters are a vector at +0xb0/+0xb8; the client replay entity (the map's echo) takes the last
 // one (0x1432a60e0 <- 0x14394b1d0, on CharacterSpawned 0xa29c98e6) and starts its replay on that character. Add:
-// vtable +0xf8 (0x143239bb0); remove: vtable +0x100 (0x143234e20).
+// vtable +0xd8 (onCharacterSpawned); remove: vtable +0xe0. Both client spawner classes; GridNode checked these in the
+// image and in call traces (2026-10-29). The earlier +0xf8/+0x100 were wrong.
 constexpr uintptr_t Slot_ClientCharacterSpawnFactory = 0x141b2ad88;
 constexpr uintptr_t Fn_ClientCharacterSpawnFactory = 0x1432a67c0;
 constexpr uintptr_t Vtbl_ClientCharacterSpawnEntity = 0x141b2ac20;

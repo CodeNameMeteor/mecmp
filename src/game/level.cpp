@@ -35,8 +35,10 @@ constexpr int kMaxSpawnFails = 3;
 std::mutex g_patchM;
 std::vector<std::pair<uintptr_t, uintptr_t>> g_playerPatched;
 // The ghost spawner MECMP made for itself (ownGhostSpawner): a copy of the city-ghost spawner (same data, same
-// bus), so ghosts no longer come from the spawner whose last character is the game's "Your Echo". Server game
-// thread only, except the hook check (g_makingOwn is only true inside that thread's own creation call).
+// bus). Known not to work as intended: the game finds a replay's spawner by its data in a bus (GridNode), so a
+// second spawner with the same data and bus is found INSTEAD of the game's own, rather than leaving it alone.
+// A working one needs its own data object registered in the data registry. Off by default. Server game thread
+// only, except the hook check (g_makingOwn is only true inside that thread's own creation call).
 void* g_ownSpawner = nullptr;
 void* g_ownFrom = nullptr;          // the city-ghost spawner it was copied from
 uintptr_t g_ownFromData = 0;

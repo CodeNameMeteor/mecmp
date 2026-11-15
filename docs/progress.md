@@ -59,7 +59,7 @@ Plan: MECMP-implementation-plan-2026-11-15.md (against main 7195f45). Nothing he
   table at +0xf0); a5 = root bone id or 0xffffffff; setup = out struct (+0x00/+0x18 count, +0x08/+0x20 arena,
   +0x10 index array, +0x28 inverse map, +0x38 parent array, +0x78 flags). Needs a4 (the rig): 1.4 option 1 is feasible
   only if MECMP can get that object from the client component's data.
-- 0.6 not checked.
+- 0.6 checked 2026-11-15, see "Ghidra pass 2" at the end of this file. 0.1, 0.2, 0.4, 0.7 also have updates there.
 
 ## Updaters (GridNode scratch/block-a-2026-11-15.md, spot-checked in Ghidra) - answers question A2
 Checked: `updateAll` 0x14394da40 walks only ITS OWN component list (updater +0x28/+0x30) and calls
@@ -218,3 +218,70 @@ which logs "registry check: MATCH" when the registry holds exactly the live piec
 `tests/data_registry_test.cpp` (key decoding, table plausibility; passes).
 Next, only after MATCH logs from a few levels: replace the scan in `findPieces` with the registry (keep the scan as a fallback
 that logs when used), then a listener (`Fn_Registry_AddListener`) for unloads; then `scanForCatalogue`; entities last.
+
+## Ghidra pass 2 (2026-11-15, MirrorsEdgeCatalyst_dump_SCY.exe; no code changed)
+Read in the decompiler only; nothing here was seen in game.
+
+**0.1 (rest): confirmed.** `Arena_allocFromMember` (0x142a647d0): when `*arenaMember` is null it stores `FUN_142a66490()` there and
+allocates from it. That function returns the arena for the page the pointer belongs to, else the global default arena object
+(vtable object 0x1423606d0, the same one the bus lookups pass). So a null member means the shared default arena, and the pose
+buffers `preparePose` allocates (2.1) come from it.
+
+**0.2 (rest): confirmed.** The only consumer of CRP_CountOk (+0x2e4) and +0x2e5 is `PamClientReplayPlayerComponent_update`
+(0x1439501a0): `ReplayPlayback_Tick` runs every update; the received pose (+0x180) is copied to +0x1d8 and the body placed
+only when BOTH flags are set (+0x2e6 skipRoot picks the placing path). A pose with the wrong count is not applied; there is no
+other effect. 2.4's `continue` is therefore exactly "this client ignores it".
+
+**0.4 (rest): partly.** `PamClientCharacterEntity::vf65` (0x143916b40) looks up its anim entity with the character's data
+(+0x30) as the key and a bus-like object as the last argument (Ghidra calls it `physicsHolder`; it is the +0x28 MECMP calls
+`Character_Bus`); it also copies `+0x335` from the character data (+0xe9) and `ghostShader` (+0x334) from data +0xe8, so +0x334/+0x335
+are per-entity flags set at init, as 0.6 assumed. `PamServerReplayEntity` keeps its data at +0x28 and its bus at +0x20 (one slot
+earlier than the character). Still not shown: whether the character's +0x28 object is the spawn bus or a child bus.
+
+**0.6: partly confirmed.**
+- `vf64` of `PamClientCharacterCustomizationComponent` (0x14391cf60) and the base `ClientCharacterCustomizationComponent::vf64`
+  (0x14322aad0) both write `attachment + 0xca = (entry.flag @ +8 == 0 && hideAll == 0)` for every 16-byte entry
+  `{attachment*, flag}` of the vector at component +0x340/+0x348, every update. The base one also calls the attachment's
+  vtable +200 (its update) first. So a nonzero flag keeps an attachment hidden for as long as the flag stays.
+- `hideAll` is `FUN_143912b50` (0x143912b50): 1 when a global manager (FUN_143269ae0, vtable +200 -> FUN_14319d9b0) says so;
+  else for a component with a player at +0x238 (+0x1398 clear, +0x1520 bit 2) a value from the player's state; else the
+  result of vtable +0x78 of the object at component +0x1d8 (not read). For a ghost (no player) the last path decides: unknown.
+- The entries are filled through the component's vtable +0x208 from the character's `VisualUnlockAsset` list (field +0x60),
+  so a hair piece, which is a VisualUnlockAsset, very likely is an entry. Not proven; nothing was found that writes the flag
+  at +8 (no direct write in the customization component code range), so what sets it is unknown.
+- `vf4` (0x143911510) forwards six message ids (0x37848c36, -0x45ef1ee0, -0x21db91a7, 0x28161398, 0x71ade322, 0x77da2e7a) to
+  every attachment (handlers FUN_14304e580, 1430503a0, 14304ed30, 14304e480, 14304ffd0, 1430502b0): enable/disable-style
+  handlers that set a state word at +0xc6 and call the attachment's sub-object at +0x68 (vtable +0x88 / +0x60). Another way to
+  hide an attachment, not tried.
+- For 3.6: a test in game is still needed (set the flag byte of every entry on a hidden ghost from the client updater hook and
+  see whether the hair goes). The Ghidra side supports it; it cannot prove the hair is an entry.
+
+**0.7: inconclusive, but the destroyer is found.** The code that removes a replay ghost is `PamServerReplayEntity_stopReplay`
+(0x1439741d0): it finds the spawner by link 0xa695a747 (data key in the bus) and calls the spawner's vtable +0x108 (unspawn)
+on its LAST spawned character. Slot 3 (0x143971b80) was not shown to destroy anything.
+
+**1.2: confirmed in both directions.** `PamServerReplayEntity_startReplay` (0x14396e8b0): finds the spawner the same way and
+spawns (vtable +0xd0) only when `ServerSpawnEntity_getLastSpawnedCharacter` is null; otherwise it returns that character
+(adopts it). `stopReplay` unspawns the last one. So while the city ghost spawner's list holds only MECMP ghosts, the game's next
+StartReplay adopts one and the next StopReplay removes it. This is the plan's mechanism exactly.
+
+**1.1: partly.** The spawner lookup (`FUN_14311c850` -> `FUN_143145050` -> `FUN_14314e090`) is a binary search (lower bound) in
+a bus's sorted key array (bus +0x68 -> +0xd0, or +0xf8 in the other mode), parallel entity array at bus +0x40; it returns ONE entity
+and walks to the parent bus when the key is absent. A second spawner with the same data key in the same bus therefore sits next
+to the game's in that array; which of the two a lower-bound search returns depends on how the registration inserts equal
+keys, which this read does not show. GridNode's "found instead of" is plausible, not shown. The plan's test (`own_spawner=1`
+with the map open) still decides it. Also: the registry's "register" function is the partition loader `FUN_143119500` (adds a
+whole partition's containers, 3.4 section above), so registering one custom data object means building a partition-like
+container array; not read further.
+
+**3.4 (rest).**
+- The look catalogue's data class is `fb::PamEchoCustomizationDefinitionsMeta`, vtable 0x141c96678; it is a data container, so the
+  registry should hold it. `scanForCatalogue` could then read the registry for that vtable instead of scanning for the picker
+  entity's vtable.
+- The class-id range of a type can be read from the image: `TI_VisualUnlockAsset.classId` is the u16 at 0x14281e9b8 and
+  `lastSubClassId` at 0x14281e9ba. A registry entry belongs to the class when `classIdOf(key)` is in that range (sub-classes
+  included), so findPieces would not need MECMP's own vtable guess (`g_pieceVtable`).
+- Entities: the head of a class's list in a world is at `world + (classId + 6) * 0x10` (`FUN_143164d50`). `ClassInfo_nextSubclass`
+  and whether replay components are in those lists (T5) were not read.
+- Ghidra labels to fix by the user (not changed here): 0x142105510 "JumpTuningRoot" is the registry's object vector;
+  `FUN_143119500` = registry add partition, `FUN_14311b8e0` = registry remove partition, `FUN_143134420` = registry add listener.

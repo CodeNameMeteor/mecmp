@@ -19,6 +19,8 @@
   instead of after a fixed 3 s.
 - The pause-menu check reads the game's UI system global.
 - A pose is no longer written into a ghost whose client rejects it (bone count mismatch); the server replicates it again.
+- The body anchor of a ghost that is not yet driven every frame (or is parked) is pinned on the client update thread, not
+  from the server tick.
 - A ghost that the game hides when the map closes is shown again on the next tick (it used to stay gone for up to a
   second). The hook that sees this (`PamClientCharacterEntity::setVisible`) also logs the caller of the first 40 hides.
 - Ghosts spawn right after the game's player-spawned trigger (a character change on the server's player manager), without

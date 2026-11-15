@@ -141,3 +141,10 @@ the city-ghost spawner, both 992a50; earlier single ghosts cac3a0, 16c7d60, ...)
 not that field: GridNode's reading holds for what MECMP uses. The claim code already copes: a bus-id match is used only
 when exactly one ghost is waiting for its client character; two waiting ghosts fall back to the claim window. No code change.
 Unchecked: which object character +0x28 points to.
+
+### 2.2 rest (done, untested)
+`fixClient` is gone: the server tick calls `setPin` (stores the anchor position in the ghost under g_m) and
+`beforeClientReplayUpdate` writes it with `pinAnchor` on the client update thread, under the same condition as before (not
+once renderFrame drives the pose every frame). A parked ghost's anchor moves the same way. Test: hide a ghost (player leaves
+or F12) and show it again; the body should drop below the map and come back, and no ghost should be left standing where the
+player was.

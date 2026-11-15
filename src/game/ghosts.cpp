@@ -84,6 +84,8 @@ struct Ghost {
     DWORD lookTriedAt = 0;
     std::string lookWanted;       // the look last asked for; a new choice is tried at once
     DWORD parkUntil = 0;          // while hidden: keep it parked below lastPos until then
+    float pinPos[3] = {};         // where the client side pins the body's anchor (written by the server tick, used by the
+    bool pinValid = false;        // client updater hook until renderFrame drives the pose every frame)
 };
 
 // Starts hiding a ghost: client character hidden, and parked below its last position.
@@ -449,15 +451,18 @@ void drive(Ghost& g, const net::PlayerState& input) {
     if (!clientDriven) setNetDirty(c + SRP_NetState, 2 | 4); // frames + pose
 }
 
-// Client side: a ghost client normally plays its own replay and parks the body at a fixed
-// transform. Stop its playback, let it place the body from the trajectory bone, and pin that
-// bone to the player's position (the client playback rewrites the received pose every frame).
-void fixClient(Ghost& g, const net::PlayerState& st) {
+// Client side: a ghost client normally plays its own replay and parks the body at a fixed transform. The body is
+// placed from the trajectory bone, which is pinned to the player's position (the client playback rewrites the received
+// pose every frame). The server tick only notes the position; the client updater hook writes it (pinAnchor), on the
+// thread that reads the pose.
+void setPin(Ghost& g, const net::PlayerState& st) {
+    memcpy(g.pinPos, st.pos, sizeof(g.pinPos));
+    g.pinValid = true;
+}
+
+void pinAnchor(void* comp, void* owner, const float (&pos)[3]) {
     thread_local ClientCompView v;
-    if (!readClientComp(g.clientComp, g.clientChar, v)) return;
-    // Playback state, forced flag and skipRoot are settled on the client thread (settleClientPlayback).
-    // Driven every rendered frame (renderFrame): the anchor is set there, for the frame's own moment.
-    if (g.posing && GetTickCount() - g.posingSince > kReplicateMs) return;
+    if (!readClientComp(comp, owner, v)) return;
     const uintptr_t pose = v.pose();
     const uint32_t n = v.bones();
     uint32_t idx[kMaxBones];
@@ -466,8 +471,8 @@ void fixClient(Ghost& g, const net::PlayerState& st) {
     for (uint32_t i = 0; i < n; ++i) {
         if ((idx[i] & 0xff) != 1) continue;
         float bones[2][8];
-        if (i != 1 || !mem::read(pose, bones, sizeof(bones))) { poke(pose + i * 0x20, st.pos, sizeof(st.pos)); break; }
-        foldBone0(bones[0], bones[1], st.pos);
+        if (i != 1 || !mem::read(pose, bones, sizeof(bones))) { poke(pose + i * 0x20, pos, sizeof(float) * 3); break; }
+        foldBone0(bones[0], bones[1], pos);
         poke(pose, bones, sizeof(bones));
         break;
     }
@@ -965,15 +970,24 @@ void beforeClientReplayUpdate() {
     ++g_updaterCalls;
     keepGameClientCharactersLast();
     if (level::serverWorld() && !level::inFrontEnd()) {
-        struct Pair { void* comp; void* ch; };
+        struct Pair { void* comp; void* ch; bool pin; float pos[3]; };
         Pair pairs[kMaxGhosts];
         size_t n = 0;
         {
             std::lock_guard<std::mutex> lock(g_m);
+            const DWORD now = GetTickCount();
             for (const auto& g : g_ghosts)
-                if (n < kMaxGhosts && g.clientComp) pairs[n++] = {g.clientComp, g.clientChar};
+                if (n < kMaxGhosts && g.clientComp) {
+                    // Pinned until renderFrame drives the pose every frame (see kReplicateMs).
+                    const bool pin = g.pinValid && !(g.posing && now - g.posingSince > kReplicateMs);
+                    pairs[n] = {g.clientComp, g.clientChar, pin, {g.pinPos[0], g.pinPos[1], g.pinPos[2]}};
+                    ++n;
+                }
         }
-        for (size_t i = 0; i < n; ++i) settleClientPlayback(pairs[i].comp, pairs[i].ch);
+        for (size_t i = 0; i < n; ++i) {
+            settleClientPlayback(pairs[i].comp, pairs[i].ch);
+            if (pairs[i].pin) pinAnchor(pairs[i].comp, pairs[i].ch, pairs[i].pos);
+        }
     }
     renderFrame();
 }
@@ -1359,7 +1373,7 @@ void tick(uint64_t tick, uint64_t ticksInLevel) {
             static net::PlayerState park; // large; game thread only
             park = parkedState(g);
             drive(g, park);
-            fixClient(g, park);
+            setPin(g, park);
         } else if (g.clientChar) {
             const DWORD since = GetTickCount() - g.clientCharAt;
             {
@@ -1407,7 +1421,7 @@ void tick(uint64_t tick, uint64_t ticksInLevel) {
             // needs. Otherwise a Faith ghost keeps the ghost shader and only its hair shows.
             if (g.clientChar) setGhostShader(g, g.ghostShader);
             drive(g, st);
-            fixClient(g, st);
+            setPin(g, st);
             memcpy(g.lastPos, st.pos, sizeof(g.lastPos));
             g.parkUntil = 0;
         }
@@ -1420,6 +1434,8 @@ void tick(uint64_t tick, uint64_t ticksInLevel) {
         if (live && live->peer == g.peer) {
             live->posing = g.posing;
             live->posingSince = g.posingSince;
+            memcpy(live->pinPos, g.pinPos, sizeof(live->pinPos));
+            live->pinValid = g.pinValid;
             if (lookChanged) {
                 live->lookKey = g.lookKey;
                 live->lookTriedAt = g.lookTriedAt;

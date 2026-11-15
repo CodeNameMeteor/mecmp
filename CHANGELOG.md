@@ -19,6 +19,10 @@
   instead of after a fixed 3 s.
 - The pause-menu check reads the game's UI system global.
 - A pose is no longer written into a ghost whose client rejects it (bone count mismatch); the server replicates it again.
+- A ghost that the game hides when the map closes is shown again on the next tick (it used to stay gone for up to a
+  second). The hook that sees this (`PamClientCharacterEntity::setVisible`) also logs the caller of the first 40 hides.
+- Ghosts spawn right after the game's player-spawned trigger (a character change on the server's player manager), without
+  the 1.5 s wait that followed it before.
 
 ### Quick connect
 - A button above the menu tabs connects to the configured main server and shows its player count and ping.

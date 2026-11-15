@@ -9,6 +9,10 @@
   ghosts stay server-driven.
 - A failed pose read no longer writes an identity pose at the origin; the ghost is skipped for that frame.
 - The map no longer records the same player slot twice.
+- A ghost spawner that is on its spawn cooldown is waited for instead of counted as a failure (three failures
+  used to retire a good spawner).
+- A ghost's playback state, forced flag and skipRoot are now set on the game's client update thread, not from the
+  server tick.
 
 ### Quick connect
 - A button above the menu tabs connects to the configured main server and shows its player count and ping.

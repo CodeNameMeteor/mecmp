@@ -161,6 +161,10 @@ constexpr size_t Spawner_Data = 0x30;     // CharacterSpawnReferenceObjectData
 constexpr size_t Spawner_BusCounter = 0xf4; // next child bus id when SpawnInfo::busId is -1 (& 0x7f)
 constexpr size_t Spawner_Spawned = 0x148; // vector<character*> begin/end
 constexpr size_t Spawner_Enabled = 0x2a4;
+// createCharacter (0x143390a30) refuses to spawn while the float at +0xf0 is above 0.01 AND bit 8 of the u32 at +0x108 is
+// set (a spawn cooldown; read in Ghidra 2026-11-15). Only a spawn without a given bus id also checks belowMaxCount.
+constexpr size_t Spawner_Cooldown = 0xf0, Spawner_Flags = 0x108;
+constexpr uint32_t Spawner_CooldownFlag = 8;
 constexpr size_t SpawnerData_Template = 0x198;   // -> CharacterSpawnTemplateData
 constexpr size_t Template_Customization = 0x18;  // -> CustomizeCharacterData
 constexpr size_t Character_Data = 0x30;          // PamCharacterEntityData

@@ -8,8 +8,14 @@ Plan: MECMP-implementation-plan-2026-11-15.md (against main 7195f45). Nothing he
 - Step 2: 2.1 (`preparePose` allocates once at kMaxBones), 2.3 (render-thread fallback removed), 2.7
   (`restoreDonors()` before `g_own = Own{}`).
 
+- 2.8 (spawn cooldown wait, gate 0.3 confirmed): `spawnGhost` returns before touching the spawner when +0xf0 > 0.01 and
+  +0x108 bit 8 is set; no failure counted.
+- 2.2 partly: playback state, forced flag and skipRoot pokes moved from `fixClient` to `settleClientPlayback`, called from
+  `beforeClientReplayUpdate` for every ghost with a client component.
+
 ## Not done yet
-- 2.2 (move `fixClient` into `beforeClientReplayUpdate`): needs care with the ghost list lock; do with a build.
+- 2.2 rest: the anchor/pose pin in `fixClient` (non-posing and parked ghosts) still runs on the server tick; it needs the
+  net state and the park position on the client thread.
 - 2.10 per-ghost look-apply time (`ghosts.cpp` `lastLookApply`): the static also caps mesh rebuilds to one per
   tick; per-ghost `lookTriedAt` already exists. Unclear what the plan wants; left alone.
 - Steps 3-7 as in the plan; step 6/7 items wait on the Part 0 Ghidra checks.

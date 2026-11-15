@@ -418,10 +418,7 @@ void drive(Ghost& g, const net::PlayerState& input) {
 void fixClient(Ghost& g, const net::PlayerState& st) {
     thread_local ClientCompView v;
     if (!readClientComp(g.clientComp, g.clientChar, v)) return;
-    const uintptr_t c = reinterpret_cast<uintptr_t>(g.clientComp);
-    if (v.at<uint32_t>(CRP_PlaybackState) != 0) poke<uint32_t>(c + CRP_PlaybackState, 0);
-    if (v.at<uint8_t>(CRP_PlaybackForced) != 0) poke<uint8_t>(c + CRP_PlaybackForced, 0);
-    if (v.at<uint8_t>(CRP_SkipRoot) != 0) poke<uint8_t>(c + CRP_SkipRoot, 0);
+    // Playback state, forced flag and skipRoot are settled on the client thread (settleClientPlayback).
     // Driven every rendered frame (renderFrame): the anchor is set there, for the frame's own moment.
     if (g.posing && GetTickCount() - g.posingSince > kReplicateMs) return;
     const uintptr_t pose = v.pose();
@@ -437,6 +434,18 @@ void fixClient(Ghost& g, const net::PlayerState& st) {
         poke(pose, bones, sizeof(bones));
         break;
     }
+}
+
+// Keeps a ghost's client component from playing its own replay: playback stopped, not forced, root not skipped.
+// Written from the client replay updater hook, on the thread that reads these fields, just before it does (the
+// server tick used to poke them, which raced with the client update).
+void settleClientPlayback(void* comp, void* owner) {
+    thread_local ClientCompView v;
+    if (!readClientComp(comp, owner, v)) return;
+    const uintptr_t c = reinterpret_cast<uintptr_t>(comp);
+    if (v.at<uint32_t>(CRP_PlaybackState) != 0) poke<uint32_t>(c + CRP_PlaybackState, 0);
+    if (v.at<uint8_t>(CRP_PlaybackForced) != 0) poke<uint8_t>(c + CRP_PlaybackForced, 0);
+    if (v.at<uint8_t>(CRP_SkipRoot) != 0) poke<uint8_t>(c + CRP_SkipRoot, 0);
 }
 
 void setGhostShader(Ghost& ghost, bool enabled) {
@@ -563,6 +572,19 @@ void* spawnGhost(uint32_t peer, const std::string& name, uint32_t look, uint8_t 
     void* const own = level::ownGhostSpawner();
     void* const spawner = level::spawnerAlive(own) ? own : city;
     const bool fromOwn = spawner == own;
+    // The spawner refuses while its cooldown runs. That is not a bad spawner: wait for the next try and do not
+    // count it as a failure (three in a row would blacklist it). The game's own fields are left alone.
+    {
+        uint32_t flags = 0;
+        float cooldown = 0.f;
+        const uintptr_t sp = reinterpret_cast<uintptr_t>(spawner);
+        if (mem::read(sp + Spawner_Cooldown, cooldown) && mem::read(sp + Spawner_Flags, flags) && cooldown > 0.01f &&
+            (flags & Spawner_CooldownFlag)) {
+            static DWORD lastCooldownNote = 0;
+            if (noteDue(lastCooldownNote)) MLOG("ghost: the spawner %p is on cooldown (%.2f); %08x waits", spawner, cooldown, peer);
+            return nullptr;
+        }
+    }
     // The data the ghosts are recognised by; put back if this spawner gives no character (a failed spawn from
     // another spawner made every ghost look destroyed: they froze where they were).
     const uintptr_t dataBefore = g_ghostCharData.load();
@@ -905,6 +927,17 @@ static void keepGameClientCharactersLast() {
 void beforeClientReplayUpdate() {
     ++g_updaterCalls;
     keepGameClientCharactersLast();
+    if (level::serverWorld() && !level::inFrontEnd()) {
+        struct Pair { void* comp; void* ch; };
+        Pair pairs[kMaxGhosts];
+        size_t n = 0;
+        {
+            std::lock_guard<std::mutex> lock(g_m);
+            for (const auto& g : g_ghosts)
+                if (n < kMaxGhosts && g.clientComp) pairs[n++] = {g.clientComp, g.clientChar};
+        }
+        for (size_t i = 0; i < n; ++i) settleClientPlayback(pairs[i].comp, pairs[i].ch);
+    }
     renderFrame();
 }
 

@@ -611,6 +611,18 @@ static void compareWithRegistry(uintptr_t vt, const std::map<std::string, std::v
         pieces[name].push_back(o.object);
         classes.insert(registry::classIdOf(o.key));
     }
+    // The type's class-id range, read from the image: should select exactly the objects with the piece vtable.
+    const uint16_t first = mem::readOr<uint16_t>(rva(TI_VisualUnlockAsset_ClassId)),
+                   last = mem::readOr<uint16_t>(rva(TI_VisualUnlockAsset_LastSubClassId));
+    size_t inRange = 0, inRangeOtherVtable = 0, vtableOutOfRange = 0;
+    for (const auto& o : objs) {
+        const uint16_t c = registry::classIdOf(o.key);
+        const bool inClass = first && c >= first && c <= last;
+        const bool ours = mem::readOr<uintptr_t>(o.object) == vt;
+        if (inClass) ++inRange;
+        if (inClass && !ours) ++inRangeOtherVtable;
+        if (!inClass && ours) ++vtableOutOfRange;
+    }
     size_t pickedMissing = 0, registryOnly = 0, several = 0;
     for (const auto& p : picked) {
         const auto it = pieces.find(p.first);
@@ -628,6 +640,10 @@ static void compareWithRegistry(uintptr_t vt, const std::map<std::string, std::v
         snprintf(t, sizeof(t), "%s0x%x", ids.empty() ? "" : ",", c);
         ids += t;
     }
+    MLOG("registry check: class-id range 0x%x..0x%x holds %llu objects; %llu of them have another vtable (sub-classes?), "
+         "%llu objects with the piece vtable are outside it",
+         first, last, static_cast<unsigned long long>(inRange), static_cast<unsigned long long>(inRangeOtherVtable),
+         static_cast<unsigned long long>(vtableOutOfRange));
     const bool match = pickedMissing == 0 && registryOnly == 0 && !pieces.empty();
     MLOG("registry check: %s: %llu objects in the registry, %llu pieces (class id %s), heap scan %llu names, picked pieces missing "
          "from the registry %llu, registry-only names %llu, registry names with several objects %llu (%u ms)",
@@ -785,11 +801,8 @@ uint32_t defaultEcho() {
 }
 
 namespace {
-// The catalogue of one look-picker entity: entity +0x28 data, data +0x20 meta, meta +0x18 array.
-bool readCatalogue(uintptr_t ent, std::vector<Echo>& found) {
-    if (mem::readOr<uintptr_t>(ent) != rva(Vtbl_PamServerCustomizeProjectionCharacterEntity)) return false;
-    const uintptr_t data = mem::readOr<uintptr_t>(ent + 0x28);
-    const uintptr_t meta = data ? mem::readOr<uintptr_t>(data + 0x20) : 0;
+// The catalogue of a PamEchoCustomizationDefinitionsMeta: +0x18 Array<PamEchoCustomizationData>, 0x28 each.
+bool readCatalogueMeta(uintptr_t meta, std::vector<Echo>& found) {
     const uintptr_t arr = meta ? mem::readOr<uintptr_t>(meta + 0x18) : 0;
     const uint32_t count = arr ? mem::readOr<uint32_t>(arr - 4) : 0;
     if (!count || count > 512) return false;
@@ -803,6 +816,28 @@ bool readCatalogue(uintptr_t ent, std::vector<Echo>& found) {
         found.push_back(x);
     }
     return !found.empty();
+}
+
+// The catalogue of one look-picker entity: entity +0x28 data, data +0x20 meta.
+bool readCatalogue(uintptr_t ent, std::vector<Echo>& found) {
+    if (mem::readOr<uintptr_t>(ent) != rva(Vtbl_PamServerCustomizeProjectionCharacterEntity)) return false;
+    const uintptr_t data = mem::readOr<uintptr_t>(ent + 0x28);
+    return readCatalogueMeta(data ? mem::readOr<uintptr_t>(data + 0x20) : 0, found);
+}
+
+// The catalogue from the game's data registry (3.4): the meta object is a loaded data container, so no heap scan and no
+// picker entity is needed. Nothing found (or an unreadable table) is not an error: the caller falls back to the scan.
+bool catalogueFromRegistry(std::vector<Echo>& found) {
+    static DWORD lastTry = 0; // findEchoes is polled while the catalogue is missing: at most once a second
+    const DWORD now = GetTickCount();
+    if (lastTry && now - lastTry < 1000) return false;
+    lastTry = now;
+    std::vector<registry::Object> objs;
+    if (!registry::objects(objs)) return false;
+    const uintptr_t vt = rva(Vtbl_PamEchoCustomizationDefinitionsMeta);
+    for (const auto& o : objs)
+        if (mem::readOr<uintptr_t>(o.object) == vt && readCatalogueMeta(o.object, found)) return true;
+    return false;
 }
 
 bool scanForCatalogue(std::vector<Echo>& found) {
@@ -850,6 +885,7 @@ bool findEchoes(bool allowScan) {
     const char* how = "from a time-trial marker";
     for (uintptr_t ent : seen)
         if (readCatalogue(ent, found)) break;
+    if (found.empty() && catalogueFromRegistry(found)) how = "from the data registry";
     if (found.empty() && allowScan) {
         how = "by memory scan";
         scanForCatalogue(found);

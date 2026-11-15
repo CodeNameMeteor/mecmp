@@ -272,6 +272,11 @@ constexpr uintptr_t Registry_Object = 0x1421054b0;
 constexpr uintptr_t Registry_Objects = 0x142105510;
 constexpr uintptr_t Registry_Lock = 0x1423f7390;
 constexpr uintptr_t Fn_Registry_AddListener = 0x143134420;
+// A type's class-id range is in the image (u16 at +0, +2 of the TI's classId / lastSubClassId globals): a registry entry is of
+// the type, sub-classes included, when classIdOf(key) is in [classId, lastSubClassId].
+constexpr uintptr_t TI_VisualUnlockAsset_ClassId = 0x14281e9b8, TI_VisualUnlockAsset_LastSubClassId = 0x14281e9ba;
+// PamEchoCustomizationDefinitionsMeta (the ghost look catalogue, +0x18 Array<PamEchoCustomizationData>): a data container.
+constexpr uintptr_t Vtbl_PamEchoCustomizationDefinitionsMeta = 0x141c96678;
 // Entities of a class in a world: the head is at world + (classId + 6) * 0x10 (FUN_143164d50, ClassInfo_firstInWorld).
 constexpr size_t World_ClassHeads = 0x60, World_ClassHeadStride = 0x10;
 

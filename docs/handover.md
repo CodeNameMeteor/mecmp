@@ -7,7 +7,7 @@ against main 7195f45). **Nothing on it has been compiled in this container (no c
 ## State
 - Done and tested by the user (logs 2026-11-15): the player-spawned trigger (3.1, via ServerPlayerChangedCharacterMessage),
   ghosts re-shown after the game hides them on map close, settle delay removed.
-- Done, not tested: 1.5, 2.1, 2.2 (incl. pin on the client thread), 2.3, 2.4, 2.5, 2.6, 2.7, 2.8, 2.9, 2.10 (`g_placed`), 3.3, 3.5, and the 3.4 cleanup plus the registry check (log only).
+- Done, not tested: 1.5, 2.1, 2.2 (incl. pin on the client thread), 2.3, 2.4, 2.5, 2.6, 2.7, 2.8, 2.9, 2.10 (`g_placed`), 3.3, 3.5, 3.7 (was already done), the 3.4 cleanup, the registry check (log only) and the look list read from the registry (falls back to the scan).
 - Checked in Ghidra, no code change: 0.1, 0.2, 0.4, 1.2 (confirmed), 1.3, 3.2; 0.6 / 3.6 (attachment flag found, hair not confirmed); 0.7; 1.1 (lookup read, own-spawner test still decides); 3.4 research. Details: progress.md "Ghidra pass 2".
 - Not done: 3.6, 3.4 (scans not replaced yet; see progress.md), 1.4, 1.1, 2.10 look-apply time, 2.6 cache across levels.
 
@@ -49,7 +49,13 @@ item numbers. A line that must NOT appear is marked "never". Do them in one or t
     a "registry check:" line. Send the line from at least two different levels (change level and pick a look again).
     "MATCH" means the game's data registry could replace the heap scan; "DIFFERENT" lines name what differs. "the object
     table is not readable" means the layout differs from the dump. Nothing else should change; if looks stop working
-    after this build, send the log (the check reads memory only).
+    after this build, send the log (the check reads memory only). The same check also logs a "class-id range" line: send it too.
+12. **Look list from the registry.** After a level load, when the ghost look list is first needed (open the mod menu's look
+    picker), the log says "model: N ghost looks found ..." with "from the data registry", "from a time-trial marker" or "by memory
+    scan". Expect the registry (or the marker). If it says "by memory scan" on every level, tell me; if the list of looks in the
+    menu is shorter or different from before this build, that is a bug in this change: send the log.
+13. **UI system.** Open and close the pause menu and the map once: the game must pause as before. Log: never
+    "UI system global ... differs" (if never, the update hook can be removed).
 
 ## Where the evidence is
 GridNode research scratch (blocks A, L) is summarised in `docs/progress.md`; the plan itself is not in the repo.

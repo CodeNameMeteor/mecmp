@@ -285,3 +285,19 @@ container array; not read further.
   and whether replay components are in those lists (T5) were not read.
 - Ghidra labels to fix by the user (not changed here): 0x142105510 "JumpTuningRoot" is the registry's object vector;
   `FUN_143119500` = registry add partition, `FUN_14311b8e0` = registry remove partition, `FUN_143134420` = registry add listener.
+
+### 3.4 additions and 3.7 (2026-11-15, after Ghidra pass 2; untested)
+- `registry check` now also logs the class-id range of `VisualUnlockAsset` read from the image (engine.h
+  `TI_VisualUnlockAsset_ClassId` / `_LastSubClassId`): how many registry objects fall in it, how many of those have another vtable
+  (sub-classes), and how many objects with the piece vtable are outside it. Log only.
+- `findEchoes` now tries the registry before the heap scan: `catalogueFromRegistry` looks for a `PamEchoCustomizationDefinitionsMeta`
+  (vtable 0x141c96678, engine.h `Vtbl_PamEchoCustomizationDefinitionsMeta`) and reads its catalogue with the same code as the picker
+  entity path (`readCatalogueMeta`). It is read-only and throttled to once a second; an unreadable table or no meta found falls
+  through to the scan as before. Log: "model: N ghost looks found from the data registry". UNVERIFIED: that the vtable constant is the
+  object's first qword (the symbol address of the vftable, same convention as the other `Vtbl_` constants) and that the registry's
+  meta holds the same list as the picker entity's. If the log says "by memory scan" every time, the constant or the registry path
+  missed; if the look list differs from before, this is the cause.
+- 2.10 look-apply: left as is. `lastLookApply` is the intended "one mesh rebuild per tick" throttle (its comment says so); the
+  per-ghost retry already uses `g.lookTriedAt`.
+- 3.7 was already done in the code: `gameMenuOpen` reads the global (0x1424157f0) and the update hook is only a fallback that logs
+  once ("UI system global ... differs") if they ever disagree. The hook can be dropped once a game log shows no such line.

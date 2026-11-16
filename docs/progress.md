@@ -350,3 +350,45 @@ verbose line "is not in the registry".
 Questions R1-R10 in `docs/research-requests.md` were handed to Gemini. No answers yet. When they arrive: verify each in Ghidra before
 use, write the result under a new "Gemini answers verified" section here (per question: verified / wrong / not shown + address), then
 act per `docs/handover.md` "Research in flight". The 3.4/3.6/1.1/1.4 items in "Not done yet" wait on these.
+
+## Gemini answers received (2026-11-16): NOT verified
+Source: the user's `gemini-answers.md` (answers to R1-R10; not committed: other-agent claims). Ghidra was connected but this session
+had no decompile/read tools exposed, so NONE of it is checked. Each line: claim -> what to check -> what it changes. Where it agrees
+with something already verified here, that is noted; agreement is not verification.
+- R10 / R3.3 (matters most): hair is NOT an entry of the +0x340 vector. It is a separate mesh handle registered in
+  `PamClientCharacterCustomizationComponent::vf65` (0x14390ef80 -> 0x143232c00 -> 0x143231bb0 -> 0x143453b60 on global
+  0x14255b830), stored at this+0x9c0..0x9c8 (3P) / +0x8a0..0x8a8 (1P) and attached to the render object at +0x170/+0x178 in
+  0x142d44a70; `vf64` never touches it. Check: decompile 0x14390ef80 and 0x142d44a70. If true, plan 3.6 (clear the +0x340 entry flag) would
+  NOT hide the hair; parking (`kParkDepth`) stays, or the handle at +0x9c0 must be dealt with. Do not build 3.6 as planned.
+- R3.1 / R3.2: entries are `{ClothEntity*, u8 flag}` written by 0x14321ded0; vf64 sets attachment +0xca = 1 only when entry flag == 0 and
+  `FUN_143912b50()` == 0 (agrees with "0.6 / 3.6" above); the vtable +0x78 object (0x14390ed90) returns 1 for a ghost because
+  character+0x238 is 0. Check: decompile 0x14390ed90 and 0x143912b50 (our note says 0x143912b50 reads a global manager; they may differ).
+- R8.1: partitions 0x7d5..0xbbc are skipped by 0x143119500 (never in the registry). Possible reason for pieces the scan found but the
+  registry lacks (the 5 other-character pieces). Check: decompile 0x143119500, find the `param_2 - 0x7d5 < 1000` test. Needs no code change
+  (we only use Faith/placeholder pieces, which the registry holds).
+- R8.2: `ClientLevelLoadedMessage` (TI 0x141af8330) / `ServerLevelLoadedMessage` (0x141b5b0a8) exist. Possible trigger to read the piece list
+  instead of waiting for the player. Check: that the message fires on every level load and checkpoint reload, on which manager, and
+  before the pieces are in the registry. Changes: the "wait for the player's pieces" gate in `findPieces()`.
+- R9: `PamEchoCustomizationDefinitionsMeta` classId 0x71e = lastSubClassId (bytes at 0x142878628). Our `engine.h` constant
+  `Vtbl_PamEchoCustomizationDefinitionsMeta = 0x141c96678` is a different address from Gemini's 0x141c965e8 (field table); the name of ours
+  may be wrong. Check both. Changes: echo look list from the registry for every level (3.4 remainder).
+- R1.2 / R1.3: the key lookup is lower_bound (first of equal keys); registering an equal key is skipped, never duplicated (0x143119500).
+  Means an own spawner with the same key as the game's cannot shadow it that way. Check the compare at 0x143131940 and the insert guard at
+  0x143119500. Calling 0x143119500 with a fake partition is a hypothesis (Gemini's own words). Changes: 1.1 stays "own data needs its own key".
+- R5.3: the first qword at 0x1421054b0 is a vector header (begin/end/cap), not a vtable. Our docs say the same for 0x142105510 being a field of
+  the registry object; check which is right (read memory at both). Changes: the comment on `Registry_Object` and the unused
+  `Vtbl_PamEchoCustomizationDefinitionsMeta` idea in the check.
+- R4.1 / R4.2: character+0x28 is an `EntityBus*` (spawn bus or the blueprint's child bus), copied into the spawner's `lastSpawnedBus` by
+  0x143239bb0. The numeric "bus id" MECMP uses was not shown. Check 0x1431702f0 and 0x143239bb0. Changes: closes 0.4 partly (type known, id formula not).
+- R2.1-R2.3: `ReplaySetup_Build` args: arena, data+0x70, data+0x78, rig table [component+0x1d0] (cached, refcounted, 0x2c0 bytes, parent
+  indices int32 at rig+0xf0), 0xffffffff, setup at component+0x200. Setup and pose buffer (component+0x1d8, align128(bones*0x20)) are per
+  character; shared are the data object [component+0x10] and the rig table. Agrees with the free sequence in "Ghidra pass 2" (0x143945930).
+  Means: only the data object (RecordingBones at +0x70, which we patch) is shared; copy that, not the setup (1.4). Check 0x14394cac0.
+- R6.1 / R6.2: `ReplayPlayback_Tick` guards decoder/ring reads with state == 1 and decoder/ring non-null, and calls Stop plus a callback
+  (vf+0x18 -> 0x14394d8b0, calls (+0x2b8)(+0x2b0) if set). Supports 2.9 as safe. Check 0x1439729f0 and 0x14394d8b0; on the server the callback
+  slot may be non-null (PamServerReplayEntity StopReplay path 0x14396d750): check what it does with a ghost.
+- R5.1 / R5.2: ClassInfo tree fields (+0x28 classId, +0x2a lastSubClassId, +0x30 child, +0x38 sibling); the replay component is not linked
+  into the entity class lists (does not call 0x1431661f0); the registry listener runs on the main update thread under lock 0x1423f7390.
+  Means: the entity scans cannot be replaced from the class lists for the replay components (3.4 remainder stays). Check 0x1431661f0, 0x143944860.
+- R7: handler known (0x143919960), writer not shown (data-driven). No change.
+Verification order for the next session with Ghidra tools: R10 (decides 3.6), R3.2, R8.2, R9, R5.3, R1.3, R6.2, R4, R2.1.

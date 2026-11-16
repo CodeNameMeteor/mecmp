@@ -1,5 +1,7 @@
 # Open research questions (for a second reader, e.g. Gemini)
 
+Status 2026-11-16: R1-R10 answered by Gemini; answers recorded in progress.md ("Gemini answers received"), NOT yet verified in Ghidra.
+
 Target: the Mirror's Edge Catalyst PC image (EA app build), image base 0x140000000, addresses are image VAs.
 Rules for the answer: separate **verified** facts (quote the decompiled lines or bytes, with the function address) from
 **hypotheses**. A hypothesis is not an annotation until someone confirms it in Ghidra. Names in the dump are partly wrong

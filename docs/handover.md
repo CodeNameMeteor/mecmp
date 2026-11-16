@@ -128,4 +128,5 @@ The user gave `docs/research-requests.md` (R1-R10) to Gemini. Its answers are NO
    list at level-loaded instead of waiting for the player; R9 -> echo looks from the registry at every level start; R1/R2 -> own
    spawner / copy the shared setup data (1.1, 1.4); R4 -> 0.4/1.3 bus-id claim; R6 -> keeps or drops 2.9; R7 -> removes the map-close
    workaround; R5 -> replaces the entity heap scans.
-Status of the research answers: pending (none received).
+Status of the research answers: RECEIVED 2026-11-16, NOT verified (no Ghidra decompile tools in that session). Summary and a verification
+order are in progress.md "Gemini answers received". Biggest finding to verify first: hair is not a +0x340 entry (R10), so 3.6 as planned would not hide it.

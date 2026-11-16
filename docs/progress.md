@@ -330,3 +330,10 @@ Items 2/3/10 looked right to the user; the game's own map echo and time-trial ec
   "look: N look pieces are loaded" after "the player got a character", without "first-person flag not as expected", and the own
   look should show "(2 pieces)".
 - Registry check DIFFERENT at that early moment (86 vs 89): same early timing; look for MATCH once the scan waits.
+
+## Third in-game log (2026-11-16): confirmed
+- Checkpoint reload with an echo look: the piece scan now ran after the player's character (10:38:03, "123 look pieces", registry
+  MATCH 3073 objects) and the own look had 2 pieces (10:38:04). Player visible. Patch undone before the time trial (10:38:23).
+- First level of that run: registry check DIFFERENT (137 registry pieces vs 138 scanned; 5 picked pieces not in the registry,
+  all other characters' pieces, e.g. female_midcaste_02, black_november_01). So the registry list can lack pieces the player
+  wears or others hold; it stays log-only. Open: why those pieces are not in the registry (other partition or class id).

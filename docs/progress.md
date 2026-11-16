@@ -305,3 +305,18 @@ container array; not read further.
   per-ghost retry already uses `g.lookTriedAt`.
 - 3.7 was already done in the code: `gameMenuOpen` reads the global (0x1424157f0) and the update hook is only a fallback that logs
   once ("UI system global ... differs") if they ever disagree. The hook can be dropped once a game log shows no such line.
+
+## First in-game log (2026-11-16)
+Server run (`mecmp.log`, 10:11-10:25) and an `own_spawner=1` run (10:27-10:28). Checklist items 1, 11, 12 passed
+(all hooks installed, no build-check lines; registry check MATCH on two of three levels; look list from a time-trial marker).
+Items 2/3/10 looked right to the user; the game's own map echo and time-trial echo stood in a T-pose.
+- Cause (likely, from the log): `patchPlayerData` patches the shared player data for our ghost and undoes it when the game makes
+  its own client replay. Server run: the first level patched ("patched for our ghost" 10:11:53), `reset()` then cleared the
+  undo record, and later levels logged no patch line (list already patched, so no new record). The time trial at 10:23:26 and
+  10:23:52 logged "not one of ours" with no "back to vanilla" line. The `own_spawner=1` run (first level) did revert.
+  Fix: the record is kept across levels, one per data object; new log lines say when the revert is skipped or impossible.
+  Not tested.
+- `own_spawner=1`: the time-trial ghost was fine; the map's own ghost spawned and vanished at once. Already known not to work
+  (progress "1.1"): a second spawner on the same data/bus is found instead of the game's. No change.
+- Registry check DIFFERENT on the 2nd level load (10:24:37, 96 objects vs 91 scanned): taken before the level's look data
+  finished loading (0 ms, "first-person flag not as expected"); a later check in that level did not run. Open.

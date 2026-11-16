@@ -3,6 +3,8 @@
 ## Unreleased
 
 ### Ghost fixes (GridNode implementation plan, step 1-2)
+- The game's own echoes (map, time trial) no longer stand in a T-pose after a level change: the record that undoes the
+  shared player-data patch is kept across levels (it was cleared while the data stayed patched).
 - Ghost pose buffers are allocated once per ghost instead of on every bone-setup change (memory leak).
 - A ghost's client character is put ahead of the game's own (so the map's echo never takes a ghost) at the moment the game
   adds it to its spawner, instead of up to 0.25 s later; the timed pass stays as a safety net.

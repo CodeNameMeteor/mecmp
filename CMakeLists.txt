@@ -112,7 +112,7 @@ option(MECMP_PLAYER_AUDIO "Player sound sync (disabled until fixed)" OFF)
 if(MECMP_PLAYER_AUDIO)
   target_compile_definitions(mecmp PRIVATE MECMP_PLAYER_AUDIO=1)
 endif()
-target_link_libraries(mecmp PRIVATE ws2_32 d3d11 dxgi d3dcompiler dwmapi)
+target_link_libraries(mecmp PRIVATE ws2_32 iphlpapi d3d11 dxgi d3dcompiler dwmapi)
 set_target_properties(mecmp PROPERTIES OUTPUT_NAME "mecmp" PREFIX "")
 
 # --- mecmp_inject.exe: loads mecmp.dll into the running game -------------------------------------

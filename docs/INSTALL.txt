@@ -40,7 +40,8 @@ The mod asks your router to open UDP port 47800 (UPnP), and also registers with 
 for hole punching: when a friend joins with your code, the server introduces you to each other and the
 game connects directly, which works on most home routers without opening anything. If neither works
 (some mobile and carrier networks), forward UDP 47800 to your PC by hand, or let a friend host, or use
-a dedicated server. ([net] rendezvous in mecmp.ini; empty turns hole punching off.)
+a dedicated server. (Hole punching uses the official server by default; set rendezvous_server=off under
+[net] in mecmp.ini to turn it off.)
 
 DEDICATED SERVER
 mecmp_server.exe runs a session without the game (Windows; a Linux build is in the release too).

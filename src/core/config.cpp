@@ -53,8 +53,8 @@ constexpr const char* kDefaultIni =
     "auto_start=0\r\n"
     "; hole punching: a dedicated server that introduces a host and a joiner to each other, so a host needs no\r\n"
     "; forwarded port on most routers (only that introduction goes through it, never the game's traffic). The host\r\n"
-    "; and the joiner need the same one. Empty = off (the default): joining goes straight to the join code's address.\r\n"
-    "rendezvous_server=\r\n"
+    "; and the joiner need the same one. Default: the official server. 'off' turns hole punching off.\r\n"
+    "rendezvous_server=34.27.13.116:47800\r\n"
     "; HOST: 1 = ask your router to open the port (UPnP); 0 = do not (hole punching and forwarded ports still work)\r\n"
     "upnp=1\r\n"
     "; the menu's server list: dedicated servers' addresses, comma separated (the menu edits it)\r\n"
@@ -460,9 +460,11 @@ void load(const std::wstring& dir) {
     s.mainServer = readString(ini, L"net", L"main_server", kDefaultMainServer);
     // Files from before this setting existed started the session at launch: keep that for them.
     s.autoStart = readInt(ini, L"net", L"auto_start", 1) != 0;
-    // Off by default until there is a permanent server. Earlier versions wrote their default server into
-    // rendezvous=, so that key is ignored (and dropped on save): only rendezvous_server= turns it on.
-    s.rendezvous = readString(ini, L"net", L"rendezvous_server", "");
+    // On by default (the official server). Earlier versions wrote an empty rendezvous_server= line, so empty
+    // means the default too; 'off' turns it off. The old rendezvous= key is ignored (and dropped on save).
+    s.rendezvous = readString(ini, L"net", L"rendezvous_server", kDefaultMainServer);
+    if (s.rendezvous.empty()) s.rendezvous = kDefaultMainServer;
+    else if (s.rendezvous == "off" || s.rendezvous == "0") s.rendezvous.clear();
     s.upnp = readInt(ini, L"net", L"upnp", 1) != 0;
     const float offset = static_cast<float>(atof(readString(ini, L"net", L"loopback_offset", "3.0").c_str()));
     s.loopbackOffset = std::isfinite(offset) ? offset : 3.0f; // "nan" or "inf" would poison the mirrored position
@@ -680,7 +682,10 @@ void applyPending(bool flush) {
     else
         put(L"net", L"main_server", snapshot->mainServer);
     put(L"net", L"auto_start", snapshot->autoStart ? "1" : "0");
-    putOrDrop(L"net", L"rendezvous_server", snapshot->rendezvous);
+    if (snapshot->rendezvous == kDefaultMainServer)
+        WritePrivateProfileStringW(L"net", L"rendezvous_server", nullptr, ini.c_str()); // no line = the default
+    else
+        put(L"net", L"rendezvous_server", snapshot->rendezvous.empty() ? std::string("off") : snapshot->rendezvous);
     WritePrivateProfileStringW(L"net", L"rendezvous", nullptr, ini.c_str()); // the old key (see load)
     put(L"net", L"upnp", snapshot->upnp ? "1" : "0");
     put(L"player", L"look", snapshot->look);

@@ -116,3 +116,16 @@ numbers. "never" = a log line that must not appear. Items overlap; one or two se
 - Research for 1.1, 1.4, 3.6, 3.4: `docs/research-requests.md` (R1-R10).
 - Fixed after the first test (all confirmed in game): game echoes in a T-pose after a level change (patch record kept across
   levels), invisible after a checkpoint reload with your own look (piece scan waits for the player).
+
+## Research in flight (started 2026-11-16)
+The user gave `docs/research-requests.md` (R1-R10) to Gemini. Its answers are NOT in the repo yet. Next session:
+1. Ask the user for Gemini's answers (they may paste them or add a file).
+2. Treat every claim as a hypothesis (GridNode rule): check each in Ghidra (decompile the named function, read the bytes) before
+   it goes into `src/game/engine.h`, a comment or a doc as fact. Record per question: verified / wrong / not shown, with the address.
+3. Order of value: R3 + R10 (hair, unlocks 3.6), R8 (registry gaps, "level loaded" event), R9 (echo look list), then R1/R2/R4/R6/R7
+   (1.1, 1.4, 0.4, 2.9 safety, map-close writer), R5 (3.4 entity lists).
+4. What each answer would change in code: R3/R10 -> replace `kParkDepth` parking with an attachment flag (3.6); R8 -> read the piece
+   list at level-loaded instead of waiting for the player; R9 -> echo looks from the registry at every level start; R1/R2 -> own
+   spawner / copy the shared setup data (1.1, 1.4); R4 -> 0.4/1.3 bus-id claim; R6 -> keeps or drops 2.9; R7 -> removes the map-close
+   workaround; R5 -> replaces the entity heap scans.
+Status of the research answers: pending (none received).

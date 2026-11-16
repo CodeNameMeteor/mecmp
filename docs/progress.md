@@ -345,3 +345,8 @@ come from their own data. `piecesFromRegistry()` takes exactly those from the re
 heap scan + the log-only comparison. Test: switch levels and reload a checkpoint; expect "look: N look pieces taken from the data
 registry (x ms ...)" and the own look at "(2 pieces)". "look: N look pieces are loaded (... s" means the fallback ran: send the
 verbose line "is not in the registry".
+
+## Research pending (2026-11-16)
+Questions R1-R10 in `docs/research-requests.md` were handed to Gemini. No answers yet. When they arrive: verify each in Ghidra before
+use, write the result under a new "Gemini answers verified" section here (per question: verified / wrong / not shown + address), then
+act per `docs/handover.md` "Research in flight". The 3.4/3.6/1.1/1.4 items in "Not done yet" wait on these.

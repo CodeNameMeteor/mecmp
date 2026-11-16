@@ -1,7 +1,10 @@
 # Handover: GridNode implementation plan
 
 Source: `MECMP-implementation-plan-2026-11-15.md` (GridNode research against main 7195f45). The plan itself is not in the repo.
-**Nothing was compiled in the container that wrote this (no game toolchain) and only the items marked "tested" were run in game.**
+**Nothing was compiled in the container that wrote this (no game toolchain). Items marked "tested" were run in game by the user.**
+In-game results so far (2026-11-16, solo test + server run, 4 logs, see progress.md "First/Second/Third in-game log"): startup,
+3.3 spawn hook, 2.2 pin, map close, level changes, checkpoint reload, time trials, look changes, outfits (Faith, prologue) and the
+registry piece list all behaved. Not run: 2.1 30-minute memory test, 2.4/2.5 bad-pose case, 2.8 cooldown, own_spawner research.
 Per-item detail and the Ghidra evidence: `docs/progress.md` (look for the item number). Open research questions for another
 reader (Gemini): `docs/research-requests.md`.
 
@@ -40,7 +43,7 @@ Tested = the user ran it in game and reviewed the log. Untested = written, not r
 | 3.1 lifecycle trigger | done [main], tested | ServerPlayerChangedCharacterMessage; the plan's message is never sent locally | "3.1 correction" |
 | 3.2 claim window | no change | bus id unique-match already used | "0.4 / 1.3 / 3.2" |
 | 3.3 act at spawner insertion | done [branch], untested | 250 ms pass kept as a logged safety net; the OnHideMap double refresh stays until a test shows the net never fires | "3.3" |
-| 3.4 heap scans -> registry | partly [branch], untested | cleanup, registry reader, log-only comparison, look list from the registry; the piece scan and entity scans are NOT replaced (wait for MATCH logs; components not known to be in class lists) | "3.4 research", "3.4 additions" |
+| 3.4 heap scans -> registry | partly [branch], **tested**: the look pieces the mod uses come from the registry (16 pieces, 0 ms, 3 levels), scan is the fallback | cleanup, registry reader, log-only comparison, look list from the registry; the piece scan and entity scans are NOT replaced (wait for MATCH logs; components not known to be in class lists) | "3.4 research", "3.4 additions" |
 | 3.5 player character from the player manager | done [main], tested in practice | spawner path kept as fallback | |
 | 3.6 parking -> attachment flag | not done | parking works today; hair-as-entry unproven; needs an in-game experiment | "0.6 / 3.6" |
 | 3.7 UI system global | already in the code | the global is the source; the hook is a fallback that logs if they differ | "3.4 additions and 3.7" |
@@ -104,3 +107,12 @@ numbers. "never" = a log line that must not appear. Items overlap; one or two se
   shown).
 - `docs/research-requests.md`: the long reads that remain, written so another reader can answer them.
 - `docs/ARCHITECTURE.md`: the ghost pipeline notes (client-thread writes, setVisible hook, spawn trigger).
+
+## What is left (2026-11-16)
+- Tests not yet run: checklist 8 (30-minute memory), 5 (a client that rejects a pose), 7 (spawn cooldown), 14 (`own_spawner=1` result: known to
+  fail on the map echo, see progress "1.1"), 4 with a game city ghost adopted by a second player.
+- Code not done: 3.6 (hair via attachment flag), 1.4 (shared data patched in place), 1.1 (own spawner), 3.4 remainder (echo
+  look list and entity scans from the registry), 2.6 look cache across levels, 2.10 look-apply per-ghost time.
+- Research for 1.1, 1.4, 3.6, 3.4: `docs/research-requests.md` (R1-R10).
+- Fixed after the first test (all confirmed in game): game echoes in a T-pose after a level change (patch record kept across
+  levels), invisible after a checkpoint reload with your own look (piece scan waits for the player).

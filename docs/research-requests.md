@@ -55,6 +55,23 @@ Why: hidden ghosts keep hair drawn; the mod parks the body deep underground to h
 Who writes property 0x35bc69ab = false on the ghost client characters shortly after OnHideMap
 (`PamClientCharacterEntity::vf2`)? The mod works around it; knowing the writer may allow a clean fix.
 
+## R8 (3.4, new): what is in the registry and when
+In game, the registry held every Faith / prologue / placeholder piece we need, but 5 pieces of other characters (e.g. `female_midcaste_02`,
+`black_november_01`, `scientist_male_01`) that the heap scan found were not in it, and four `icarus` pieces were in it but not in the heap.
+1. Which partitions hold these, and are some pieces created outside the registry (a character's own bundle)?
+2. Is there a message, event or callback meaning "this level's data finished loading" (so the look-piece list can be read at that point
+   instead of waiting for the player's character)? Candidates: the registry listener (R5.2), a level-loaded message in the server/client
+   message managers (category and type ids are djb2-xor hashes of the names).
+
+## R9 (3.4, new): echo look list without a time-trial marker
+The mod gets the ~50 ghost looks ("Characters/Customizations/Projection/*/Customization_Projection_*") from a time-trial marker's data.
+Which class id and registry key range holds echo customization data (`PamEchoCustomizationDefinitionsMeta` at 0x141c96678 is a
+candidate)? Could the list be read from the registry at level start for every level, including ones without a marker in range?
+
+## R10 (3.6): hair on a hidden ghost
+Same as R3, plus: with a ghost hidden by `setVisible(false)` the hair stays drawn. Which component draws it and what does it check?
+A decompile of the function that submits the hair attachment for drawing would show the flag to clear.
+
 ## Wrong or missing names in the dump
 0x142105510 is labelled "JumpTuningRoot" but is the registry object's vector (object at 0x1421054b0). `FUN_143119500` =
 registry add partition, `FUN_14311b8e0` = remove partition, `FUN_143134420` = add listener.

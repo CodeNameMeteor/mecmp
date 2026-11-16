@@ -180,9 +180,14 @@ void sessionSection() {
                                    "(double NAT / CGNAT). Players outside your network will most likely NOT be able to join "
                                    "this code.");
                 ImGui::PopStyleColor();
-                ImGui::TextWrapped("Let a player with a normal connection host, use a dedicated server, use Tailscale/ZeroTier, "
-                                   "or ask your provider for a public IP. The code only works if the outer router forwards "
-                                   "UDP port %u.", status.port);
+                if (!config::get()->rendezvous.empty())
+                    ImGui::TextWrapped("Hole punching is on and may still connect players, but it does not work on every "
+                                       "connection. If friends cannot join, let a player with a normal connection host, use a dedicated server, "
+                                       "use Tailscale/ZeroTier, or ask your provider for a public IP.");
+                else
+                    ImGui::TextWrapped("Let a player with a normal connection host, use a dedicated server, use Tailscale/ZeroTier, "
+                                       "or ask your provider for a public IP.");
+                ImGui::TextWrapped("Without hole punching the code only works if the outer router forwards UDP port %u.", status.port);
             } else if (status.upnp != net::UpnpState::Mapped) {
                 ImGui::TextWrapped("Players outside your network may need UDP port %u forwarded on your router.", status.port);
             }

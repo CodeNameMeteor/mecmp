@@ -320,3 +320,13 @@ Items 2/3/10 looked right to the user; the game's own map echo and time-trial ec
   (progress "1.1"): a second spawner on the same data/bus is found instead of the game's. No change.
 - Registry check DIFFERENT on the 2nd level load (10:24:37, 96 objects vs 91 scanned): taken before the level's look data
   finished loading (0 ms, "first-person flag not as expected"); a later check in that level did not run. Open.
+
+## Second in-game log (2026-11-16, after the patch-record fix)
+- The T-pose fix worked: "back to vanilla for a game ghost" now logs at both time trials (10:34:11, 10:35:07) and the game's echoes play.
+- Checkpoint reload + "look like this in my own game too" made the player invisible. Log: the reload's piece scan ran 0.7 s after
+  the level started, before the player had a character ("look: 89 look pieces are loaded ... first-person flag not as expected");
+  the own look then had 1 piece instead of 2 (no first-person twin), kept for the whole level. Fix: `findPieces()` waits until the
+  player's own pieces are known (30 s at most). Not tested. Test: reload a checkpoint with an echo look on; the log should say
+  "look: N look pieces are loaded" after "the player got a character", without "first-person flag not as expected", and the own
+  look should show "(2 pieces)".
+- Registry check DIFFERENT at that early moment (86 vs 89): same early timing; look for MATCH once the scan waits.

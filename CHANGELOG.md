@@ -3,6 +3,9 @@
 ## Unreleased
 
 ### Ghost fixes (GridNode implementation plan, step 1-2)
+- After reloading a checkpoint, "look like this in my own game too" no longer makes you invisible: the list of look pieces
+  is taken once the player is dressed in the new level (it used to be taken at level start, found no first-person
+  pieces and switched them off for the level).
 - The game's own echoes (map, time trial) no longer stand in a T-pose after a level change: the record that undoes the
   shared player-data patch is kept across levels (it was cleared while the data stayed patched).
 - Ghost pose buffers are allocated once per ghost instead of on every bone-setup change (memory leak).

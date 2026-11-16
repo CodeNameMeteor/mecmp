@@ -47,6 +47,7 @@ std::atomic<uintptr_t> g_pieceVtable{0}; // what makes an object a look piece (f
 // bit 40 = on at all.
 std::atomic<uint64_t> g_ownWanted{0};
 std::atomic<bool> g_ownForget{false}; // level changed: what tick() remembers is gone
+std::atomic<DWORD> g_levelStartMs{0}; // when reset() last ran: findPieces() waits for the player's own pieces
 std::atomic<unsigned> g_levelCount{0}; // goes up with every reset(): a piece scan across one is thrown away
 // The pieces the game itself gave the player (before our change), for the "faith" ghosts of the others.
 std::vector<uintptr_t> g_ownOriginal; // guarded by g_m
@@ -189,6 +190,7 @@ void reset() {
     g_livePieces.clear();
     g_ownForget = true;
     ++g_levelCount;
+    g_levelStartMs = GetTickCount();
     g_echoes =std::make_shared<const std::vector<Echo>>(); // level data may go with the level: found again by findEchoes()
     std::lock_guard<std::mutex> seenLock(g_seenM);
     g_seen.clear();
@@ -661,6 +663,13 @@ bool findPieces() {
     }
     const uintptr_t vt = g_pieceVtable.load();
     if (!vt) return false; // no player character seen yet
+    // The first-person check and the choice between duplicate pieces need what the player wears in THIS level. After a
+    // checkpoint reload the scan can come before the player is dressed: it then finds no first-person pieces, switches the
+    // twins off for the whole level and the player's own look is invisible. So wait for the player's pieces (at most 30 s).
+    {
+        std::lock_guard<std::mutex> lock(g_m);
+        if (g_livePieces.empty() && GetTickCount() - g_levelStartMs.load() < 30000) return false;
+    }
     const unsigned level = g_levelCount.load();
     const DWORD start = GetTickCount();
     // The heap can hold more than one object per name: what an earlier, torn down load of the level left

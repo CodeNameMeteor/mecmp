@@ -3,6 +3,8 @@
 ## Unreleased
 
 ### Ghost fixes (GridNode implementation plan, step 1-2)
+- The look pieces the mod needs (Faith's prologue, grid-link and tattoo pieces, the placeholder pieces) are read from the
+  game's data registry instead of a 1-2 s memory scan; the scan stays as the fallback if any of them is missing.
 - After reloading a checkpoint, "look like this in my own game too" no longer makes you invisible: the list of look pieces
   is taken once the player is dressed in the new level (it used to be taken at level start, found no first-person
   pieces and switched them off for the level).

@@ -655,6 +655,51 @@ static void compareWithRegistry(uintptr_t vt, const std::map<std::string, std::v
          static_cast<unsigned long long>(several), static_cast<unsigned>(GetTickCount() - t0));
 }
 
+// 3.4: the pieces the mod uses (Faith's prologue, grid-link and tattoo pieces, the "ErrorTemplate" placeholders that carry the
+// first-person twins) taken from the game's data registry instead of a heap scan. The registry holds only live objects.
+// False (the heap scan is used) when it is not readable or any needed piece is missing.
+static bool piecesFromRegistry(uintptr_t vt, const std::vector<uintptr_t>& live, std::map<std::string, uintptr_t>& found,
+                        size_t& doubles) {
+    std::set<std::string> needed;
+    for (const char* n : kPrologue) needed.insert(n);
+    for (const char* n : kGridLink) needed.insert(n);
+    for (const Swap& w : kTattoo) { needed.insert(w.from); needed.insert(w.to); }
+    std::vector<registry::Object> objs;
+    if (!registry::objects(objs)) return false;
+    std::map<std::string, std::vector<uintptr_t>> cands;
+    for (const auto& o : objs) {
+        if (mem::readOr<uintptr_t>(o.object) != vt) continue;
+        const std::string name = lower(assetName(o.object));
+        if (needed.count(name) || name.find("errortemplate") != std::string::npos) cands[name].push_back(o.object);
+    }
+    auto isLive = [&live](uintptr_t v) { return std::find(live.begin(), live.end(), v) != live.end(); };
+    auto sane = [](uintptr_t v) {
+        return mem::readOr<uint8_t>(v + VisualUnlock_RenderIn1p, 0xff) == (isFirstPersonPiece(v) ? 1 : 0);
+    };
+    size_t twinsSpare = 0;
+    for (const auto& c : cands) {
+        if (c.second.size() > 1) ++doubles;
+        uintptr_t pick = 0;
+        for (uintptr_t v : c.second)
+            if (isLive(v)) { pick = v; break; }
+        for (size_t i = 0; !pick && i < c.second.size(); ++i)
+            if (sane(c.second[i])) pick = c.second[i];
+        if (!pick) continue;
+        found.emplace(c.first, pick);
+        if (c.first.find("errortemplate") != std::string::npos) ++twinsSpare;
+    }
+    for (const std::string& n : needed)
+        if (!found.count(n)) {
+            VLOG("look: piece '%s' is not in the registry; the heap scan is used", n.c_str());
+            return false;
+        }
+    if (twinsSpare == 0) {
+        VLOG("look: no placeholder piece in the registry; the heap scan is used");
+        return false;
+    }
+    return true;
+}
+
 bool findPieces() {
     if (!g_piecesNeeded.load()) return true;
     {
@@ -672,6 +717,39 @@ bool findPieces() {
     }
     const unsigned level = g_levelCount.load();
     const DWORD start = GetTickCount();
+    // Pieces that are certainly the live ones: what the player wears, and what the looks seen in this
+    // level are made of.
+    std::vector<uintptr_t> live;
+    {
+        std::lock_guard<std::mutex> lock(g_m);
+        live = g_livePieces;
+        for (const auto& m : g_models) visualsOf(m.ccd, live);
+        for (const auto& e : *g_echoes) visualsOf(e.ccd, live);
+    }
+    {
+        std::map<std::string, uintptr_t> fromRegistry;
+        size_t regDoubles = 0;
+        const DWORD t0 = GetTickCount();
+        if (piecesFromRegistry(vt, live, fromRegistry, regDoubles)) {
+            size_t firstPerson = 0, wrong = 0;
+            for (uintptr_t v : live) {
+                if (mem::readOr<uintptr_t>(v) != vt) continue;
+                if (isFirstPersonPiece(v)) ++firstPerson;
+                if (mem::readOr<uint8_t>(v + VisualUnlock_RenderIn1p, 0xff) != (isFirstPersonPiece(v) ? 1 : 0)) ++wrong;
+            }
+            const bool twins = firstPerson >= 3 && wrong == 0;
+            std::lock_guard<std::mutex> lock(g_m);
+            if (level != g_levelCount.load()) return false;
+            MLOG("look: %llu look pieces taken from the data registry (%u ms, %llu names more than once)%s",
+                 static_cast<unsigned long long>(fromRegistry.size()), static_cast<unsigned>(GetTickCount() - t0),
+                 static_cast<unsigned long long>(regDoubles),
+                 twins ? "" : "; first-person flag not as expected, echo looks stay third-person only");
+            g_pieces = std::move(fromRegistry);
+            g_piecesKnown = true;
+            g_twinsOk = twins;
+            return true;
+        }
+    }
     // The heap can hold more than one object per name: what an earlier, torn down load of the level left
     // behind looks just like the live asset, but its contents may be anything. So every candidate is
     // collected, and the one to use is picked below.
@@ -695,15 +773,6 @@ bool findPieces() {
                 ++objects;
             }
         }
-    }
-    // Pieces that are certainly the live ones: what the player wears, and what the looks seen in this
-    // level are made of.
-    std::vector<uintptr_t> live;
-    {
-        std::lock_guard<std::mutex> lock(g_m);
-        live = g_livePieces;
-        for (const auto& m : g_models) visualsOf(m.ccd, live);
-        for (const auto& e : *g_echoes) visualsOf(e.ccd, live);
     }
     auto isLive = [&live](uintptr_t v) { return std::find(live.begin(), live.end(), v) != live.end(); };
     // A piece is what its name says: RenderIn1p set in a "..._1p" piece, clear in any other.

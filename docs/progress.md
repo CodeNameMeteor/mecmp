@@ -337,3 +337,11 @@ Items 2/3/10 looked right to the user; the game's own map echo and time-trial ec
 - First level of that run: registry check DIFFERENT (137 registry pieces vs 138 scanned; 5 picked pieces not in the registry,
   all other characters' pieces, e.g. female_midcaste_02, black_november_01). So the registry list can lack pieces the player
   wears or others hold; it stays log-only. Open: why those pieces are not in the registry (other partition or class id).
+
+## 3.4: look pieces from the registry (2026-11-16, not tested)
+Decision (user): only Faith's prologue/grid-link/tattoo pieces and the "ErrorTemplate" placeholders (twins) are needed; echo looks
+come from their own data. `piecesFromRegistry()` takes exactly those from the registry (same live/sane pick as the scan) and
+`findPieces()` uses it first; if the registry is unreadable or any needed piece is missing it logs why (verbose) and runs the old
+heap scan + the log-only comparison. Test: switch levels and reload a checkpoint; expect "look: N look pieces taken from the data
+registry (x ms ...)" and the own look at "(2 pieces)". "look: N look pieces are loaded (... s" means the fallback ran: send the
+verbose line "is not in the registry".

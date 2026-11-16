@@ -5,6 +5,9 @@
 #include <ws2tcpip.h>
 #include <windows.h>
 #include <iphlpapi.h>
+#ifdef _MSC_VER
+#pragma comment(lib, "iphlpapi.lib") // GetAdaptersAddresses; also for the tests that compile this file by hand
+#endif
 
 #include "net/upnp.h"
 

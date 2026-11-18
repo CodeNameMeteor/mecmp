@@ -220,6 +220,8 @@ void finishSettings(Options& o) {
     o.relay.name = mecmp::server::cleanText(o.relay.name);
     if (o.relay.name.size() > mecmp::net::protocol::kMaxNameBytes)
         o.relay.name.resize(mecmp::net::protocol::utf8PrefixLength(o.relay.name, mecmp::net::protocol::kMaxNameBytes));
+    // An empty name would show as nothing in the menu and the server list.
+    if (o.relay.name.empty()) o.relay.name = mecmp::server::Config{}.name;
     if (o.relay.maxPlayers < 1) o.relay.maxPlayers = 1;
     if (o.relay.maxPlayers > 64) o.relay.maxPlayers = 64;
     o.relay.boneReach = std::isfinite(o.relay.boneReach) ? std::clamp(o.relay.boneReach, .5f, 2.f) : 1.f;

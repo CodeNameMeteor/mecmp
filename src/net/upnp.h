@@ -17,5 +17,8 @@ struct Result {
 
 Result mapUdpPort(uint16_t port, const char* description, uint32_t leaseSeconds);
 void unmapUdpPort(uint16_t port); // best effort
+// When the port is already mapped (UPnP error 718): true only for a mapping to this PC (`localIp`), the only kind
+// mapUdpPort replaces. Another device's mapping is never deleted.
+bool mappingIsOurs(const std::string& internalClient, const std::string& localIp);
 
 } // namespace mecmp::net::upnp

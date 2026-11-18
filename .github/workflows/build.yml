@@ -31,6 +31,10 @@ jobs:
           if errorlevel 1 exit /b 1
           session_test.exe
           if errorlevel 1 exit /b 1
+          cl /nologo /std:c++17 /EHsc /W4 /utf-8 /DNOMINMAX /DMECMP_DEBUG_KEYS=0 /DMECMP_VERBOSE_DEFAULT=0 /Isrc tests/host_setup_test.cpp src/core/config.cpp src/core/log.cpp src/net/joincode.cpp src/net/protocol.cpp /Fe:host_setup_test.exe /link ws2_32.lib
+          if errorlevel 1 exit /b 1
+          host_setup_test.exe
+          if errorlevel 1 exit /b 1
           cl /nologo /std:c++17 /EHsc /W4 /utf-8 /DNOMINMAX /DMECMP_DEBUG_KEYS=0 /DMECMP_VERBOSE_DEFAULT=0 /Isrc tests/main_server_config_test.cpp src/core/config.cpp src/core/log.cpp src/net/protocol.cpp /Fe:main_server_config_test.exe /link ws2_32.lib
           if errorlevel 1 exit /b 1
           main_server_config_test.exe
@@ -83,6 +87,16 @@ jobs:
           g++ -std=c++17 -Wall -Wextra -Isrc -fsanitize=address,undefined -fno-sanitize-recover=undefined -g \
             tests/replay_header_test.cpp -o replay_header_test
           ./replay_header_test
+      - name: Client spawner order test (Linux, sanitizers)
+        run: |
+          g++ -std=c++17 -Wall -Wextra -Isrc -fsanitize=address,undefined -fno-sanitize-recover=undefined -g \
+            tests/spawn_order_test.cpp -o spawn_order_test
+          ./spawn_order_test
+      - name: Data registry test (Linux, sanitizers)
+        run: |
+          g++ -std=c++17 -Wall -Wextra -Isrc -fsanitize=address,undefined -fno-sanitize-recover=undefined -g \
+            tests/data_registry_test.cpp -o data_registry_test
+          ./data_registry_test
 
   windows-build:
     runs-on: ubuntu-24.04

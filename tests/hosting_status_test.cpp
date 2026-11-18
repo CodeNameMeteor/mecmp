@@ -62,6 +62,11 @@ int main() {
     CHECK(!hostStatus().active);
     CHECK(!publishRouterResult(12, 47801, mapped, true));
     CHECK(!publishHostResult(12, 47801, 0x08080808, 47801, false, false));
+    // UPnP error 718: only a mapping to this PC is replaced, never another device's (a second host on the network).
+    CHECK(upnp::mappingIsOurs("192.168.1.2", "192.168.1.2"));
+    CHECK(!upnp::mappingIsOurs("192.168.1.7", "192.168.1.2"));
+    CHECK(!upnp::mappingIsOurs("", "192.168.1.2"));
+    CHECK(!upnp::mappingIsOurs("", ""));
     std::printf("hosting status tests: %d failure(s)\n", failures);
     return failures ? 1 : 0;
 }

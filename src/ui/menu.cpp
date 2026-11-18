@@ -260,6 +260,7 @@ void sessionSection() {
 char g_addServer[128] = {};
 void serversSection() {
     ImGui::SeparatorText("Servers");
+    quickJoinSection(); // the official server first, above the saved ones
     const auto cfg = config::get();
     std::vector<std::string> saved = net::servers::split(cfg->servers);
     auto entries = net::servers::snapshot();
@@ -1827,7 +1828,6 @@ void draw(bool open) {
     char title[64];
     snprintf(title, sizeof(title), "MECMP %s###mecmp", app::kVersion);
     ImGui::Begin(title, nullptr, ImGuiWindowFlags_NoCollapse);
-    quickJoinSection();
     if (ImGui::BeginTabBar("##tabs")) {
         if (ImGui::BeginTabItem("Session")) {
             sessionSection();

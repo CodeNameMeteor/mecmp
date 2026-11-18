@@ -646,6 +646,10 @@ static void compareWithRegistry(uintptr_t vt, const std::map<std::string, std::v
          "%llu objects with the piece vtable are outside it",
          first, last, static_cast<unsigned long long>(inRange), static_cast<unsigned long long>(inRangeOtherVtable),
          static_cast<unsigned long long>(vtableOutOfRange));
+    if (pickedMissing)
+        MLOG("registry check: the game never registers data from partitions 0x%x..0x%x (FUN_143119500), so pieces loaded only there "
+             "are expected to be missing from the registry",
+             Registry_SkippedPartitionFirst, Registry_SkippedPartitionFirst + Registry_SkippedPartitionCount - 1);
     const bool match = pickedMissing == 0 && registryOnly == 0 && !pieces.empty();
     MLOG("registry check: %s: %llu objects in the registry, %llu pieces (class id %s), heap scan %llu names, picked pieces missing "
          "from the registry %llu, registry-only names %llu, registry names with several objects %llu (%u ms)",
@@ -913,8 +917,14 @@ bool catalogueFromRegistry(std::vector<Echo>& found) {
     std::vector<registry::Object> objs;
     if (!registry::objects(objs)) return false;
     const uintptr_t vt = rva(Vtbl_PamEchoCustomizationDefinitionsMeta);
+    // The class-id range read from the image is a second, independent way to pick the meta: it still works if the vtable constant
+    // is wrong (the vtable stayed unverified in game; the class id is read from the type info, Ghidra 2026-11-18).
+    const uint16_t first = mem::readOr<uint16_t>(rva(TI_PamEchoCustomizationDefinitionsMeta_ClassId)),
+                   last = mem::readOr<uint16_t>(rva(TI_PamEchoCustomizationDefinitionsMeta_LastSubClassId));
     for (const auto& o : objs)
-        if (mem::readOr<uintptr_t>(o.object) == vt && readCatalogueMeta(o.object, found)) return true;
+        if ((mem::readOr<uintptr_t>(o.object) == vt || registry::inClassRange(o.key, first, last)) &&
+            readCatalogueMeta(o.object, found))
+            return true;
     return false;
 }
 

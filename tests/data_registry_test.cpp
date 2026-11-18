@@ -36,6 +36,16 @@ int main() {
     CHECK(!plausibleTable(0x1004, 0x2004, 0x3004));
     CHECK(!plausibleTable(0x1000, 0x1008, 0x1010));
     CHECK(!plausibleTable(0x1000, 0x1000 + 16 * 100, 0x1000 + 16 * 100, 50));
+    // Class-id range (the echo catalogue meta: 0x071e..0x071e, read from the image).
+    const uint64_t meta = (uint64_t{0x30} << 40) | (uint64_t{0x071e} << 16) | 2;
+    CHECK(inClassRange(meta, 0x071e, 0x071e));
+    CHECK(!inClassRange(meta, 0x071f, 0x0720));
+    CHECK(inClassRange((uint64_t{1} << 40) | (uint64_t{0x0720} << 16), 0x071e, 0x0725)); // sub-class
+    CHECK(!inClassRange(meta, 0, 0xffff));                                              // range not read
+    // FUN_143119500 skips partitions 0x7d5..0xbbc (1000 ids).
+    CHECK(!partitionSkipped(0x7d4, 0x7d5, 1000) && partitionSkipped(0x7d5, 0x7d5, 1000));
+    CHECK(partitionSkipped(0xbbc, 0x7d5, 1000) && !partitionSkipped(0xbbd, 0x7d5, 1000));
+    CHECK(!partitionSkipped(3, 0x7d5, 1000));
     if (g_failures == 0) std::printf("data_registry_test: all passed\n");
     return g_failures ? 1 : 0;
 }

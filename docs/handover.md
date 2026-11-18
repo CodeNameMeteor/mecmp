@@ -1,10 +1,7 @@
 # Handover: GridNode implementation plan
 
 Source: `MECMP-implementation-plan-2026-11-15.md` (GridNode research against main 7195f45). The plan itself is not in the repo.
-**Nothing was compiled in the container that wrote this (no game toolchain). Items marked "tested" were run in game by the user.**
-In-game results so far (2026-11-16, solo test + server run, 4 logs, see progress.md "First/Second/Third in-game log"): startup,
-3.3 spawn hook, 2.2 pin, map close, level changes, checkpoint reload, time trials, look changes, outfits (Faith, prologue) and the
-registry piece list all behaved. Not run: 2.1 30-minute memory test, 2.4/2.5 bad-pose case, 2.8 cooldown, own_spawner research.
+**Nothing was compiled in the container that wrote this (no game toolchain) and only the items marked "tested" were run in game.**
 Per-item detail and the Ghidra evidence: `docs/progress.md` (look for the item number). Open research questions for another
 reader (Gemini): `docs/research-requests.md`.
 
@@ -22,10 +19,10 @@ Tested = the user ran it in game and reviewed the log. Untested = written, not r
 | 0.3 spawn cooldown | confirmed | refuses on +0xf0 > 0.01 and +0x108 bit 8 | "Part 0" |
 | 0.4 bus id value | partly | formula true for the spawn bus; MECMP reads character +0x28, which object that is is not shown | "Part 0", "Ghidra pass 2" |
 | 0.5 reference drop on look data | not supported | the add/release is on the spawn template's container, balanced; the apply path never touches +0x08 | "2.6" |
-| 0.6 attachment flag | partly | flag at entry +8 found and rewritten every update; hair as an entry and the flag's writer not shown | "0.6 / 3.6", "Ghidra pass 2" |
+| 0.6 attachment flag | refuted for hair | the flag exists, but the `+0x340` entries are cloth only; hair is a separate render handle (`+0x9c0`) | "Gemini answers R1-R10 checked" |
 | 0.7 slot 3 destroys a character | inconclusive | the destroyer found is `stopReplay` (unspawns the spawner's last character) | "Ghidra pass 2" |
 | 0.8 `ReplaySetup_Build` arguments | readable | needs the rig table; more fields than the setup depend on the data | "Part 0", "Updaters" |
-| 1.1 own spawner | no change | default off; a working one needs its own registered data (research); the lookup was read but equal-key order is not shown; `own_spawner=1` test decides | "Ghidra pass 2" |
+| 1.1 own spawner | not viable as designed | the bus slot for a data key is last-writer-wins and is emptied (not restored) when the spawner goes (`FUN_143150100`, `FUN_14314e290`); keep default off | "1.1 root cause found" |
 | 1.2 game takes ghosts back | no change | mechanism confirmed (StartReplay adopts the last character, StopReplay unspawns it); the 3.1 trigger and keep-last logic already cover it in logs | "Ghidra pass 2" |
 | 1.3 bus id claim | no change | the claim already uses a bus id only when unique; blocked on 0.4 | "0.4 / 1.3 / 3.2" |
 | 1.4 shared data patched in place | not done | needs the rig table or a patch-around-create change; both need a ghost-spawn game test and carry crash risk | "Part 0", "Updaters" |
@@ -43,9 +40,9 @@ Tested = the user ran it in game and reviewed the log. Untested = written, not r
 | 3.1 lifecycle trigger | done [main], tested | ServerPlayerChangedCharacterMessage; the plan's message is never sent locally | "3.1 correction" |
 | 3.2 claim window | no change | bus id unique-match already used | "0.4 / 1.3 / 3.2" |
 | 3.3 act at spawner insertion | done [branch], untested | 250 ms pass kept as a logged safety net; the OnHideMap double refresh stays until a test shows the net never fires | "3.3" |
-| 3.4 heap scans -> registry | partly [branch], **tested**: the look pieces the mod uses come from the registry (16 pieces, 0 ms, 3 levels), scan is the fallback | cleanup, registry reader, log-only comparison, look list from the registry; the piece scan and entity scans are NOT replaced (wait for MATCH logs; components not known to be in class lists) | "3.4 research", "3.4 additions" |
+| 3.4 heap scans -> registry | partly [branch], untested | cleanup, registry reader, log-only comparison, look list from the registry (meta also found by class id 0x071e); pieces in partitions 0x7d5..0xbbc are never registered; entity scans NOT replaced | "3.4 research", "Gemini answers R1-R10 checked" |
 | 3.5 player character from the player manager | done [main], tested in practice | spawner path kept as fallback | |
-| 3.6 parking -> attachment flag | not done | parking works today; hair-as-entry unproven; needs an in-game experiment | "0.6 / 3.6" |
+| 3.6 parking -> attachment flag | not done, flag will not work | hair is not an attachment entry; the other route is holding the hair handle at -1 (untested idea); parking stays | "Gemini answers R1-R10 checked" |
 | 3.7 UI system global | already in the code | the global is the source; the hook is a fallback that logs if they differ | "3.4 additions and 3.7" |
 | Map-close vanish (not in the plan) | done [main], tested | the game hides ghosts ~0.25 s after OnHideMap; setVisible hook + next-tick re-show | "Who hides a ghost: found" |
 | Part 4 (audit advice not to take) | not taken | as the plan says | |
@@ -57,9 +54,10 @@ Tested = the user ran it in game and reviewed the log. Untested = written, not r
 - The game hides ghost client characters ~0.25 s after OnHideMap (`PamClientCharacterEntity::vf2`, property 0x35bc69ab);
   the setVisible hook notices and the next tick shows the ghost again.
 - Parking (`kParkDepth`) hides hair that `setVisible(false)` leaves drawn; it stays until 3.6 is verified.
-- Risk to watch in 2.9: `ReplayPlayback_Stop` releases the decoder and the keyframe ring on the server tick. Ghidra shows no
-  message or unspawn inside it, but whether any other path (an end-of-playback callback) reacts to the state change was not read
-  (research request R6).
+- Risk to watch in 2.9: `ReplayPlayback_Stop` releases the decoder and the keyframe ring on the server tick. Checked (R6): it
+  sends no message and unspawns nothing, and the end-of-playback callback only runs from `ReplayPlayback_Tick`, not from Stop.
+  After Stop the decoder is null and Tick does nothing (its decode, pose and end blocks all need it). Left: whether MECMP's server
+  tick and the server component's update (`FUN_143971ac0`) are on one thread.
 - Ghidra names that are wrong or missing (not changed): 0x142105510 "JumpTuningRoot" is the registry's object vector;
   `FUN_143119500` registry add partition, `FUN_14311b8e0` remove partition, `FUN_143134420` add listener.
 
@@ -101,32 +99,11 @@ numbers. "never" = a log line that must not appear. Items overlap; one or two se
     This records whether 1.1's failure is real before the code goes (plan 1.1).
 15. **Hair hide (research, optional, needs a code change first).** 3.6 needs an experiment that sets the flag byte of every entry on
     a hidden ghost's customization component; not written yet (see "0.6 / 3.6" in progress.md).
+16. **Thread probe (R6.1).** Grep the log for `thread:`. If the server tick and the server replay update print the same id they
+    share a thread. No action needed otherwise; the probe only logs.
 
 ## Where the evidence is
 - `docs/progress.md`: results per item, in order; "Ghidra pass 2" has the latest reads (addresses, offsets, what was and was not
   shown).
 - `docs/research-requests.md`: the long reads that remain, written so another reader can answer them.
 - `docs/ARCHITECTURE.md`: the ghost pipeline notes (client-thread writes, setVisible hook, spawn trigger).
-
-## What is left (2026-11-16)
-- Tests not yet run: checklist 8 (30-minute memory), 5 (a client that rejects a pose), 7 (spawn cooldown), 14 (`own_spawner=1` result: known to
-  fail on the map echo, see progress "1.1"), 4 with a game city ghost adopted by a second player.
-- Code not done: 3.6 (hair via attachment flag), 1.4 (shared data patched in place), 1.1 (own spawner), 3.4 remainder (echo
-  look list and entity scans from the registry), 2.6 look cache across levels, 2.10 look-apply per-ghost time.
-- Research for 1.1, 1.4, 3.6, 3.4: `docs/research-requests.md` (R1-R10).
-- Fixed after the first test (all confirmed in game): game echoes in a T-pose after a level change (patch record kept across
-  levels), invisible after a checkpoint reload with your own look (piece scan waits for the player).
-
-## Research in flight (started 2026-11-16)
-The user gave `docs/research-requests.md` (R1-R10) to Gemini. Its answers are NOT in the repo yet. Next session:
-1. Ask the user for Gemini's answers (they may paste them or add a file).
-2. Treat every claim as a hypothesis (GridNode rule): check each in Ghidra (decompile the named function, read the bytes) before
-   it goes into `src/game/engine.h`, a comment or a doc as fact. Record per question: verified / wrong / not shown, with the address.
-3. Order of value: R3 + R10 (hair, unlocks 3.6), R8 (registry gaps, "level loaded" event), R9 (echo look list), then R1/R2/R4/R6/R7
-   (1.1, 1.4, 0.4, 2.9 safety, map-close writer), R5 (3.4 entity lists).
-4. What each answer would change in code: R3/R10 -> replace `kParkDepth` parking with an attachment flag (3.6); R8 -> read the piece
-   list at level-loaded instead of waiting for the player; R9 -> echo looks from the registry at every level start; R1/R2 -> own
-   spawner / copy the shared setup data (1.1, 1.4); R4 -> 0.4/1.3 bus-id claim; R6 -> keeps or drops 2.9; R7 -> removes the map-close
-   workaround; R5 -> replaces the entity heap scans.
-Status of the research answers: RECEIVED 2026-11-16, NOT verified (no Ghidra decompile tools in that session). Summary and a verification
-order are in progress.md "Gemini answers received". Biggest finding to verify first: hair is not a +0x340 entry (R10), so 3.6 as planned would not hide it.

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Look catalogue and diagnostics
+- The look catalogue is also found in the data registry by its class id (the catalogue meta's class range), not only by its
+  vtable. The registry never holds the pieces in partitions 0x7d5..0xbbc (the game's loader skips them); a log line says so
+  when a piece is missing for that reason.
+- The log now notes which thread runs the server tick, the server replay update, the client replay updater and the
+  recording updater (`thread:` lines, once each). Diagnostic only; no behaviour change.
+
 ### Ghost fixes (GridNode implementation plan, step 1-2)
 - The look pieces the mod needs (Faith's prologue, grid-link and tattoo pieces, the placeholder pieces) are read from the
   game's data registry instead of a 1-2 s memory scan; the scan stays as the fallback if any of them is missing.

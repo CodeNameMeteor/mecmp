@@ -18,6 +18,20 @@ inline uint16_t partitionOf(uint64_t key) { return static_cast<uint16_t>(key >> 
 inline uint16_t classIdOf(uint64_t key) { return static_cast<uint16_t>(key >> 16); }
 inline uint16_t indexOf(uint64_t key) { return static_cast<uint16_t>(key); }
 
+// A key belongs to a type when its class id is in the type's [classId, lastSubClassId] (sub-classes included). A zero first
+// id means the range was not read (the image layout differs): nothing matches.
+inline bool inClassRange(uint64_t key, uint16_t first, uint16_t last) {
+    const uint16_t c = classIdOf(key);
+    return first != 0 && c >= first && c <= last;
+}
+
+// The game's registry loader never registers data from partitions firstSkipped..firstSkipped+count-1 (FUN_143119500), so an
+// object that is loaded but absent from the registry may simply live in one of them. Constants: engine.h
+// Registry_SkippedPartition*.
+inline bool partitionSkipped(uint16_t partition, uint16_t firstSkipped, uint16_t count) {
+    return static_cast<uint16_t>(partition - firstSkipped) < count;
+}
+
 // The vector's three pointers must describe whole 16-byte entries, in order, and a count a registry can plausibly hold
 // (the PC game has a few thousand). A torn read (the loader grows the vector under its own lock, which we do not take)
 // or a changed layout fails this instead of being walked.

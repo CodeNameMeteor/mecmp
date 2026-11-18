@@ -216,6 +216,9 @@ constexpr size_t CRP_PlaybackState = 0x40, CRP_PlaybackForced = 0xb0, CRP_Setup 
 // time-trial runs and writes shared time trials (ReplayRecorder_SerializeRange 0x143970820) with its own setup, so it
 // is left as the game makes it (game/body_pose.h).
 constexpr uintptr_t Slot_ClientReplayRecordingUpdateAll = 0x141c48cb0;
+// PamServerReplayPlayerComponent update (calls ReplayPlayback_Tick); hooked only to log its thread (hooks.cpp).
+constexpr uintptr_t Slot_ServerReplayUpdate = 0x141c501e8;
+constexpr uintptr_t Fn_ServerReplayUpdate = 0x143971ac0;
 constexpr uintptr_t Fn_ClientReplayRecordingUpdateAll = 0x14394dac0;
 constexpr size_t RecComp_Recorder = 0x48, RecComp_PoseHandle = 0x58, RecComp_Skeleton = 0x98;
 constexpr size_t PoseHandle_LocalPose = 0x28;
@@ -277,6 +280,13 @@ constexpr uintptr_t Fn_Registry_AddListener = 0x143134420;
 constexpr uintptr_t TI_VisualUnlockAsset_ClassId = 0x14281e9b8, TI_VisualUnlockAsset_LastSubClassId = 0x14281e9ba;
 // PamEchoCustomizationDefinitionsMeta (the ghost look catalogue, +0x18 Array<PamEchoCustomizationData>): a data container.
 constexpr uintptr_t Vtbl_PamEchoCustomizationDefinitionsMeta = 0x141c96678;
+// Its class-id range (Ghidra 2026-11-18: bytes 1e 07 1e 07 at 0x142878628, TI_PamEchoCustomizationDefinitionsMeta, registered by
+// 0x1447670b0): classId == lastSubClassId == 0x071e. Selects the meta in the registry without trusting the vtable constant.
+constexpr uintptr_t TI_PamEchoCustomizationDefinitionsMeta_ClassId = 0x142878628,
+                    TI_PamEchoCustomizationDefinitionsMeta_LastSubClassId = 0x14287862a;
+// FUN_143119500 (Ghidra 2026-11-18) skips every partition with id 0x7d5..0xbbc (`999 < (u16)(id - 0x7d5)` guards the body): data
+// loaded only there is never in the registry, whatever it is. First id and count of that range.
+constexpr uint16_t Registry_SkippedPartitionFirst = 0x7d5, Registry_SkippedPartitionCount = 1000;
 // Entities of a class in a world: the head is at world + (classId + 6) * 0x10 (FUN_143164d50, ClassInfo_firstInWorld).
 constexpr size_t World_ClassHeads = 0x60, World_ClassHeadStride = 0x10;
 

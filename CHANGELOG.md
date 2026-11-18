@@ -2,8 +2,28 @@
 
 ## Unreleased
 
+### Look catalogue and diagnostics
+- The look catalogue is also found in the data registry by its class id (the catalogue meta's class range), not only by its
+  vtable. The registry never holds the pieces in partitions 0x7d5..0xbbc (the game's loader skips them); a log line says so
+  when a piece is missing for that reason.
+- The log now notes which thread runs the server tick, the server replay update, the client replay updater and the
+  recording updater (`thread:` lines, once each). Diagnostic only; no behaviour change.
+
 ### Ghost fixes (GridNode implementation plan, step 1-2)
+- The look pieces the mod needs (Faith's prologue, grid-link and tattoo pieces, the placeholder pieces) are read from the
+  game's data registry instead of a 1-2 s memory scan; the scan stays as the fallback if any of them is missing.
+- After reloading a checkpoint, "look like this in my own game too" no longer makes you invisible: the list of look pieces
+  is taken once the player is dressed in the new level (it used to be taken at level start, found no first-person
+  pieces and switched them off for the level).
+- The game's own echoes (map, time trial) no longer stand in a T-pose after a level change: the record that undoes the
+  shared player-data patch is kept across levels (it was cleared while the data stayed patched).
 - Ghost pose buffers are allocated once per ghost instead of on every bone-setup change (memory leak).
+- A ghost's client character is put ahead of the game's own (so the map's echo never takes a ghost) at the moment the game
+  adds it to its spawner, instead of up to 0.25 s later; the timed pass stays as a safety net.
+- A ghost taken over from the game's own replays has its recording stopped properly (decoder and keyframe buffer released)
+  instead of only its playback state being zeroed.
+- Custom ghost looks no longer copy the game preset's header (reference count and flags) into MECMP's own look data;
+  the count is set high and the no-free flag is set, so the game can never free MECMP's memory.
 - Faith's placeholder body pieces are put back to the game's own contents on a level change.
 - Ghost poses are no longer written from the render thread; if the client updater hook cannot be installed,
   ghosts stay server-driven.
@@ -19,6 +39,8 @@
   instead of after a fixed 3 s.
 - The pause-menu check reads the game's UI system global.
 - A pose is no longer written into a ghost whose client rejects it (bone count mismatch); the server replicates it again.
+- The body anchor of a ghost that is not yet driven every frame (or is parked) is pinned on the client update thread, not
+  from the server tick.
 - A ghost that the game hides when the map closes is shown again on the next tick (it used to stay gone for up to a
   second). The hook that sees this (`PamClientCharacterEntity::setVisible`) also logs the caller of the first 40 hides.
 - Ghosts spawn right after the game's player-spawned trigger (a character change on the server's player manager), without

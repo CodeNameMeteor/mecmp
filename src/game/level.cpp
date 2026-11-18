@@ -121,6 +121,12 @@ void patchPlayerData(uintptr_t c, bool ours) {
     if (ours) {
         if (list == targets) lastOursAt = GetTickCount();
         if (!vanillaTargets(list, 5, 52, 15)) return;
+        // One record per data object (its original list is the one to restore); a stale record at a reused address goes.
+        for (size_t i = 0; i < g_playerPatched.size(); ++i)
+            if (g_playerPatched[i].first == c) {
+                g_playerPatched.erase(g_playerPatched.begin() + static_cast<long>(i));
+                break;
+            }
         if (g_playerPatched.size() < 256) g_playerPatched.push_back({c, list});
         poke<uintptr_t>(c + 0x70, targets);
         lastOursAt = GetTickCount();
@@ -128,7 +134,11 @@ void patchPlayerData(uintptr_t c, bool ours) {
         return;
     }
     // A foreign client: vanilla again, unless one of ours was just made from this data and is still to be set up.
-    if (list != targets || GetTickCount() - lastOursAt < 2000) return;
+    if (list != targets) return;
+    if (GetTickCount() - lastOursAt < 2000) {
+        VLOG("patch: player data %p stays patched for now (one of ours was just made from it)", reinterpret_cast<void*>(c));
+        return;
+    }
     for (size_t i = 0; i < g_playerPatched.size(); ++i)
         if (g_playerPatched[i].first == c) {
             poke<uintptr_t>(c + 0x70, g_playerPatched[i].second);
@@ -136,6 +146,9 @@ void patchPlayerData(uintptr_t c, bool ours) {
             VLOG("patch: player data %p back to vanilla for a game ghost", reinterpret_cast<void*>(c));
             return;
         }
+    // Patched but no record to undo it with: the game's echoes (map, time trial) would play 23-bone recordings on the
+    // 85-bone list and stand in a T-pose.
+    MLOG("patch: player data %p is patched but not recorded; cannot restore it", reinterpret_cast<void*>(c));
 }
 
 // A spawner whose data names the player's or the ghost blueprint. `pooledData`: data shared by the
@@ -358,10 +371,8 @@ void spawnResult(void* spawner, bool gotCharacter) {
 void reset() {
     {
         std::lock_guard<std::mutex> lock(g_m);
-        {
-            std::lock_guard<std::mutex> patchLock(g_patchM);
-            g_playerPatched.clear();
-        }
+        // g_playerPatched is kept across levels: the data objects can outlive a level (a second level's patch found the
+        // list already patched, and with the record gone the game's own echoes could never be restored).
         g_playerSpawner = nullptr;
         g_ghostSpawner = nullptr;
         g_clientComps.clear();

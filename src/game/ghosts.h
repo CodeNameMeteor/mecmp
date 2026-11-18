@@ -46,6 +46,8 @@ void requestHideAll();        // F12: hide all ghosts and pause auto spawning
 // once more a moment later.
 void gameScreenClosed();
 void hookSetVisibleLog(); // diagnostic: logs the game's own hide calls on our ghost characters
+// Wraps the client spawner's add (onCharacterSpawned) so the list order is fixed as a ghost is added (3.3).
+void hookSpawnerAdd();
 void onPlayerSpawnedMessage(); // NetworkOnPlayerSpawnedMessage: the player's character is really in the level
 // Looks: each ghost shows its player's own look (sent with their name). Changes are picked up by the
 // tick and tried at once. Call this when the echo look list was found: looks that waited for it are

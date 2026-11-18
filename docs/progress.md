@@ -1,8 +1,12 @@
 # Progress: GridNode implementation plan (branch gn/implementation-plan)
 
-Plan: MECMP-implementation-plan-2026-11-15.md (against main 7195f45). Nothing here was compiled or game-tested.
+Plan: MECMP-implementation-plan-2026-11-15.md (against main 7195f45). PR #118 (first batch) is merged into main; the rest is in
+the draft PR after it. Nothing was compiled in the container; see docs/handover.md for the status table of every item, why each
+open item is open, and the test checklist. Open research questions: docs/research-requests.md.
 
-## Done (untested)
+The lists below are the working log, in the order the work was done. handover.md is the current summary.
+
+## Done (log; 3.1 and 3.5 tested, the rest untested)
 - Step 1: 1.5 (client spawner vtable comment: add +0xd8, remove +0xe0), 1.1 comment on `g_ownSpawner`,
   2.5 (skip ghost when pose read fails), 2.10 (`g_placed` duplicate push).
 - Step 2: 2.1 (`preparePose` allocates once at kMaxBones), 2.3 (render-thread fallback removed), 2.7
@@ -22,12 +26,14 @@ Plan: MECMP-implementation-plan-2026-11-15.md (against main 7195f45). Nothing he
   L4 explain the early deletion. UNVERIFIED: that this message goes through the SERVER manager and fires on every
   level load (GridNode only saw it at first boot). The log line "the player spawned message arrived" shows it.
 
-## Not done yet
-- 2.2 rest: the anchor/pose pin in `fixClient` (non-posing and parked ghosts) still runs on the server tick; it needs the
-  net state and the park position on the client thread.
-- 2.10 per-ghost look-apply time (`ghosts.cpp` `lastLookApply`): the static also caps mesh rebuilds to one per
-  tick; per-ghost `lookTriedAt` already exists. Unclear what the plan wants; left alone.
-- Steps 3-7 as in the plan; step 6/7 items wait on the Part 0 Ghidra checks.
+## Not done yet (updated 2026-11-15)
+- 3.6: replace the 1000 m parking hide with an attachment flag. Checked (see "0.6 / 3.6"), not implemented: needs a test
+  that the hair is one of the customization component's attachment entries.
+- 3.3 follow-up: remove the OnHideMap double refresh only after a game test shows the safety-net log line never fires.
+- 3.4 beyond the check below (replace the scans), 1.4 (shared data patched in place),
+  1.1 (own spawner), 2.10 per-ghost look-apply time (`lastLookApply`; unclear what the plan wants, left alone).
+- 2.6 third bullet: keep the look cache across levels (see "2.6").
+- 3.1 as first written here is superseded by "3.1 correction" below: the trigger is ServerPlayerChangedCharacterMessage.
 
 ## Part 0 results (Ghidra, MirrorsEdgeCatalyst_dump_SCY.exe, 2026-11-15)
 - 0.1 confirmed. Server replay component dtor (0x14396bb10, `this` = component - 0x30) frees only the CURRENT pointers:
@@ -57,7 +63,7 @@ Plan: MECMP-implementation-plan-2026-11-15.md (against main 7195f45). Nothing he
   table at +0xf0); a5 = root bone id or 0xffffffff; setup = out struct (+0x00/+0x18 count, +0x08/+0x20 arena,
   +0x10 index array, +0x28 inverse map, +0x38 parent array, +0x78 flags). Needs a4 (the rig): 1.4 option 1 is feasible
   only if MECMP can get that object from the client component's data.
-- 0.6 not checked.
+- 0.6 checked 2026-11-15, see "Ghidra pass 2" at the end of this file. 0.1, 0.2, 0.4, 0.7 also have updates there.
 
 ## Updaters (GridNode scratch/block-a-2026-11-15.md, spot-checked in Ghidra) - answers question A2
 Checked: `updateAll` 0x14394da40 walks only ITS OWN component list (updater +0x28/+0x30) and calls
@@ -141,3 +147,333 @@ the city-ghost spawner, both 992a50; earlier single ghosts cac3a0, 16c7d60, ...)
 not that field: GridNode's reading holds for what MECMP uses. The claim code already copes: a bus-id match is used only
 when exactly one ghost is waiting for its client character; two waiting ghosts fall back to the claim window. No code change.
 Unchecked: which object character +0x28 points to.
+
+### 2.2 rest (done, untested)
+`fixClient` is gone: the server tick calls `setPin` (stores the anchor position in the ghost under g_m) and
+`beforeClientReplayUpdate` writes it with `pinAnchor` on the client update thread, under the same condition as before (not
+once renderFrame drives the pose every frame). A parked ghost's anchor moves the same way. Test: hide a ghost (player leaves
+or F12) and show it again; the body should drop below the map and come back, and no ghost should be left standing where the
+player was.
+
+### 0.6 / 3.6 (Ghidra, 2026-11-15): checked, not implemented
+`fb::PamClientCharacterCustomizationComponent::vf64` (0x14391cf60) runs every update: after the base `vf64` it walks the
+16-byte entries of the vector at component +0x340/+0x348 and writes `entry[0] + 0xca = (entry[8] == 0 && FUN_143912b50() == 0)`.
+So an attachment's visibility byte is rewritten each update from a flag at entry +8: a nonzero flag would keep it hidden
+without a per-frame write. The mesh builder (0x143947e10) only bakes component +0x334 / +0x335 into each render instance when
+it is built (+0x100 and the 0x80 flag), so those are no runtime switch.
+Not shown: that the hair is one of those entries, what else sets entry +8, or what FUN_143912b50 returns for a ghost. Parking
+(kParkDepth / kParkMs) stays until a test confirms it: set entry +8 of every entry on a hidden ghost from the client updater
+hook and look whether the hair goes. Plan 3.6 itself says parking works today.
+
+### 2.6 (done, untested; gate 0.5 checked in Ghidra, 2026-11-15)
+Gate 0.5: `onCharacterSpawned` (0x1432aa460) does add and release a reference, but on the spawn template's data container
+(spawner +0x30 -> vtbl[1]), not on our CustomizeCharacterData, and the pair is balanced. The apply path
+(`PamServerCharacterEntity_applyCustomization` 0x14336cf00 -> `applyCustomizeData` 0x14336c860) only reads +0x18, +0x20,
++0x30, +0x31 and never touches +0x08. So no extra reference is needed to keep the data alive.
+`DataContainer_release` (0x142a91cd0): +0x08 is a u16 reference count and +0x0a u16 flags; at zero it runs the destructor and,
+without flag 0x2000, poolFrees the object. `makeCustomization` now copies the preset from +0x18 (not its header) and sets
+count 0x4000 and flags 0x2000 itself, so a stray release can neither reach zero nor free our calloc memory.
+Not done: keeping the cache across levels keyed by asset name. The cached data points at the old level's VisualUnlockAssets,
+which may be gone; reuse needs a check that the pieces still exist. The per-level leak stays (one small block set per look).
+
+### 2.9 (done, untested)
+`drive` no longer only writes `SRP_PlaybackState = 0`: `stopServerPlayback` calls `ReplayPlayback_Stop` (0x143970cc0, on
+component + 0x30) when the state is non-zero, then writes 0. Ghidra: Stop does nothing when state (+8) is 0; otherwise it
+releases the decoder (+0x30, vtable +0xb8, poolFree), zeroes +0x30/+0x10/+0x20/+0x08 and frees the keyframe ring (+0x48).
+So a ghost adopted from the game with a loaded recording no longer keeps both. The client keeps the plain write (plan H8:
+the client's stop tells the game the replay is done). The call is guarded by `fingerprint::checkReplayStop()` (first 12
+bytes, from the dump); on a mismatch it logs and falls back to the old write. Unverified: that no game thread uses the ring
+while the server tick frees it (the old write had the same kind of race, but never freed anything). Test: join with a second
+player, look for a ghost that was adopted from the city ghosts (not our own spawner); it should follow the player as before,
+and the log should show no "build check: ReplayPlayback_Stop" line.
+
+### 3.3 (done, untested)
+`ClientCharacterSpawnEntity` vtable +0xd8 (`onCharacterSpawned`, 0x1432aa460, Ghidra: applies the spawn template to the
+character, then `ClientSpawnEntity_addSpawned`) is wrapped by `onCharacterSpawnedHook` (`hookSpawnerAdd`, installed next to
+`hookSetVisibleLog`; only if the slot still holds that function, else it logs and does nothing). After the game's add it
+reorders that one spawner's list: our ghost characters first, the game's own last (`gameCharactersLast`, `game/spawn_order.h`,
+host test `tests/spawn_order_test.cpp`, passes). Our character is claimed when it is created, which is before this add, so
+it is already known. The hook uses try_lock on g_m and skips on contention. The 250 ms pass stays as a safety net and its log
+line now says "reordered by the safety net". The OnHideMap double refresh is NOT removed (the plan: only after a game test
+shows the safety net never fires).
+Unverified: that the claim really happens before the add in every spawn path (the log line shows it if not), and which
+thread calls the add.
+
+### 3.4 research and check (Ghidra 2026-11-15; check done, untested; scans NOT replaced yet)
+The plan's "object table 0x142105510" is real but is a field, not the registry. The registry object is at 0x1421054b0
+(`Registry_Object`); Ghidra's label "JumpTuningRoot" on 0x142105510 is wrong. From `FUN_143119500` (adds a loaded partition's
+containers, called with the partition's container array at +0x18 and a u16 partition id) and `FUN_14311b8e0` (removes them):
+- 0x142105510 / +8 / +0x10: begin / end / capacity of a sorted vector of 16-byte entries `{u64 key, DataContainer*}`;
+  key = partition << 40 | classId << 16 | index; classId = u16 at +0x28 of the object's type (the object's vtable slot 0, as in
+  `Registry::typeOf`). The runtime dump has begin 0x14e7a1110, end 0x14e7a9b10 = 2208 entries (GridNode counted 3,618 in a level).
+- 0x1421054b0 / +8 / +0x10: a second sorted vector, 8-byte {u32 partition << 16 | classId, u16 running index} (the per-class counter).
+- 0x1421054e0: red-black tree of all container pointers (count at 0x142105500). 0x142105540: red-black tree of listeners (node +0x20
+  context, +0x28 function); `0x143134420(registry, &{context, fn})` inserts into it. Dispatch (both functions): `fn(context,
+  vector<DataContainer*>*, u16 partition, bool added)`: 1 on load, 0 on unload (read from the call, not verified in game).
+- The loader holds a lock around all of this (0x1423f7390, taken by FUN_142a9f970, released by FUN_142aa1840). The mod does not
+  take it, so a read can be torn while a level loads: `registry::objects` checks the three pointers, and callers check each object.
+- Entities (`FUN_143164d50`, ClassInfo_firstInWorld): the head of a class's list in a world is the pointer at
+  `world + (classId + 6) * 0x10`. Not followed further (`nextSubclass` not read). Components are still not known to be in such lists (T5).
+Done in code (no behaviour change): `models::reset()` now clears `g_seen` (the look-picker entities of the old level; it runs
+before the new level's entities are created, like the other factory-hooked lists cleared in `level::reset`);
+`game/data_registry.h/.cpp` reads the table (engine.h `Registry_*`); `findPieces` ends its heap scan with `compareWithRegistry`,
+which logs "registry check: MATCH" when the registry holds exactly the live pieces the scan picked and none it missed (else
+"DIFFERENT (send this log)" with up to five names each way, and the class id of `VisualUnlockAsset`). Host test:
+`tests/data_registry_test.cpp` (key decoding, table plausibility; passes).
+Next, only after MATCH logs from a few levels: replace the scan in `findPieces` with the registry (keep the scan as a fallback
+that logs when used), then a listener (`Fn_Registry_AddListener`) for unloads; then `scanForCatalogue`; entities last.
+
+## Ghidra pass 2 (2026-11-15, MirrorsEdgeCatalyst_dump_SCY.exe; no code changed)
+Read in the decompiler only; nothing here was seen in game.
+
+**0.1 (rest): confirmed.** `Arena_allocFromMember` (0x142a647d0): when `*arenaMember` is null it stores `FUN_142a66490()` there and
+allocates from it. That function returns the arena for the page the pointer belongs to, else the global default arena object
+(vtable object 0x1423606d0, the same one the bus lookups pass). So a null member means the shared default arena, and the pose
+buffers `preparePose` allocates (2.1) come from it.
+
+**0.2 (rest): confirmed.** The only consumer of CRP_CountOk (+0x2e4) and +0x2e5 is `PamClientReplayPlayerComponent_update`
+(0x1439501a0): `ReplayPlayback_Tick` runs every update; the received pose (+0x180) is copied to +0x1d8 and the body placed
+only when BOTH flags are set (+0x2e6 skipRoot picks the placing path). A pose with the wrong count is not applied; there is no
+other effect. 2.4's `continue` is therefore exactly "this client ignores it".
+
+**0.4 (rest): partly.** `PamClientCharacterEntity::vf65` (0x143916b40) looks up its anim entity with the character's data
+(+0x30) as the key and a bus-like object as the last argument (Ghidra calls it `physicsHolder`; it is the +0x28 MECMP calls
+`Character_Bus`); it also copies `+0x335` from the character data (+0xe9) and `ghostShader` (+0x334) from data +0xe8, so +0x334/+0x335
+are per-entity flags set at init, as 0.6 assumed. `PamServerReplayEntity` keeps its data at +0x28 and its bus at +0x20 (one slot
+earlier than the character). Still not shown: whether the character's +0x28 object is the spawn bus or a child bus.
+
+**0.6: partly confirmed.**
+- `vf64` of `PamClientCharacterCustomizationComponent` (0x14391cf60) and the base `ClientCharacterCustomizationComponent::vf64`
+  (0x14322aad0) both write `attachment + 0xca = (entry.flag @ +8 == 0 && hideAll == 0)` for every 16-byte entry
+  `{attachment*, flag}` of the vector at component +0x340/+0x348, every update. The base one also calls the attachment's
+  vtable +200 (its update) first. So a nonzero flag keeps an attachment hidden for as long as the flag stays.
+- `hideAll` is `FUN_143912b50` (0x143912b50): 1 when a global manager (FUN_143269ae0, vtable +200 -> FUN_14319d9b0) says so;
+  else for a component with a player at +0x238 (+0x1398 clear, +0x1520 bit 2) a value from the player's state; else the
+  result of vtable +0x78 of the object at component +0x1d8 (not read). For a ghost (no player) the last path decides: unknown.
+- The entries are filled through the component's vtable +0x208 from the character's `VisualUnlockAsset` list (field +0x60),
+  so a hair piece, which is a VisualUnlockAsset, very likely is an entry. Not proven; nothing was found that writes the flag
+  at +8 (no direct write in the customization component code range), so what sets it is unknown.
+- `vf4` (0x143911510) forwards six message ids (0x37848c36, -0x45ef1ee0, -0x21db91a7, 0x28161398, 0x71ade322, 0x77da2e7a) to
+  every attachment (handlers FUN_14304e580, 1430503a0, 14304ed30, 14304e480, 14304ffd0, 1430502b0): enable/disable-style
+  handlers that set a state word at +0xc6 and call the attachment's sub-object at +0x68 (vtable +0x88 / +0x60). Another way to
+  hide an attachment, not tried.
+- For 3.6: a test in game is still needed (set the flag byte of every entry on a hidden ghost from the client updater hook and
+  see whether the hair goes). The Ghidra side supports it; it cannot prove the hair is an entry.
+
+**0.7: inconclusive, but the destroyer is found.** The code that removes a replay ghost is `PamServerReplayEntity_stopReplay`
+(0x1439741d0): it finds the spawner by link 0xa695a747 (data key in the bus) and calls the spawner's vtable +0x108 (unspawn)
+on its LAST spawned character. Slot 3 (0x143971b80) was not shown to destroy anything.
+
+**1.2: confirmed in both directions.** `PamServerReplayEntity_startReplay` (0x14396e8b0): finds the spawner the same way and
+spawns (vtable +0xd0) only when `ServerSpawnEntity_getLastSpawnedCharacter` is null; otherwise it returns that character
+(adopts it). `stopReplay` unspawns the last one. So while the city ghost spawner's list holds only MECMP ghosts, the game's next
+StartReplay adopts one and the next StopReplay removes it. This is the plan's mechanism exactly.
+
+**1.1: partly.** The spawner lookup (`FUN_14311c850` -> `FUN_143145050` -> `FUN_14314e090`) is a binary search (lower bound) in
+a bus's sorted key array (bus +0x68 -> +0xd0, or +0xf8 in the other mode), parallel entity array at bus +0x40; it returns ONE entity
+and walks to the parent bus when the key is absent. A second spawner with the same data key in the same bus therefore sits next
+to the game's in that array; which of the two a lower-bound search returns depends on how the registration inserts equal
+keys, which this read does not show. GridNode's "found instead of" is plausible, not shown. The plan's test (`own_spawner=1`
+with the map open) still decides it. Also: the registry's "register" function is the partition loader `FUN_143119500` (adds a
+whole partition's containers, 3.4 section above), so registering one custom data object means building a partition-like
+container array; not read further.
+
+**3.4 (rest).**
+- The look catalogue's data class is `fb::PamEchoCustomizationDefinitionsMeta`, vtable 0x141c96678; it is a data container, so the
+  registry should hold it. `scanForCatalogue` could then read the registry for that vtable instead of scanning for the picker
+  entity's vtable.
+- The class-id range of a type can be read from the image: `TI_VisualUnlockAsset.classId` is the u16 at 0x14281e9b8 and
+  `lastSubClassId` at 0x14281e9ba. A registry entry belongs to the class when `classIdOf(key)` is in that range (sub-classes
+  included), so findPieces would not need MECMP's own vtable guess (`g_pieceVtable`).
+- Entities: the head of a class's list in a world is at `world + (classId + 6) * 0x10` (`FUN_143164d50`). `ClassInfo_nextSubclass`
+  and whether replay components are in those lists (T5) were not read.
+- Ghidra labels to fix by the user (not changed here): 0x142105510 "JumpTuningRoot" is the registry's object vector;
+  `FUN_143119500` = registry add partition, `FUN_14311b8e0` = registry remove partition, `FUN_143134420` = registry add listener.
+
+### 3.4 additions and 3.7 (2026-11-15, after Ghidra pass 2; untested)
+- `registry check` now also logs the class-id range of `VisualUnlockAsset` read from the image (engine.h
+  `TI_VisualUnlockAsset_ClassId` / `_LastSubClassId`): how many registry objects fall in it, how many of those have another vtable
+  (sub-classes), and how many objects with the piece vtable are outside it. Log only.
+- `findEchoes` now tries the registry before the heap scan: `catalogueFromRegistry` looks for a `PamEchoCustomizationDefinitionsMeta`
+  (vtable 0x141c96678, engine.h `Vtbl_PamEchoCustomizationDefinitionsMeta`) and reads its catalogue with the same code as the picker
+  entity path (`readCatalogueMeta`). It is read-only and throttled to once a second; an unreadable table or no meta found falls
+  through to the scan as before. Log: "model: N ghost looks found from the data registry". UNVERIFIED: that the vtable constant is the
+  object's first qword (the symbol address of the vftable, same convention as the other `Vtbl_` constants) and that the registry's
+  meta holds the same list as the picker entity's. If the log says "by memory scan" every time, the constant or the registry path
+  missed; if the look list differs from before, this is the cause.
+- 2.10 look-apply: left as is. `lastLookApply` is the intended "one mesh rebuild per tick" throttle (its comment says so); the
+  per-ghost retry already uses `g.lookTriedAt`.
+- 3.7 was already done in the code: `gameMenuOpen` reads the global (0x1424157f0) and the update hook is only a fallback that logs
+  once ("UI system global ... differs") if they ever disagree. The hook can be dropped once a game log shows no such line.
+
+## First in-game log (2026-11-16)
+Server run (`mecmp.log`, 10:11-10:25) and an `own_spawner=1` run (10:27-10:28). Checklist items 1, 11, 12 passed
+(all hooks installed, no build-check lines; registry check MATCH on two of three levels; look list from a time-trial marker).
+Items 2/3/10 looked right to the user; the game's own map echo and time-trial echo stood in a T-pose.
+- Cause (likely, from the log): `patchPlayerData` patches the shared player data for our ghost and undoes it when the game makes
+  its own client replay. Server run: the first level patched ("patched for our ghost" 10:11:53), `reset()` then cleared the
+  undo record, and later levels logged no patch line (list already patched, so no new record). The time trial at 10:23:26 and
+  10:23:52 logged "not one of ours" with no "back to vanilla" line. The `own_spawner=1` run (first level) did revert.
+  Fix: the record is kept across levels, one per data object; new log lines say when the revert is skipped or impossible.
+  Not tested.
+- `own_spawner=1`: the time-trial ghost was fine; the map's own ghost spawned and vanished at once. Already known not to work
+  (progress "1.1"): a second spawner on the same data/bus is found instead of the game's. No change.
+- Registry check DIFFERENT on the 2nd level load (10:24:37, 96 objects vs 91 scanned): taken before the level's look data
+  finished loading (0 ms, "first-person flag not as expected"); a later check in that level did not run. Open.
+
+## Second in-game log (2026-11-16, after the patch-record fix)
+- The T-pose fix worked: "back to vanilla for a game ghost" now logs at both time trials (10:34:11, 10:35:07) and the game's echoes play.
+- Checkpoint reload + "look like this in my own game too" made the player invisible. Log: the reload's piece scan ran 0.7 s after
+  the level started, before the player had a character ("look: 89 look pieces are loaded ... first-person flag not as expected");
+  the own look then had 1 piece instead of 2 (no first-person twin), kept for the whole level. Fix: `findPieces()` waits until the
+  player's own pieces are known (30 s at most). Not tested. Test: reload a checkpoint with an echo look on; the log should say
+  "look: N look pieces are loaded" after "the player got a character", without "first-person flag not as expected", and the own
+  look should show "(2 pieces)".
+- Registry check DIFFERENT at that early moment (86 vs 89): same early timing; look for MATCH once the scan waits.
+
+## Third in-game log (2026-11-16): confirmed
+- Checkpoint reload with an echo look: the piece scan now ran after the player's character (10:38:03, "123 look pieces", registry
+  MATCH 3073 objects) and the own look had 2 pieces (10:38:04). Player visible. Patch undone before the time trial (10:38:23).
+- First level of that run: registry check DIFFERENT (137 registry pieces vs 138 scanned; 5 picked pieces not in the registry,
+  all other characters' pieces, e.g. female_midcaste_02, black_november_01). So the registry list can lack pieces the player
+  wears or others hold; it stays log-only. Open: why those pieces are not in the registry (other partition or class id).
+
+## 3.4: look pieces from the registry (2026-11-16, not tested)
+Decision (user): only Faith's prologue/grid-link/tattoo pieces and the "ErrorTemplate" placeholders (twins) are needed; echo looks
+come from their own data. `piecesFromRegistry()` takes exactly those from the registry (same live/sane pick as the scan) and
+`findPieces()` uses it first; if the registry is unreadable or any needed piece is missing it logs why (verbose) and runs the old
+heap scan + the log-only comparison. Test: switch levels and reload a checkpoint; expect "look: N look pieces taken from the data
+registry (x ms ...)" and the own look at "(2 pieces)". "look: N look pieces are loaded (... s" means the fallback ran: send the
+verbose line "is not in the registry".
+
+## Gemini answers R1-R10 checked in Ghidra (2026-11-18; code change: 3.4 only)
+Source: `gemini-answers.md` (answers to `Claude outputs/gemini-questions-2026-11-16.md`). Every cited address was decompiled or
+read again. Result: 8 of 10 answers hold as written; two need a correction (below). Nothing was seen in game.
+
+**Corrections to the answers**
+- R1.2 cites `0x143131940` as the equal-key lookup. It is not the spawner lookup: it is the property-connection dispatch (calls
+  `EntityBus_getPropertyContext`, `TypeInfo_getClassIdRange`, then runs `FUN_14311c170` on EVERY equal-key entry). The spawner lookup
+  is `FUN_14314e090` (bus +0x68 -> +0xd0 / +0xf8, u64 keys): a lower_bound that returns the first equal key. That part of the
+  answer is right, but which spawner sits first among equal keys is decided by the insertion, which is not shown. 1.1 stays blocked.
+- R1.3 (equal keys skipped, per-class index) is about the REGISTRY vector at 0x142105510, a different table from the bus key array
+  above, so it says nothing about two spawners with the same data key. R1.1's "call `FUN_143119500` with a synthetic partition"
+  stays a hypothesis: the function also takes the loader lock, writes the class-index table and calls every registry listener
+  with the partition id.
+
+**Verified (all match the decompiler)**
+- R1.1 / R5.2: `FUN_143119500` guard `999 < (u16)(id - 0x7d5)`; key = `(partition * 0x1000000 + classId) * 0x10000 + index`;
+  callers `FUN_143138e00` <- `FUN_1432f63d0`. R5.3: first qword at 0x1421054b0 is 0x14adc7770 (a vector header, no vtable).
+- R2.1 / R2.2: `vf37` (0x14394cac0) passes `(arena, &data+0x70, &data+0x78, rig, 0xffffffff, setup)`; the rig is built by `FUN_142fc2a30`
+  and kept at component +0x1d0; pose buffer `(count*0x20 + 0x7f) & -0x80` at +0x1d8; received-pose vector resized to count;
+  `ReplayKeyframeRing_Alloc` stride `(bones-1)*0x20 + 0x30`. So 1.4 option 1 (rebuild the setup) needs `ReplaySetup_Build` PLUS the
+  pose buffer and the received-pose vector, as progress "Updaters" said; the rig pointer itself is now known to be readable.
+- R3.1-R3.3 / R10: the `+0x340` vector holds only `ClothEntity*` (`FUN_14321ded0`, entry `{ClothEntity*, u8 firstPersonFlag}`).
+  Hair is NOT one of those entries: `PamClientCharacterCustomizationComponent::vf65` (0x14390ef80) puts it into
+  `DAT_14255b830` (a separate morph subsystem) and stores an int handle in `this + 0x9c0..0x9c8` (3P) / `+0x8a0..0x8a8` (1P); the
+  render submit (0x142d44a70) attaches it to the render object at +0x170 when the handle is not -1. `vf64` never touches it.
+  The six attachment-event ids in `vf4` map to the helpers as listed in the answer. `0x14390ed90` returns 1 unless the owner at
+  +0x60 has +0x1398 clear and +0x1520 bit 2 set (that the ghost's +0x60 is 0 follows the code, not seen in game).
+- R4.1 / R4.2: the `SpatialEntity` ctor (0x1431702f0) stores `*param_2` (an `EntityBus*`, add-ref'd) at `+0x28`;
+  `ClientSpawnEntity_addSpawned` copies `last->+0x28` into the spawner's `lastSpawnedBus`. Still not shown: whether that bus is the
+  spawn bus or a child bus, and which field gives MECMP's constant bus id.
+- R6: `ReplayPlayback_Stop` sends no message and unspawns nothing; `ReplayPlayback_Tick` calls it and then slot +0x18 (an optional
+  callback at playback +0x2b0 / +0x2b8) only at end of playback. MECMP's `stopServerPlayback` calls Stop directly, so that callback is
+  not run. Not answered: whether Tick on the same component can run on another thread while MECMP calls Stop.
+- R7: `vf2` (0x143919960) handles 0x35bc69ab by reading the bus property and calling `setVisible`; the writer is still not found.
+- R9: `TI_PamEchoCustomizationDefinitionsMeta` classId = lastSubClassId = 0x071e (bytes `1e 07 1e 07` at 0x142878628).
+
+**What changed in the code (3.4 only, untested)**
+- `catalogueFromRegistry` now also accepts a registry object whose class id is in the meta's range (engine.h
+  `TI_PamEchoCustomizationDefinitionsMeta_*`), not only one with the vtable constant, which was never confirmed in game.
+- R8.1 explains the open "picked pieces not in the registry" cases (progress "Third in-game log"): data loaded only in partitions
+  0x7d5..0xbbc is never registered. `compareWithRegistry` logs that when pieces are missing; engine.h
+  `Registry_SkippedPartition*`, helpers `inClassRange` / `partitionSkipped` in `data_registry.h`, host test extended (passes).
+
+**Decided from the answers (no code)**
+- 3.6: parking stays. The plan's attachment flag does not reach the hair (see R3/R10). The alternative that the code supports is
+  the hair handle: while a ghost is hidden, the customization component's handle vector (`+0x9c0..0x9c8`) held at -1 would keep the
+  hair out of the render attach. `vf66` frees those handles, so they would have to be restored before it runs. Needs a game test.
+- 1.1 and 1.3: no change. 1.4: still not done (needs the rig pointer, the pose buffer and the received-pose vector redone; crash risk).
+- 2.9: the "does Stop raise a message" risk is answered (no); thread safety against `ReplayPlayback_Tick` stays untested.
+
+### Follow-up reads (2026-11-18, same session; no code change)
+- **R6.1 (Tick vs Stop): mostly answered.** `ReplayPlayback_Tick` has two code callers: `PamClientReplayPlayerComponent_update`
+  (0x1439501a0, client) and `FUN_143971ac0` (0x143971ac0, `PamServerReplayPlayerComponent`: reads a float property from the entity bus
+  and calls Tick with it). So the server-side Tick runs from the server component's own update. `ReplayPlayback_Stop` callers: Tick,
+  `ReplayPlayback_Restart` (0x143972e20) and `FUN_143973b50` (Stop + the +0x18 callback). After MECMP's Stop the decoder (+0x30) is 0,
+  and Tick's decode and pose blocks and its end-of-playback block all need it non-zero, so a Tick after Stop does nothing. Not shown:
+  whether MECMP's server tick and the server component update run on one thread (no overlap) or two.
+- **R7 (who writes 0x35bc69ab): not findable from code.** The constant is compared in 13 places, every one a message/property handler
+  that READS it (`vf2` of PamClientCharacterEntity 0x143919960 and 0x14318dc70, 0x14318de90, 0x14376a4a0, 0x14376a660, 0x143935630,
+  0x14394e040, 0x14394e280, 0x143b08e50, 0x143b31b80; plain handlers 0x14318e400, 0x14325a1f0, 0x14325a360). So it is a generic bool
+  property that many entity types follow (very likely "Visible"). A write goes through the property system by data connection, so the
+  writer is in the level / UI data, as Gemini said. The mod's setVisible re-show stays the fix.
+- **1.1 insertion order: still not found.** The functions around the lookup (0x14314c020..0x14314f740) that looked like inserts
+  (`FUN_14314c790`, `FUN_14314dbc0`) are float math; the code that adds entries to the bus key array (bus +0x68 -> +0xd0, parallel
+  entities at bus +0x40) was not located. Next: find writers of that vector from the bus constructor `0x1431411d0` side.
+
+### 1.1 root cause found: the bus entity slot is last-writer-wins (Ghidra 2026-11-18; no code change)
+How a spawner is found by its data key (`FUN_14311c850` -> `FUN_143145050` -> `FUN_14314e090`):
+- A bus has a sorted array of u64 keys that belongs to its TYPE (bus +0x68 -> +0xd0, or +0xf8 when flag 0x10000000 is set) and a
+  per-instance parallel array of entity pointers (bus +0x40). One slot per key; the key array is static data, not grown at runtime.
+- The writer is `FUN_143150100(bus, dataKey, entity)` (reached from the entity-link constructor `FUN_1431404a0` through
+  `FUN_143154400`): lower_bound on the key array, then `entities[idx] = entity` with NO check for an existing entry. Last
+  registration wins.
+- The remover `FUN_14314e290(bus, key, entity)` (called from the link destructor `FUN_1431425b0`): lower_bound, then it sets the slot
+  to 0 only if the slot still holds that entity. It does not put the previous holder back.
+So a second spawner registered under the game's city-ghost spawner key REPLACES the game's in the lookup (this is GridNode's "found
+instead of" and the vanishing map echo in the `own_spawner=1` run), and when ours is destroyed the slot is left EMPTY, so the game's
+own spawner can no longer be found by key for the rest of that bus's life. This replaces the "equal keys, lower_bound returns the
+first" picture from the Gemini answer (R1.2): there are no equal keys in that array. Consequences for 1.1: an own spawner must not
+register into the game's slot at all; a spawner under a different key is impossible without a key in the bus type's static array.
+Inference, not shown: that the game's spawner is registered only once, before ours.
+The `(key, id)` tables of 0x28-byte entries read by `FUN_142a88a10` / `FUN_142a91210` / `0x143131940` are a different thing: data-defined
+property-connection tables that are only looked up and dispatched on, never inserted into here.
+
+### R4.2 partial: where a bus id comes from (2026-11-18, no code change)
+- `fb_EntityBus_create(owner, parentBus, referenceData, id, a5, a6)` (0x143146e90) is the only caller of `entityObject_initWithParentTransform`; it has 22 callers.
+- Reference-object spawns (`FUN_1431c0690`) and `ClientEntity_spawnIntoBus` (0x1431c44b0) pass id 0, so those buses get low 25 bits 0x1ffff80.
+- `ServerCharacterSpawnEntity_createCharacter` (0x143390a30) passes `info->busId`; if that is 0xffffffff it uses `(*(u32*)(spawner+0xf0+4)) & 0x7f`.
+- Still open: the id for the client character bus (client factory path) and whether character +0x28 is this spawn bus or a child bus. The constant 992a50 is not explained yet.
+
+### R4.2 closed, R6.1 reduced to a runtime check (2026-11-18, no code change)
+- Every `fb_EntityBus_create` caller that builds a client-side bus passes id 0 (checked: `FUN_1431c0690`, `ClientEntity_spawnIntoBus`, `vf15` 0x14393f440, 0x143a19650, 0x1439b2d00, 0x1438fcbe0, 0x1438fce60, 0x143254d10, 0x142d37c30). Only `ServerCharacterSpawnEntity_createCharacter` passes a real id (`info->busId`, else `(spawner+0xf4) & 0x7f`).
+- So the bus id is not what makes the constant 992a50; plans 0.4/1.3 must not rely on bus id and need another source for that constant (open, not found in the bus creation path).
+- R6.1: `FUN_143971ac0` is referenced only from vtable data (0x141c501e8, 0x1427036c8) and `ReplayPlayback_Tick` only from the client update and that function. Static analysis cannot show the calling thread. To settle it, log `GetCurrentThreadId()` in MECMP's server tick and in a hook on slot 0x141c501e8 and compare.
+
+### R2 answered, 3.6 refined, thread probe added (2026-11-18)
+- R2.1 (`vf37` 0x14394cac0): ReplaySetup_Build's rig comes from the character's AntAnimatableEntity (comp+0x1c8): `FUN_142fc2a30(animCtx+0x148, data+0x80, skeletonKey)`, a shared lookup that is only read. Arrays a2/a3 are `data+0x70` / `data+0x78` of the replay player DATA container.
+- R2.2: pose buffer count = first u32 of the setup (the bone count): `count*0x20 + 0x7f & ~0x7f`, aligned 0x80, from the component arena `FUN_143164c80(comp)`, identity-initialised; the received-pose vector (+0x180/+0x188, 0x20 per entry) is resized to the same count.
+- R2.3: the setup (`expectedBones`) is embedded in each component and built from its arena, so it is per component. What is shared between ghosts of one level is the data container's `+0x70`/`+0x78` arrays: those are what 1.4 must copy before patching, not the setup.
+- 3.6: `PamClientCharacterCustomizationComponent::vf65` (0x14390ef80) appends one u64 per processed mesh/static-model pair to the vector [this+0x9c0, +0x9c8) (3P) or [+0x8a0, +0x8a8) (1P); the value is -1 when the pair has no valid handle. The render path `FUN_142d44a70` applies entries whose int value != -1 (sets target +0x170 and flag +0x178) while building the mesh set, so overwriting them later probably changes nothing for meshes already built. The -1 trick would have to run between vf65 and that build, at spawn. Not verified; parking stays.
+- Code: `hooks.cpp` now logs which thread runs the server tick, the server replay update (slot 0x141c501e8, `Slot_ServerReplayUpdate`/`Fn_ServerReplayUpdate` in `engine.h`), the client replay updater and the recording updater. Grep the log for `thread:` after the next test (R6.1). The hook calls straight through.
+
+### Static pass finished (2026-11-18, no code change beyond the thread probe)
+- 0.7: slot 3 of the server replay component (0x143971b80) sends message 0xc007a2e5 on the component's bus and calls 0x143167700; no
+  character destroy. Closed as "not a destroyer"; the only destroyer found stays `stopReplay`.
+- `hideAll` (`FUN_143912b50`): its last path calls vtable +0x78 of the sub-object at character +0x1d8 (vtable 0x141c3cbf0, set in `vf7` 0x14390dbe0), which is
+  `FUN_14390ed90`: returns 0 only if that sub-object's +0x60 object has +0x1398 == 0 and bit 2 of +0x1520 is set; otherwise 1. So for a character with no such object
+  (a ghost, if +0x60 is null) hideAll would be 1 and every attachment's +0xca would be 0, which does not match hair staying drawn. Which is true for a ghost
+  cannot be settled statically: it needs the game test (read `attachment+0xca` and `FUN_143912b50` for a ghost).
+- 2.6 (look cache across levels) and 3.4 (replay components in class lists, registry early-timing case): nothing more to read statically; both are decided by a game run
+  (the cached look data's lifetime, and whether the registry vector is populated when the mod first looks).
+- Open for the game test only: R6.1 (probe added), hideAll/+0xca for a ghost, 3.6 timing, 1.1 own spawner (item 14), 3.4 early timing.
+
+### R6.1 answered by the game test (2026-11-18, log 09:47, own_spawner=0)
+- Server tick (`ServerGameWorld::postUpdate`): thread 28388. Server replay update (`FUN_143971ac0`, first run when the first server replay component existed): thread 28388, the same thread as the tick.
+- Client replay updater and the client recording updater: thread 25208, also where the game's `setVisible` of ghosts ran (`caller 0x1439199c1, thread 25208`).
+- So MECMP's server tick and the server replay update are one thread (no lock needed between them); the client updater, recorder and setVisible are a second thread.
+- Same run: `look: 16 look pieces taken from the data registry` on every level load; bus ids differ per spawn (1ac5a50, 1bf4a40, 14fb60), client and server ids matched every time.
+
+### own_spawner=1 game test (2026-11-18, log 09:52)
+- Result: the ghost did not appear on the map's echo screen at all, matching the 1.1 root cause (a second spawner on the game's key takes the bus slot). 1.1 is closed as not viable; `own_spawner` stays 0.
+- The log: `own ghost spawner ... made from city-ghost spawner ... (data 2FAAB08A0, bus 16750B08; holds 0 after init)`; the ghost's bus id (ab08a0) comes from that data, not from a fresh id; `own spawner holds 1, count 0`.
+- On map close the game hid both the ghost's client character and the other ghost client (`caller 0x1439199c1, thread 4648`); this also happens with own_spawner=0 (09:50:49). MECMP re-applies the look at +0.0 s and +1.0 s. The character pointer stayed the same (no new `ghost: spawned`), so the reported despawn and respawn about 5 s later is visibility, not a respawn. Open: whether it also happens with own_spawner=0.
+- New line at map open (09:53:10): `client of 3f39751f rejects the pose (server sends 85, client expects 85)` then `stopped taking the pose; replicating it again`. Sizes were equal, so the cause is not the bone count; not seen in the own_spawner=0 run. Not investigated.
+- Hair: a hidden ghost's hair was not seen floating, so parking works and 3.6 has no urgency.
+- Threads again: server tick and server replay update on one thread (9800), client updater and recorder on another (4648).
+
+### The pose rejection at map open (2026-11-18, static read, no code change)
+- `FUN_14394bde0` (readNetState) sets CRP_CountOk (+0x2e4) only when a stream block with a count header arrives: `ok = (8-bit count == setup count at +0x200)`. It is never cleared otherwise, so the flag turns 0 only when a block with a different count reaches the component: the map's echo replay starting on it (the existing note above `reorderClientSpawnerList` in ghosts.cpp: the echo takes the LAST client character of its client spawner and plays its own recording on it).
+- The `server sends 85, client expects 85` in the log text compares MECMP's counts with the component's setup; the flag is the echo's block, so equal numbers there are expected and not a contradiction.
+- Why only with own_spawner=1: that run logged no `client spawner ... list reordered` line for our ghost (it is not in the city-ghost client spawner list), so nothing kept the game's own character last and the echo could take our ghost. With own_spawner=0 every run logged the reorder and no rejection. Hypothesis from code and log only; the own_spawner=0 map test decides it.

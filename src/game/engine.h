@@ -104,6 +104,8 @@ constexpr uintptr_t Fn_ClientCharacterFactory = 0x143910d20;
 constexpr uintptr_t Slot_ClientCharacterSpawnFactory = 0x141b2ad88;
 constexpr uintptr_t Fn_ClientCharacterSpawnFactory = 0x1432a67c0;
 constexpr uintptr_t Vtbl_ClientCharacterSpawnEntity = 0x141b2ac20;
+constexpr size_t Vtbl_ClientSpawnerOnSpawned = 0xd8; // onCharacterSpawned(spawner, character): the add
+constexpr uintptr_t Fn_ClientSpawnerOnSpawned = 0x1432aa460; // what that slot holds in this build
 constexpr size_t ClientSpawner_Spawned = 0xb0;
 constexpr size_t ClientSpawner_LastBus = 0xd0; // the last spawned character's bus (kept by the spawner's add/remove)
 constexpr uintptr_t Slot_ServerWorldPostUpdate = 0x141b42d28; // ServerGameWorld vtable +0x28
@@ -193,6 +195,10 @@ constexpr size_t World_PhysicsManager = 0x50, PhysManager_Holder = 0xf0, PhysHol
 constexpr size_t Phys_HavokWorld = 0x10, HavokWorld_FilterOwner = 0x150, FilterOwner_Filter = 0x4d0;
 
 // PamServerReplayPlayerComponent: playback object at +0x30 (state at +0x38, 1 = playing).
+// ReplayPlayback_Stop(playback = component + SRP_Playback): if the state is non-zero, releases the decoder, frees the
+// keyframe ring and clears the state.
+constexpr uintptr_t Fn_ReplayPlayback_Stop = 0x143970cc0;
+constexpr size_t SRP_Playback = 0x30;
 constexpr size_t SRP_PlaybackState = 0x38, SRP_Setup = 0xb0, SRP_Pose = 0x178, SRP_PoseEnd = 0x180,
                  SRP_PoseCap = 0x188, SRP_PoseArena = 0x190, SRP_NetState = 0x1a0;
 // PamClientReplayPlayerComponent: own playback at +0x38 (state +0x40, forced +0xb0, setup +0xb8),
@@ -210,6 +216,9 @@ constexpr size_t CRP_PlaybackState = 0x40, CRP_PlaybackForced = 0xb0, CRP_Setup 
 // time-trial runs and writes shared time trials (ReplayRecorder_SerializeRange 0x143970820) with its own setup, so it
 // is left as the game makes it (game/body_pose.h).
 constexpr uintptr_t Slot_ClientReplayRecordingUpdateAll = 0x141c48cb0;
+// PamServerReplayPlayerComponent update (calls ReplayPlayback_Tick); hooked only to log its thread (hooks.cpp).
+constexpr uintptr_t Slot_ServerReplayUpdate = 0x141c501e8;
+constexpr uintptr_t Fn_ServerReplayUpdate = 0x143971ac0;
 constexpr uintptr_t Fn_ClientReplayRecordingUpdateAll = 0x14394dac0;
 constexpr size_t RecComp_Recorder = 0x48, RecComp_PoseHandle = 0x58, RecComp_Skeleton = 0x98;
 constexpr size_t PoseHandle_LocalPose = 0x28;
@@ -256,6 +265,30 @@ struct alignas(16) SpawnInfo {
 };
 static_assert(offsetof(SpawnInfo, player) == 0x40 && offsetof(SpawnInfo, busId) == 0x5c &&
               offsetof(SpawnInfo, useTransform) == 0x61, "SpawnInfo layout");
+
+// The game's data registry (Ghidra 2026-11-15: FUN_143119500 adds a loaded data partition's containers, FUN_14311b8e0 removes
+// them, under the lock at 0x1423f7390). Object at 0x1421054b0. Its sorted vector of loaded containers starts at 0x142105510
+// (begin, +8 end, +0x10 capacity; Ghidra names it JumpTuningRoot, wrongly): 16-byte entries {u64 key, DataContainer*},
+// key = partition << 40 | classId << 16 | index, classId = the u16 at +0x28 of the object's type (vtable slot 0).
+// Listeners: 0x143134420(registry, &{context, fn}) adds one; fn(context, vector<DataContainer*>*, u16 partition, bool added).
+constexpr uintptr_t Registry_Object = 0x1421054b0;
+constexpr uintptr_t Registry_Objects = 0x142105510;
+constexpr uintptr_t Registry_Lock = 0x1423f7390;
+constexpr uintptr_t Fn_Registry_AddListener = 0x143134420;
+// A type's class-id range is in the image (u16 at +0, +2 of the TI's classId / lastSubClassId globals): a registry entry is of
+// the type, sub-classes included, when classIdOf(key) is in [classId, lastSubClassId].
+constexpr uintptr_t TI_VisualUnlockAsset_ClassId = 0x14281e9b8, TI_VisualUnlockAsset_LastSubClassId = 0x14281e9ba;
+// PamEchoCustomizationDefinitionsMeta (the ghost look catalogue, +0x18 Array<PamEchoCustomizationData>): a data container.
+constexpr uintptr_t Vtbl_PamEchoCustomizationDefinitionsMeta = 0x141c96678;
+// Its class-id range (Ghidra 2026-11-18: bytes 1e 07 1e 07 at 0x142878628, TI_PamEchoCustomizationDefinitionsMeta, registered by
+// 0x1447670b0): classId == lastSubClassId == 0x071e. Selects the meta in the registry without trusting the vtable constant.
+constexpr uintptr_t TI_PamEchoCustomizationDefinitionsMeta_ClassId = 0x142878628,
+                    TI_PamEchoCustomizationDefinitionsMeta_LastSubClassId = 0x14287862a;
+// FUN_143119500 (Ghidra 2026-11-18) skips every partition with id 0x7d5..0xbbc (`999 < (u16)(id - 0x7d5)` guards the body): data
+// loaded only there is never in the registry, whatever it is. First id and count of that range.
+constexpr uint16_t Registry_SkippedPartitionFirst = 0x7d5, Registry_SkippedPartitionCount = 1000;
+// Entities of a class in a world: the head is at world + (classId + 6) * 0x10 (FUN_143164d50, ClassInfo_firstInWorld).
+constexpr size_t World_ClassHeads = 0x60, World_ClassHeadStride = 0x10;
 
 // --- Helpers --------------------------------------------------------------------------------------
 inline bool inImage(uintptr_t a) {

@@ -15,12 +15,14 @@
 #include "core/config.h"
 #include "core/log.h"
 #include "game/engine.h"
+#include "game/fingerprint.h"
 #include "game/hooks.h"
 #include "game/level.h"
 #include "game/models.h"
 #include "game/motion_stats.h"
 #include "game/pose_math.h"
 #include "game/pose_remap.h"
+#include "game/spawn_order.h"
 #include "net/net.h"
 #include "net/pose_limits.h"
 
@@ -84,6 +86,8 @@ struct Ghost {
     DWORD lookTriedAt = 0;
     std::string lookWanted;       // the look last asked for; a new choice is tried at once
     DWORD parkUntil = 0;          // while hidden: keep it parked below lastPos until then
+    float pinPos[3] = {};         // where the client side pins the body's anchor (written by the server tick, used by the
+    bool pinValid = false;        // client updater hook until renderFrame drives the pose every frame)
 };
 
 // Starts hiding a ghost: client character hidden, and parked below its last position.
@@ -204,6 +208,8 @@ uintptr_t componentOwner(uintptr_t comp) {
 }
 
 using SetVisibleFn = void (*)(void*, uint64_t);
+using OnSpawnedFn = bool (*)(void*, void*);
+OnSpawnedFn g_origOnSpawned = nullptr; // ClientCharacterSpawnEntity::onCharacterSpawned before our hook (3.3)
 SetVisibleFn g_origSetVisible = nullptr; // set once the slot is swapped (the game's own function)
 thread_local bool g_ownVisibleCall = false;
 std::atomic<int> g_visibleLogLeft{40};
@@ -389,6 +395,18 @@ bool noteDue(DWORD& last, DWORD ms = 10000) {
 }
 
 // Server side: the streamed pose into the ghost's replay component, replicated to clients.
+// The server must not replay a recording over the pose we write. Zeroing the state alone leaves a ghost adopted from
+// the game with its decoder and keyframe ring still allocated, so ReplayPlayback_Stop does it (it also clears the
+// state). Server side only: the client's own stop tells the game the replay is done, so the client keeps the plain write.
+void stopServerPlayback(uint8_t* comp) {
+    auto* state = reinterpret_cast<uint32_t*>(comp + SRP_PlaybackState);
+    if (*state == 0) return;
+    using StopFn = void (*)(void*);
+    static const bool canStop = fingerprint::checkReplayStop();
+    if (canStop) reinterpret_cast<StopFn>(rva(Fn_ReplayPlayback_Stop))(comp + SRP_Playback);
+    *state = 0;
+}
+
 void drive(Ghost& g, const net::PlayerState& input) {
     net::PlayerState st = input;
     if (!net::limitPose(st)) return;
@@ -425,7 +443,7 @@ void drive(Ghost& g, const net::PlayerState& input) {
     const uint32_t N = *reinterpret_cast<uint32_t*>(c + SRP_Setup);
     auto* pose = *reinterpret_cast<float**>(c + SRP_Pose);
     if (!pose || N == 0 || N > kMaxBones) return;
-    *reinterpret_cast<uint32_t*>(c + SRP_PlaybackState) = 0; // no server replay overwriting the pose
+    stopServerPlayback(c); // no server replay overwriting the pose
     const int traj = trajectorySlot(c, N);
     if (st.boneCount > 0) {
         float tempBuf[kMaxBones][8];
@@ -449,15 +467,18 @@ void drive(Ghost& g, const net::PlayerState& input) {
     if (!clientDriven) setNetDirty(c + SRP_NetState, 2 | 4); // frames + pose
 }
 
-// Client side: a ghost client normally plays its own replay and parks the body at a fixed
-// transform. Stop its playback, let it place the body from the trajectory bone, and pin that
-// bone to the player's position (the client playback rewrites the received pose every frame).
-void fixClient(Ghost& g, const net::PlayerState& st) {
+// Client side: a ghost client normally plays its own replay and parks the body at a fixed transform. The body is
+// placed from the trajectory bone, which is pinned to the player's position (the client playback rewrites the received
+// pose every frame). The server tick only notes the position; the client updater hook writes it (pinAnchor), on the
+// thread that reads the pose.
+void setPin(Ghost& g, const net::PlayerState& st) {
+    memcpy(g.pinPos, st.pos, sizeof(g.pinPos));
+    g.pinValid = true;
+}
+
+void pinAnchor(void* comp, void* owner, const float (&pos)[3]) {
     thread_local ClientCompView v;
-    if (!readClientComp(g.clientComp, g.clientChar, v)) return;
-    // Playback state, forced flag and skipRoot are settled on the client thread (settleClientPlayback).
-    // Driven every rendered frame (renderFrame): the anchor is set there, for the frame's own moment.
-    if (g.posing && GetTickCount() - g.posingSince > kReplicateMs) return;
+    if (!readClientComp(comp, owner, v)) return;
     const uintptr_t pose = v.pose();
     const uint32_t n = v.bones();
     uint32_t idx[kMaxBones];
@@ -466,8 +487,8 @@ void fixClient(Ghost& g, const net::PlayerState& st) {
     for (uint32_t i = 0; i < n; ++i) {
         if ((idx[i] & 0xff) != 1) continue;
         float bones[2][8];
-        if (i != 1 || !mem::read(pose, bones, sizeof(bones))) { poke(pose + i * 0x20, st.pos, sizeof(st.pos)); break; }
-        foldBone0(bones[0], bones[1], st.pos);
+        if (i != 1 || !mem::read(pose, bones, sizeof(bones))) { poke(pose + i * 0x20, pos, sizeof(float) * 3); break; }
+        foldBone0(bones[0], bones[1], pos);
         poke(pose, bones, sizeof(bones));
         break;
     }
@@ -928,6 +949,24 @@ void setCharacterDataType(uintptr_t runtimeTypeInfo) { g_tiCharData = runtimeTyp
 // ghosts and a character of the game's, ours go first and the game's stay last, in their order. Only pointers inside
 // the list move, and +0xd0 (the last one's bus) stays right because the last one does not change. Client game thread
 // (the replay updater, where the map's replay runs), at most every 0.25 s.
+// Reorders one spawner's list as above. True when it had to change something.
+static bool reorderClientSpawnerList(void* sp, const std::vector<uintptr_t>& mine) {
+    uintptr_t list[2] = {};
+    if (!mem::read(reinterpret_cast<uintptr_t>(sp) + ClientSpawner_Spawned, list, sizeof(list)) || list[1] <= list[0] ||
+        (list[1] - list[0]) % 8 || (list[1] - list[0]) / 8 > 64)
+        return false;
+    const size_t n = (list[1] - list[0]) / 8;
+    uintptr_t items[64];
+    if (!mem::read(list[0], items, n * 8)) return false;
+    std::vector<uintptr_t> order;
+    if (!gameCharactersLast(std::vector<uintptr_t>(items, items + n), mine, order)) return false;
+    poke(list[0], order.data(), n * 8);
+    poke<uintptr_t>(reinterpret_cast<uintptr_t>(sp) + ClientSpawner_LastBus, mem::readOr<uintptr_t>(order.back() + Character_Bus));
+    return true;
+}
+
+// The safety net: every 0.25 s, all lists. Since the spawn hook (3.3) reorders a list as a character is added, this
+// should find nothing; when it does, the log line says the hook missed it (or is not installed).
 static void keepGameClientCharactersLast() {
     static DWORD lastAt = 0;
     const DWORD now = GetTickCount();
@@ -940,40 +979,50 @@ static void keepGameClientCharactersLast() {
             if (g.clientChar) mine.push_back(reinterpret_cast<uintptr_t>(g.clientChar));
     }
     if (mine.empty()) return;
-    for (void* sp : level::clientSpawners()) {
-        uintptr_t list[2] = {};
-        if (!mem::read(reinterpret_cast<uintptr_t>(sp) + ClientSpawner_Spawned, list, sizeof(list)) || list[1] <= list[0] ||
-            (list[1] - list[0]) % 8 || (list[1] - list[0]) / 8 > 64)
-            continue;
-        const size_t n = (list[1] - list[0]) / 8;
-        uintptr_t items[64];
-        if (!mem::read(list[0], items, n * 8)) continue;
-        std::vector<uintptr_t> ours, theirs;
-        for (size_t i = 0; i < n; ++i)
-            (std::find(mine.begin(), mine.end(), items[i]) != mine.end() ? ours : theirs).push_back(items[i]);
-        if (ours.empty() || theirs.empty()) continue;
-        if (std::find(ours.begin(), ours.end(), items[n - 1]) == ours.end()) continue; // the game's is last already
-        std::vector<uintptr_t> order = ours;
-        order.insert(order.end(), theirs.begin(), theirs.end());
-        poke(list[0], order.data(), n * 8);
-        poke<uintptr_t>(reinterpret_cast<uintptr_t>(sp) + ClientSpawner_LastBus, mem::readOr<uintptr_t>(order.back() + Character_Bus));
-        MLOG("ghost: client spawner %p list reordered: the game's own character is last again", sp);
-    }
+    for (void* sp : level::clientSpawners())
+        if (reorderClientSpawnerList(sp, mine))
+            MLOG("ghost: client spawner %p list reordered by the safety net (spawn hook %s): the game's own character is last again",
+                 sp, g_origOnSpawned ? "installed, missed it" : "not installed");
+}
+
+// Wraps ClientCharacterSpawnEntity vtable +0xd8 (onCharacterSpawned, 0x1432aa460): once the game has added a character
+// to the list, that one list is put in order. Our ghost's client character is claimed when it is created, before this
+// add, so it is already in g_ghosts. try_lock: never wait for g_m inside a game call; the safety net covers a miss.
+static bool onCharacterSpawnedHook(void* spawner, void* character) {
+    const bool added = g_origOnSpawned(spawner, character);
+    std::unique_lock<std::mutex> lock(g_m, std::try_to_lock);
+    if (!lock.owns_lock()) return added;
+    std::vector<uintptr_t> mine;
+    for (const auto& g : g_ghosts)
+        if (g.clientChar) mine.push_back(reinterpret_cast<uintptr_t>(g.clientChar));
+    lock.unlock();
+    if (!mine.empty() && reorderClientSpawnerList(spawner, mine))
+        VLOG("ghost: client spawner %p list reordered as a character was added: the game's own character is last", spawner);
+    return added;
 }
 
 void beforeClientReplayUpdate() {
     ++g_updaterCalls;
     keepGameClientCharactersLast();
     if (level::serverWorld() && !level::inFrontEnd()) {
-        struct Pair { void* comp; void* ch; };
+        struct Pair { void* comp; void* ch; bool pin; float pos[3]; };
         Pair pairs[kMaxGhosts];
         size_t n = 0;
         {
             std::lock_guard<std::mutex> lock(g_m);
+            const DWORD now = GetTickCount();
             for (const auto& g : g_ghosts)
-                if (n < kMaxGhosts && g.clientComp) pairs[n++] = {g.clientComp, g.clientChar};
+                if (n < kMaxGhosts && g.clientComp) {
+                    // Pinned until renderFrame drives the pose every frame (see kReplicateMs).
+                    const bool pin = g.pinValid && !(g.posing && now - g.posingSince > kReplicateMs);
+                    pairs[n] = {g.clientComp, g.clientChar, pin, {g.pinPos[0], g.pinPos[1], g.pinPos[2]}};
+                    ++n;
+                }
         }
-        for (size_t i = 0; i < n; ++i) settleClientPlayback(pairs[i].comp, pairs[i].ch);
+        for (size_t i = 0; i < n; ++i) {
+            settleClientPlayback(pairs[i].comp, pairs[i].ch);
+            if (pairs[i].pin) pinAnchor(pairs[i].comp, pairs[i].ch, pairs[i].pos);
+        }
     }
     renderFrame();
 }
@@ -1359,7 +1408,7 @@ void tick(uint64_t tick, uint64_t ticksInLevel) {
             static net::PlayerState park; // large; game thread only
             park = parkedState(g);
             drive(g, park);
-            fixClient(g, park);
+            setPin(g, park);
         } else if (g.clientChar) {
             const DWORD since = GetTickCount() - g.clientCharAt;
             {
@@ -1407,7 +1456,7 @@ void tick(uint64_t tick, uint64_t ticksInLevel) {
             // needs. Otherwise a Faith ghost keeps the ghost shader and only its hair shows.
             if (g.clientChar) setGhostShader(g, g.ghostShader);
             drive(g, st);
-            fixClient(g, st);
+            setPin(g, st);
             memcpy(g.lastPos, st.pos, sizeof(g.lastPos));
             g.parkUntil = 0;
         }
@@ -1420,6 +1469,8 @@ void tick(uint64_t tick, uint64_t ticksInLevel) {
         if (live && live->peer == g.peer) {
             live->posing = g.posing;
             live->posingSince = g.posingSince;
+            memcpy(live->pinPos, g.pinPos, sizeof(live->pinPos));
+            live->pinValid = g.pinValid;
             if (lookChanged) {
                 live->lookKey = g.lookKey;
                 live->lookTriedAt = g.lookTriedAt;
@@ -1453,6 +1504,19 @@ void hookSetVisibleLog() {
     g_origSetVisible = reinterpret_cast<SetVisibleFn>(current);
     if (mem::patchPointer(slot, reinterpret_cast<uintptr_t>(&setVisibleHook), nullptr)) MLOG("hook ghost setVisible log: installed");
     else g_origSetVisible = nullptr;
+}
+void hookSpawnerAdd() {
+    if (g_origOnSpawned) return;
+    const uintptr_t slot = rva(Vtbl_ClientCharacterSpawnEntity) + Vtbl_ClientSpawnerOnSpawned;
+    uintptr_t current = 0;
+    if (!mem::read(slot, current) || current != rva(Fn_ClientSpawnerOnSpawned)) {
+        MLOG("hook client spawner add: slot holds %p, expected %p (not installed, the 250 ms pass keeps the order)",
+             reinterpret_cast<void*>(current), reinterpret_cast<void*>(rva(Fn_ClientSpawnerOnSpawned)));
+        return;
+    }
+    g_origOnSpawned = reinterpret_cast<OnSpawnedFn>(current);
+    if (mem::patchPointer(slot, reinterpret_cast<uintptr_t>(&onCharacterSpawnedHook), nullptr)) MLOG("hook client spawner add: installed");
+    else g_origOnSpawned = nullptr;
 }
 void requestSpawnOrRefresh() { g_reqSpawn = true; }
 void lookListArrived() { retryLooksNow(); }

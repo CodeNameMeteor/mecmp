@@ -73,6 +73,14 @@ void* pamSpawnerFactory(void* creator, void* ci, void* a3, void* a4) {
     level::onSpawnerCreated(ci, e);
     return e;
 }
+// Which thread runs which game callback (research R6.1: do the server tick, the server replay update and the
+// client replay updater share a thread?). Logs the first call per site and again if the thread id changes.
+void noteThread(const char* site, std::atomic<uint32_t>& last) {
+    const uint32_t id = GetCurrentThreadId();
+    if (last.exchange(id) != id) MLOG("thread: %s runs on thread %u", site, id);
+}
+std::atomic<uint32_t> g_threadTick{0}, g_threadClientUpdater{0}, g_threadServerReplay{0}, g_threadRecorder{0};
+
 // Client replay updater: the updateAll slot of its vtable (shared by the two updater objects) first
 // writes our ghosts' poses, on the thread and at the moment the game reads them. Written from
 // the render thread instead, the game sometimes read a pose half old and half new (jitter between
@@ -82,6 +90,7 @@ UpdateAllFn g_origUpdateAll = nullptr;
 std::atomic<bool> g_updaterHooked{false};
 
 void updateAllHook(void* self, void* info) {
+    noteThread("client replay updater", g_threadClientUpdater);
     runs::clientTick(); // cheap once registered
     ghosts::beforeClientReplayUpdate();
     g_origUpdateAll(self, info);
@@ -132,6 +141,7 @@ void* clientReplayFactory(void* creator, void* ci, void* a3, void* a4) {
 UpdateAllFn g_origRecordingUpdateAll = nullptr;
 
 void recordingUpdateAllHook(void* self, void* info) {
+    noteThread("client recording updater", g_threadRecorder);
     g_origRecordingUpdateAll(self, info);
     body_pose::afterRecorderSample();
 }
@@ -287,9 +297,31 @@ void installPlayersMapHook(std::vector<Patch>& undo) {
     MLOG("hook map markers: installed");
 }
 
+// PamServerReplayPlayerComponent's update (FUN_143971ac0): only reports its thread; calls straight through.
+UpdateAllFn g_origServerReplayUpdate = nullptr;
+
+void serverReplayUpdateHook(void* self, void* info) {
+    noteThread("server replay update", g_threadServerReplay);
+    g_origServerReplayUpdate(self, info);
+}
+
+void installServerReplayThreadProbe(std::vector<Patch>& undo) {
+    const uintptr_t slot = rva(Slot_ServerReplayUpdate);
+    uintptr_t current = 0;
+    if (!mem::read(slot, current) || current != rva(Fn_ServerReplayUpdate)) {
+        MLOG("hook server replay update: slot holds %p, expected %p; thread probe not installed", reinterpret_cast<void*>(current),
+             reinterpret_cast<void*>(rva(Fn_ServerReplayUpdate)));
+        return;
+    }
+    g_origServerReplayUpdate = reinterpret_cast<UpdateAllFn>(current); // before the patch, as above
+    if (!mem::patchPointer(slot, reinterpret_cast<uintptr_t>(&serverReplayUpdateHook), nullptr)) return;
+    undo.push_back({slot, current});
+}
+
 void postUpdate(void* world, void* updateInfo) {
     g_origPostUpdate(world, updateInfo);
     if (world == reinterpret_cast<void*>(level::serverWorld())) {
+        noteThread("server tick (ServerGameWorld::postUpdate)", g_threadTick);
         const float dt = updateInfo ? *reinterpret_cast<float*>(static_cast<uint8_t*>(updateInfo) + 0x10) : 0.f;
         g_onTick(world, dt);
     }
@@ -320,6 +352,7 @@ bool install(TickFn onTick, Installed* out) {
     got.spawners = sp1 && sp2;
     const bool replay = installFactory(kClientReplay, Slot_ClientReplayPlayerFactory, Fn_ClientReplayPlayerFactory, &clientReplayFactory, undo);
     installRecordingUpdaterHook(undo);
+    installServerReplayThreadProbe(undo);
     installReplayDownloadedHook(undo);
     const bool chars = installFactory(kClientCharacter, Slot_ClientCharacterFactory, Fn_ClientCharacterFactory, &clientCharacterFactory, undo);
     // Optional: without it the look catalogue is found by a memory scan instead.
@@ -343,6 +376,7 @@ bool install(TickFn onTick, Installed* out) {
     got.tick = true;
     hookUpdaters(); // the vtable is in the game image, so this does not wait for a component
     ghosts::hookSetVisibleLog();
+    ghosts::hookSpawnerAdd();
     if (out) *out = got;
     if (player_audio::kEnabled) player_audio::install();
     if (got.spawners && got.ghostClients) MLOG("hooks: all installed");

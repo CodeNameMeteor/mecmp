@@ -127,8 +127,8 @@ object's class, data and owner, so memory the game freed and reused for somethin
 called into, but the client thread can still destroy an object between that check and the call.
 Closing that window needs the client work moved to the client thread.
 
-Since 2026-11-15 the pose, playback state, forced flag and skipRoot are written on the client update thread (the updater
-hook), so the remaining server-thread use is `setVisible` and the claim checks. The `PamClientCharacterEntity::setVisible`
+Since 2026-11-15 the pose, playback state, forced flag, skipRoot and the body anchor pin are written on the client update
+thread (the updater hook), so the remaining server-thread use is `setVisible` and the claim checks. The `PamClientCharacterEntity::setVisible`
 slot is hooked too: the game hides a ghost character about 0.25 s after the map closes (its vf2 property handler, property
 0x35bc69ab), and the next server tick shows ours again. Spawning waits for the server player manager's
 ServerPlayerChangedCharacterMessage (first character, real player), with a 5 s fallback.

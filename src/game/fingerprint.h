@@ -13,5 +13,7 @@ bool checkOwnSpawner();
 bool checkBodyPose();
 // The download message layout the replay safety net reads (game/replay_check.h). False (logged) leaves it out.
 bool checkReplayCheck();
+// ReplayPlayback_Stop's entry. False (logged) makes ghosts only zero the playback state, as before.
+bool checkReplayStop();
 
 } // namespace mecmp::game::fingerprint

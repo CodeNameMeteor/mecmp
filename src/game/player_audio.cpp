@@ -246,7 +246,8 @@ void catalogue(uintptr_t character) {
     for (size_t i = 0; i < g_sources.size(); ++i) if (g_sources[i].data) {
         if (i < net::kPlayerSoundCount) ++graphs; else ++vocals;
     }
-    MLOG("audio: local catalogue has %zu sound graphs and %zu vocal clips", graphs, vocals);
+    MLOG("audio: local catalogue has %llu sound graphs and %llu vocal clips", static_cast<unsigned long long>(graphs),
+         static_cast<unsigned long long>(vocals));
 }
 void discoverActiveSounds() {
     // Looping breathing can start before our catalogue is ready. The native

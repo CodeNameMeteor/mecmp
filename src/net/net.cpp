@@ -36,7 +36,9 @@ namespace proto = protocol;
 
 constexpr int kSnapCount = 16;
 constexpr double kInterpDelayMs = 120.0; // remote players are shown this far behind their own clock
-constexpr size_t kMaxPeers = 16;
+// Joiners a player host takes: with the host that is 16 players, so each one sees 15 others, as many ghosts as a level
+// holds (ghosts.cpp kMaxGhosts). One more and somebody would be invisible to everyone. The dedicated server allows 16.
+constexpr size_t kMaxPeers = 15;
 constexpr size_t kMaxRemotes = 64;        // player entries kept at once (a session has at most kMaxPeers players)
 constexpr DWORD kRemoteForgetMs = 120000;
 constexpr int kMaxNameLogs = 3; // entries silent this long are dropped (the ghosts use 65 s)
@@ -190,6 +192,9 @@ std::atomic<DWORD> g_hostTimeOfDayAt{0};
 
 std::atomic<bool> g_hostAllowsMembers{false}; // JOIN: what the host's HELLO said about the same
 std::string g_serverName;                // JOIN: the dedicated server's name (empty: a player hosts); under g_m
+// JOIN: the host's HELLO carries kHelloServer. Kept apart from the name: a server may have an empty name, and must still
+// never count as a player host (whose relay is the only one that vouches for hard summons). Under g_m.
+bool g_hostIsServer = false;
 float g_loopbackOffset = 3.0f;
 uint16_t g_port = 47800;
 // Router port mapping (host). Map and unmap calls are serialised, and an unmap is skipped when a
@@ -398,6 +403,9 @@ void departRemote(uint32_t session, proto::DepartureReason reason) {
     r.departureReason = reason;
     r.fill = 0;
     r.roundTrip = {};
+    // Their markers go with them. A timed-out player may come back, so theirs stay until the entry is forgotten.
+    if (reason != proto::DepartureReason::TimedOut)
+        for (PingCell& c : r.pings) c.have = false;
 }
 
 void sendDepartureTo(const sockaddr_in& to, uint32_t session, proto::DepartureReason reason) {
@@ -1262,6 +1270,7 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
             if (g_hostSession.load() != h.session) retireHostSession(g_hostSession.load());
             g_hostSession = h.session;
             g_hostAllowsMembers = (flags & proto::kHelloMembersHard) != 0 && !(flags & proto::kHelloServer);
+            g_hostIsServer = (flags & proto::kHelloServer) != 0;
             // A dedicated server: not a player (it sends no state, so it never gets a ghost or a list entry).
             if (flags & proto::kHelloServer) {
                 const std::string serverName = cleanName(raw.data(), raw.size());
@@ -1329,7 +1338,7 @@ void handlePacket(const char* buf, int n, const sockaddr_in& from) {
         // The lobby's host (a player, not a dedicated server) may pull players in; so may a member it
         // vouched for. Behind a dedicated server nobody is trusted: it forwards bytes as they are, so a
         // vouch in them proves nothing, and until the host's HELLO is heard we do not know which it is.
-        const bool playerHost = g_role == Role::Host || (g_hostSession.load() != 0 && g_serverName.empty());
+        const bool playerHost = g_role == Role::Host || (g_hostSession.load() != 0 && !g_hostIsServer);
         const bool senderIsHost = g_role == Role::Join && playerHost && h.session == g_hostSession.load();
         receiveSummon(r, own, senderIsHost, playerHost, payload, len);
         return;
@@ -1513,22 +1522,24 @@ void hostSetup(uint32_t generation, uint16_t port, bool upnpEnabled) {
     bool privateOnly = false;
     uint32_t pub = parseIp(r.externalIp);
     uint16_t pubPort = port;
-    if (r.mapped) {
-        MLOG("net: router port %u opened with UPnP", port);
-    } else {
-        MLOG("net: UPnP: %s", r.error.c_str());
-        // Ask a public STUN server how the internet sees us (waits up to ~2 s for the reply).
+    if (r.mapped) MLOG("net: router port %u opened with UPnP", port);
+    else MLOG("net: UPnP: %s", r.error.c_str());
+    // No public address from the router (UPnP failed, or it mapped the port but did not say its address, which some
+    // routers do): ask a public STUN server how the internet sees us (waits up to ~2 s for the reply).
+    if (!pub) {
         for (int i = 0; i < 4 && !g_stunIp; ++i) {
             if (!sendStunRequest(generation)) return;
             Sleep(500);
         }
         if (g_stunIp) {
             pub = g_stunIp;
-            pubPort = g_stunPort;
+            // With a mapping the router forwards the port we asked for; without one, the port STUN saw is the way in.
+            if (!r.mapped) pubPort = g_stunPort;
         }
+    }
+    if (!r.mapped)
         MLOG("net: friends outside your network can only join if UDP port %u is forwarded to this PC on your router",
              port);
-    }
     if (pub && isPrivate(pub)) {
         additionalNat = true;
         // The router itself sits behind another router (double NAT) or the ISP's NAT. Ask STUN
@@ -1700,6 +1711,9 @@ void receiveAll() {
         if (n == SOCKET_ERROR) {
             const int e = WSAGetLastError();
             if (e == WSAECONNRESET) continue; // ICMP "port unreachable" from an earlier send
+            // Larger than any MECMP packet (the datagram is discarded): anyone can send these, so they are dropped
+            // quietly and reading goes on, as for any other bad packet.
+            if (e == WSAEMSGSIZE) { ++g_dropped; continue; }
             if (e != WSAEWOULDBLOCK) MLOG("net: recvfrom error %d", e);
             return;
         }
@@ -1858,12 +1872,17 @@ bool startLocked(uint16_t port, const std::string& join, float loopbackOffset, c
         g_retiredHostSessions.clear();
         g_hostTimeOfDayAt = 0;
         g_serverName.clear();
+        g_hostIsServer = false;
         g_hostStatus = {};
         g_name = name;
         g_outBurst.clear();
         g_outChat.clear();
         for (PingCell& c : g_myPings) c = PingCell{};
         g_summons.clear();
+        // Notices addressed to the last session's players: their ids mean nothing in the next one.
+        g_visits.clear();
+        g_reactions.clear();
+        g_results.clear();
         g_mySummon = MySummon{};
         g_lastSummonSent = 0;
         g_summonReports.clear();
@@ -1921,9 +1940,12 @@ bool startLocked(uint16_t port, const std::string& join, float loopbackOffset, c
     }
     u_long nb = 1;
     ioctlsocket(g_sock, FIONBIO, &nb);
-    g_session = GetTickCount() ^ (GetCurrentProcessId() << 16) ^ 0x5a17c0deu;
     {
+        // Random, like the dedicated server's: a session id from the clock and the process id could be guessed, and
+        // 0 means "none" (no host heard yet).
         std::random_device rd;
+        do g_session = (static_cast<uint32_t>(rd()) << 1) ^ static_cast<uint32_t>(rd());
+        while (!g_session);
         for (uint8_t& b : g_cookieKey) b = static_cast<uint8_t>(rd());
     }
     if (join.empty()) {
@@ -2170,7 +2192,7 @@ bool canHardSummon() {
     if (!g_run) return false;
     if (g_role == Role::Host) return true;
     std::lock_guard<std::mutex> lock(g_m);
-    return g_hostSession.load() != 0 && g_serverName.empty() && g_hostAllowsMembers.load();
+    return g_hostSession.load() != 0 && !g_hostIsServer && g_hostAllowsMembers.load();
 }
 
 bool sendSummon(const float pos[3], float yaw, const std::vector<uint32_t>& targets, bool hard) {
@@ -2520,7 +2542,8 @@ std::string joinCode() {
     return g_hostStatus.joinCode;
 }
 
-bool hosting() { return g_role == Role::Host; }
+// Only while a session runs: the role stays Host (its default) after leaving or before the first session.
+bool hosting() { return running() && g_role == Role::Host; }
 void setTimeOfDay(float seconds) { g_myTimeOfDay = seconds; }
 bool hostTimeOfDay(float& seconds) {
     if (g_role != Role::Join || !running()) return false;

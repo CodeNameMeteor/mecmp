@@ -34,6 +34,7 @@ constexpr int kMaxSpawnFails = 3;
 // PamReplayPlayerComponentData objects we patched (data, original RecordingBones pointer), so that the patch can be undone.
 std::mutex g_patchM;
 std::vector<std::pair<uintptr_t, uintptr_t>> g_playerPatched;
+constexpr size_t kMaxPatchRecords = 256;
 // The ghost spawner MECMP made for itself (ownGhostSpawner): a copy of the city-ghost spawner (same data, same
 // bus). Known not to work as intended: the game finds a replay's spawner by its data in a bus (GridNode), so a
 // second spawner with the same data and bus is found INSTEAD of the game's own, rather than leaving it alone.
@@ -127,7 +128,20 @@ void patchPlayerData(uintptr_t c, bool ours) {
                 g_playerPatched.erase(g_playerPatched.begin() + static_cast<long>(i));
                 break;
             }
-        if (g_playerPatched.size() < 256) g_playerPatched.push_back({c, list});
+        // Records are kept across levels, so drop the ones whose object no longer holds our list (freed, reused or
+        // restored) before the cap is reached. Never patch without a record: the game's echoes could not be restored.
+        if (g_playerPatched.size() >= kMaxPatchRecords)
+            g_playerPatched.erase(std::remove_if(g_playerPatched.begin(), g_playerPatched.end(),
+                                                 [targets](const std::pair<uintptr_t, uintptr_t>& r) {
+                                                     return mem::readOr<uintptr_t>(r.first + 0x70) != targets;
+                                                 }),
+                                  g_playerPatched.end());
+        if (g_playerPatched.size() >= kMaxPatchRecords) {
+            MLOG("patch: player data %p left as it is (%llu patched records, none stale)", reinterpret_cast<void*>(c),
+                 static_cast<unsigned long long>(g_playerPatched.size()));
+            return;
+        }
+        g_playerPatched.push_back({c, list});
         poke<uintptr_t>(c + 0x70, targets);
         lastOursAt = GetTickCount();
         MLOG("patch: player data %p patched for our ghost", reinterpret_cast<void*>(c));

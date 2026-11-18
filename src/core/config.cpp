@@ -464,7 +464,7 @@ void load(const std::wstring& dir) {
     // means the default too; 'off' turns it off. The old rendezvous= key is ignored (and dropped on save).
     s.rendezvous = readString(ini, L"net", L"rendezvous_server", kDefaultMainServer);
     if (s.rendezvous.empty()) s.rendezvous = kDefaultMainServer;
-    else if (s.rendezvous == "off" || s.rendezvous == "0") s.rendezvous.clear();
+    else if (_stricmp(s.rendezvous.c_str(), "off") == 0 || s.rendezvous == "0") s.rendezvous.clear(); // "Off", "OFF" too
     s.upnp = readInt(ini, L"net", L"upnp", 1) != 0;
     const float offset = static_cast<float>(atof(readString(ini, L"net", L"loopback_offset", "3.0").c_str()));
     s.loopbackOffset = std::isfinite(offset) ? offset : 3.0f; // "nan" or "inf" would poison the mirrored position

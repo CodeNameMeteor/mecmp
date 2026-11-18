@@ -385,6 +385,11 @@ bool install(TickFn onTick, Installed* out) {
     return true;
 }
 
+bool onServerReplayThread() {
+    const uint32_t replay = g_threadServerReplay.load();
+    return replay != 0 && replay == GetCurrentThreadId();
+}
+
 bool gameMenuOpen() {
     // The global is the source; the object the update hook saw is only a fallback, and a difference is logged
     // once so a game run shows whether the hook can go.

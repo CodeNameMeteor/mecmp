@@ -271,14 +271,17 @@ bool http(const Url& u, const std::string& method, const std::string& extraHeade
 
 struct Gateway { Url control; std::string serviceType; std::string localIp; };
 
-bool tryGateway(const Candidate& cand, Gateway& gw, std::string& error) {
+// Every WANIPConnection / WANPPPConnection service a router describes. Routers that offer both (DSL routers often do)
+// usually have only one connected, and only that one maps ports, so all of them are kept and tried in turn.
+bool tryGateway(const Candidate& cand, std::vector<Gateway>& out, std::string& error) {
     const std::string& location = cand.location;
     const in_addr sender = cand.sender;
     Url loc;
     if (!parseUrl(location, loc)) { error = "bad router description URL"; return false; }
-    std::string xml;
-    if (!http(loc, "GET", "", "", xml, &gw.localIp)) { error = "could not read the router's description"; return false; }
-    // Find a WANIPConnection or WANPPPConnection service and its control URL.
+    std::string xml, localIp;
+    if (!http(loc, "GET", "", "", xml, &localIp)) { error = "could not read the router's description"; return false; }
+    const size_t before = out.size();
+    bool foreign = false;
     size_t at = 0;
     for (;;) {
         const size_t svc = xml.find("<service>", at);
@@ -296,35 +299,37 @@ bool tryGateway(const Candidate& cand, Gateway& gw, std::string& error) {
                 ctl = base + ctl;
             }
             // Absolute control URLs (or a URLBase) must stay on the router that answered.
+            Gateway gw;
+            gw.localIp = localIp;
             if (parseUrl(ctl, gw.control) && sameHostIp(gw.control.host, sender)) {
                 gw.serviceType = type;
-                return true;
+                out.push_back(gw);
+            } else if (!gw.control.host.empty()) {
+                foreign = true;
             }
         }
         at = svc + 9;
     }
-    if (gw.control.host.size() && !sameHostIp(gw.control.host, sender)) {
-        error = "the router's control address points at another machine; not using it";
-        return false;
-    }
-    error = "the router does not offer port mapping";
+    if (out.size() > before) return true;
+    error = foreign ? "the router's control address points at another machine; not using it"
+                    : "the router does not offer port mapping";
     return false;
 }
 
-// Tries each router that answered (LAN-attached first) until one offers port mapping.
-bool findGateway(Gateway& gw, std::string& error) {
+// Every usable port-mapping service of every router that answered (LAN-attached routers first).
+bool findGateways(std::vector<Gateway>& gws, std::string& error) {
     const std::vector<Candidate> cands = discover();
     if (cands.empty()) { error = "no UPnP router answered (UPnP may be turned off on the router)"; return false; }
     std::string first;
     for (const Candidate& c : cands) {
-        Gateway g;
         std::string err;
-        if (tryGateway(c, g, err)) { gw = g; return true; }
+        if (tryGateway(c, gws, err)) continue;
         char ip[64] = {};
         inet_ntop(AF_INET, &c.sender, ip, sizeof(ip));
         MLOG("net: UPnP: %s unusable: %s", ip, err.c_str());
         if (first.empty()) first = err;
     }
+    if (!gws.empty()) return true;
     error = first;
     return false;
 }
@@ -339,31 +344,43 @@ bool soap(const Gateway& gw, const char* action, const std::string& args, std::s
     return http(gw.control, "POST", headers, body, reply, nullptr, &status);
 }
 
+std::string trimmed(std::string v) {
+    const size_t a = v.find_first_not_of(" \t\r\n");
+    if (a == std::string::npos) return {};
+    return v.substr(a, v.find_last_not_of(" \t\r\n") - a + 1);
+}
+
+std::string errorCode(const std::string& reply) { return trimmed(between(reply, "<errorCode>", "</errorCode>")); }
+
+std::string externalIpOf(const Gateway& gw) {
+    std::string reply;
+    int status = 0;
+    if (!soap(gw, "GetExternalIPAddress", "", reply, status) || status != 200) return {};
+    return trimmed(between(reply, "<NewExternalIPAddress>", "</NewExternalIPAddress>"));
+}
+
 std::mutex g_m;
 Gateway g_gw;
 bool g_haveGw = false;
 } // namespace
 
-Result mapUdpPort(uint16_t port, const char* description, uint32_t leaseSeconds) {
-    Result r;
-    Gateway gw;
-    if (!findGateway(gw, r.error)) return r;
-    r.localIp = gw.localIp;
-    if (gw.localIp.empty() || gw.localIp == "0.0.0.0") {
-        r.error = "could not work out this PC's address on the router's network";
-        return r;
-    }
+// Whose mapping holds the port (an error 718 conflict)? Only one to this PC is ours to replace (a crashed session's,
+// or a lease the router still holds). A mapping to another device stays, even one named MECMP: that is most likely a
+// second player hosting on the same network, and deleting it would cut their session.
+bool mappingIsOurs(const std::string& internalClient, const std::string& localIp) {
+    return !internalClient.empty() && internalClient == localIp;
+}
+
+namespace {
+bool mapOn(const Gateway& gw, uint16_t port, const char* description, uint32_t leaseSeconds, std::string& error) {
     std::string reply;
     int status = 0;
-    if (soap(gw, "GetExternalIPAddress", "", reply, status) && status == 200)
-        r.externalIp = between(reply, "<NewExternalIPAddress>", "</NewExternalIPAddress>");
     const std::string p = std::to_string(port);
+    const std::string key = "<NewRemoteHost></NewRemoteHost><NewExternalPort>" + p + "</NewExternalPort><NewProtocol>UDP</NewProtocol>";
     auto add = [&](uint32_t lease) {
         reply.clear();
         status = 0;
-        const std::string args = "<NewRemoteHost></NewRemoteHost><NewExternalPort>" + p +
-                                 "</NewExternalPort><NewProtocol>UDP</NewProtocol><NewInternalPort>" + p +
-                                 "</NewInternalPort><NewInternalClient>" + gw.localIp +
+        const std::string args = key + "<NewInternalPort>" + p + "</NewInternalPort><NewInternalClient>" + gw.localIp +
                                  "</NewInternalClient><NewEnabled>1</NewEnabled><NewPortMappingDescription>" + description +
                                  "</NewPortMappingDescription><NewLeaseDuration>" + std::to_string(lease) +
                                  "</NewLeaseDuration>";
@@ -372,29 +389,77 @@ Result mapUdpPort(uint16_t port, const char* description, uint32_t leaseSeconds)
     // Only a timed lease: a permanent mapping (lease 0) would stay open on the router forever if the
     // game crashed. Routers that only take permanent leases (UPnP error 725) need the port forwarded
     // by hand; the log says so.
-    r.mapped = leaseSeconds > 0 && add(leaseSeconds);
-    if (!r.mapped && leaseSeconds > 0 && between(reply, "<errorCode>", "</errorCode>") == "718") {
-        // 718 ConflictInMappingEntry: the port is still mapped, often to a stale lease from a crashed
-        // session or to this PC on another address. Drop it and map it to this address.
-        std::string ignored;
+    bool mapped = leaseSeconds > 0 && add(leaseSeconds);
+    if (!mapped && leaseSeconds > 0 && errorCode(reply) == "718") {
+        // 718 ConflictInMappingEntry: the port is already mapped. Replace it only when it is ours (see mappingIsOurs).
+        std::string entry;
         int st = 0;
-        soap(gw, "DeletePortMapping",
-             "<NewRemoteHost></NewRemoteHost><NewExternalPort>" + p + "</NewExternalPort><NewProtocol>UDP</NewProtocol>",
-             ignored, st);
-        r.mapped = add(leaseSeconds);
+        const bool known = soap(gw, "GetSpecificPortMappingEntry", key, entry, st) && st == 200;
+        const std::string client = trimmed(between(entry, "<NewInternalClient>", "</NewInternalClient>"));
+        if (known && mappingIsOurs(client, gw.localIp)) {
+            std::string ignored;
+            soap(gw, "DeletePortMapping", key, ignored, st);
+            mapped = add(leaseSeconds);
+        } else {
+            error = "UDP port " + p + " is already forwarded to another device (" + (client.empty() ? std::string("unknown") : client) +
+                    "); set another port= in mecmp.ini, or remove that mapping on the router";
+            return false;
+        }
     }
-    if (!r.mapped) {
-        const std::string code = between(reply, "<errorCode>", "</errorCode>");
-        r.error = "the router refused the port mapping" + (code.empty() ? std::string() : " (UPnP error " + code + ")");
+    if (!mapped) {
+        const std::string code = errorCode(reply);
+        error = "the router refused the port mapping" + (code.empty() ? std::string() : " (UPnP error " + code + ")");
+    }
+    return mapped;
+}
+} // namespace
+
+Result mapUdpPort(uint16_t port, const char* description, uint32_t leaseSeconds) {
+    Result r;
+    std::vector<Gateway> gws;
+    if (!findGateways(gws, r.error)) return r;
+    // The connected service first: it is the one that reports an external address.
+    std::vector<std::string> ext(gws.size());
+    for (size_t i = 0; i < gws.size(); ++i) ext[i] = externalIpOf(gws[i]);
+    std::vector<size_t> order;
+    for (size_t i = 0; i < gws.size(); ++i) if (!ext[i].empty() && ext[i] != "0.0.0.0") order.push_back(i);
+    for (size_t i = 0; i < gws.size(); ++i) if (ext[i].empty() || ext[i] == "0.0.0.0") order.push_back(i);
+    std::string firstError;
+    for (size_t i : order) {
+        const Gateway& gw = gws[i];
+        if (gw.localIp.empty() || gw.localIp == "0.0.0.0") {
+            if (firstError.empty()) firstError = "could not work out this PC's address on the router's network";
+            continue;
+        }
+        std::string error;
+        if (!mapOn(gw, port, description, leaseSeconds, error)) {
+            if (gws.size() > 1) MLOG("net: UPnP: %s (%s): %s", gw.control.host.c_str(), gw.serviceType.c_str(), error.c_str());
+            if (firstError.empty()) firstError = error;
+            continue;
+        }
+        r.mapped = true;
+        r.localIp = gw.localIp;
+        r.externalIp = ext[i] == "0.0.0.0" ? std::string() : ext[i];
+        in_addr a{};
+        if (inet_pton(AF_INET, r.externalIp.c_str(), &a) != 1)
+            MLOG("net: UPnP: mapped, but the router did not report its external address; asking a STUN server");
+        else if (isPrivateV4(a))
+            MLOG("net: UPnP: mapped, but the router's external address is '%s' (double NAT / CGNAT?): "
+                 "players on the internet may still not reach this PC", r.externalIp.c_str());
+        std::lock_guard<std::mutex> lock(g_m);
+        g_gw = gw;
+        g_haveGw = true;
         return r;
     }
-    in_addr ext{};
-    if (inet_pton(AF_INET, r.externalIp.c_str(), &ext) != 1 || ext.s_addr == 0 || isPrivateV4(ext))
-        MLOG("net: UPnP: mapped, but the router's external address is '%s' (double NAT / CGNAT?): "
-             "players on the internet may still not reach this PC", r.externalIp.c_str());
-    std::lock_guard<std::mutex> lock(g_m);
-    g_gw = gw;
-    g_haveGw = true;
+    r.error = firstError;
+    // A router that answered but mapped nothing still says who we are on its network (the LAN join code) and maybe its
+    // external address.
+    for (size_t i : order)
+        if (!gws[i].localIp.empty() && gws[i].localIp != "0.0.0.0") {
+            r.localIp = gws[i].localIp;
+            if (ext[i] != "0.0.0.0") r.externalIp = ext[i];
+            break;
+        }
     return r;
 }
 

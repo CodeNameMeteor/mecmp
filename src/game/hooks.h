@@ -27,5 +27,8 @@ bool clientUpdateHooked();
 // UI pause counts at PamUISystem +0x8c8 (+0x08 / +0x0c) are above 0. False before the UI system has
 // run once or if the UI pause hook is not in. Any thread.
 bool gameMenuOpen();
+// True when the calling thread is the one the game runs the server replay components' update on (seen by the thread
+// probe). ReplayPlayback_Stop frees what that update reads, so the ghosts only call it from that thread (R6.1).
+bool onServerReplayThread();
 
 } // namespace mecmp::game::hooks

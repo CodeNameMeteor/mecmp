@@ -296,8 +296,14 @@ uintptr_t blueprintCharacterData(uintptr_t bp) {
     return 0;
 }
 
-// Server replay components whose pose buffers preparePose sized to kMaxBones (server game thread only).
+// Server replay components whose pose buffers preparePose sized to kMaxBones. Used on the server game thread; cleared by
+// levelChanged (also called from the mod thread), so it has its own lock.
+std::mutex g_poseRoomM;
 std::set<const uint8_t*> g_poseRoom;
+bool hasPoseRoom(const uint8_t* c) {
+    std::lock_guard<std::mutex> lock(g_poseRoomM);
+    return g_poseRoom.count(c) != 0;
+}
 
 // Gives the ghost's server replay component a pose buffer with the bone setup `want` (the ghost client's own,
 // so the bone count it checks matches). The index, flag and pose buffers are allocated once per component at
@@ -317,7 +323,7 @@ bool preparePose(uint8_t* c, const level::BoneSetup& want) {
                        reinterpret_cast<uint8_t*>(*reinterpret_cast<float**>(c + SRP_PoseCap)) -
                                reinterpret_cast<uint8_t*>(*poseP) >= static_cast<ptrdiff_t>(kMaxBones * 0x20) &&
                        *reinterpret_cast<uint8_t**>(S + 0x88) - *flagsP >= static_cast<ptrdiff_t>(flagCap) &&
-                       *reinterpret_cast<void**>(c + SRP_Pose) && g_poseRoom.count(c) != 0;
+                       *reinterpret_cast<void**>(c + SRP_Pose) && hasPoseRoom(c);
     if (!roomy) {
         if (!*idxP) *reinterpret_cast<void**>(S + 0x08) = nullptr;
         if (!*flagsP) *reinterpret_cast<void**>(S + 0x90) = nullptr;
@@ -330,6 +336,7 @@ bool preparePose(uint8_t* c, const level::BoneSetup& want) {
         *reinterpret_cast<uint8_t**>(S + 0x88) = flags + flagCap;
         *poseP = pose;
         *reinterpret_cast<float**>(c + SRP_PoseCap) = pose + kMaxBones * 8;
+        std::lock_guard<std::mutex> lock(g_poseRoomM);
         g_poseRoom.insert(c);
     }
     const uint32_t currentN = *reinterpret_cast<uint32_t*>(S);
@@ -398,12 +405,21 @@ bool noteDue(DWORD& last, DWORD ms = 10000) {
 // The server must not replay a recording over the pose we write. Zeroing the state alone leaves a ghost adopted from
 // the game with its decoder and keyframe ring still allocated, so ReplayPlayback_Stop does it (it also clears the
 // state). Server side only: the client's own stop tells the game the replay is done, so the client keeps the plain write.
+// Stop frees the decoder and the ring that the component's update (ReplayPlayback_Tick) reads, so it is only called on
+// the thread that runs that update (R6.1, hooks::onServerReplayThread); anywhere else, or before the probe has seen the
+// update, the state is only zeroed as before.
 void stopServerPlayback(uint8_t* comp) {
     auto* state = reinterpret_cast<uint32_t*>(comp + SRP_PlaybackState);
     if (*state == 0) return;
     using StopFn = void (*)(void*);
     static const bool canStop = fingerprint::checkReplayStop();
-    if (canStop) reinterpret_cast<StopFn>(rva(Fn_ReplayPlayback_Stop))(comp + SRP_Playback);
+    if (canStop && hooks::onServerReplayThread()) {
+        reinterpret_cast<StopFn>(rva(Fn_ReplayPlayback_Stop))(comp + SRP_Playback);
+    } else if (canStop) {
+        static DWORD lastNote = 0;
+        if (noteDue(lastNote, 60000))
+            MLOG("ghost: server playback zeroed, not stopped (the server tick is not on the replay update's thread)");
+    }
     *state = 0;
 }
 
@@ -947,7 +963,7 @@ void setCharacterDataType(uintptr_t runtimeTypeInfo) { g_tiCharData = runtimeTyp
 // the game's echo (vtable +0xf8, 0x143239bb0), so the map took our ghost: it stopped taking our poses, and the echo
 // screen showed it. Like keepGameCharacterLast on the server: in every client spawner list that holds one of our
 // ghosts and a character of the game's, ours go first and the game's stay last, in their order. Only pointers inside
-// the list move, and +0xd0 (the last one's bus) stays right because the last one does not change. Client game thread
+// the list move, and +0xd0 (the last one's bus) is set to the new last character's bus. Client game thread
 // (the replay updater, where the map's replay runs), at most every 0.25 s.
 // Reorders one spawner's list as above. True when it had to change something.
 static bool reorderClientSpawnerList(void* sp, const std::vector<uintptr_t>& mine) {
@@ -1494,6 +1510,13 @@ void levelChanged() {
     g_lastSpawnFailed = false;
     g_ghostCharData = 0; // level data: the next level's ghost blueprint may use another object
     for (auto& k : g_knownCharData) k = 0;
+    {
+        // The level's components are gone; their addresses will be reused by others.
+        std::lock_guard<std::mutex> poseLock(g_poseRoomM);
+        g_poseRoom.clear();
+    }
+    std::lock_guard<std::mutex> motionLock(g_motionM);
+    g_motion.clear();
 }
 
 void hookSetVisibleLog() {

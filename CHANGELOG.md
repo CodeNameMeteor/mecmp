@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+### Networking and review fixes
+- The "Join MECMP server" button moved from the top of the menu to the Servers section of the Session tab, above the
+  saved servers.
+- A dedicated server is never treated as a player host, whatever its name. A server with an empty name used to let any
+  player on it pull others in with a hard summon (for those who allow hard summons). `mecmp_server` now also names itself
+  "MECMP server" when `name=` is empty.
+- Hosting: a router that opens the port but does not report its public address no longer leaves you without a join code;
+  the address is asked from a STUN server, as when UPnP fails.
+- UPnP: when the port is already mapped (error 718), the mapping is only replaced if it points at this PC. Another
+  device's mapping (a second player hosting on the same network) is left alone, and the menu says the port is taken.
+- UPnP: a router that offers both an IP and a PPP connection service now has both tried (the connected one first);
+  before, only the first one listed was used and the mapping often failed on DSL routers.
+- A ghost taken over from the game's replays has its recording stopped only on the thread that runs the game's replay
+  update (thread probe, R6.1); elsewhere the playback state is only zeroed as before, so no recording is freed while the
+  game is still reading it.
+- A player host now takes at most 15 joiners (16 players): each player sees at most 15 ghosts, so a 17th player was
+  invisible to everyone.
+- Oversized packets sent at a host are dropped quietly instead of writing a log line each and pausing the read.
+- The record that undoes the shared player-data patch can no longer fill up after many levels (stale records are dropped
+  first); data is never patched without a record.
+- The Host settings section no longer shows while offline.
+- Session ids are random. Notices from the last session (visit requests, answers to markers, finished runs) are cleared
+  when a new one starts, and a player who leaves takes their markers with them.
+- `rendezvous_server=Off` (any case) turns hole punching off. INSTALL.txt says what the rendezvous server sees.
+- CI runs the spawn order, data registry and new host setup tests.
+
 ### Look catalogue and diagnostics
 - The look catalogue is also found in the data registry by its class id (the catalogue meta's class range), not only by its
   vtable. The registry never holds the pieces in partitions 0x7d5..0xbbc (the game's loader skips them); a log line says so

@@ -44,6 +44,7 @@ static void resetSession(Role role = Role::Join) {
     g_presenceHost = 0;
     g_departures.clear();
     g_serverName.clear();
+    g_hostIsServer = false;
     g_name = "Local";
 }
 
@@ -478,7 +479,77 @@ static void testRetiredHosts() {
     CHECK(g_hostSession == 200);
 }
 
+// A dedicated server is never a player host, whatever its name: an empty name used to make a member's self-vouched
+// hard summon count as vouched by a player host.
+static void summonFrom(uint32_t sender, uint32_t id, uint8_t flags) {
+    char buf[proto::kMaxPacket];
+    const proto::Header h{proto::kMagic, proto::kProtocol, proto::kTypeSummon, sender, 5000 + id};
+    proto::Summon s;
+    s.id = id;
+    s.flags = flags;
+    const auto n = proto::writeSummon(buf, h, s);
+    handlePacket(buf, static_cast<int>(n), g_hostAddr);
+}
+
+static void testServerNeverVouches() {
+    mecmp::config::change([](auto& c) { c.allowForcedSummon = true; }, false);
+    mecmp::config::applyPending(false);
+    for (const char* name : {"MECMP server", ""}) {
+        resetSession();
+        g_hostSession = 0;
+        g_summons.clear();
+        helloFrom(200, name, proto::kHelloHost | proto::kHelloServer);
+        CHECK(g_hostSession == 200 && g_hostIsServer);
+        helloFrom(300, "Member");
+        summonFrom(300, 1, proto::kSummonHard | proto::kSummonVouched);
+        const auto summons = takeSummons();
+        CHECK(summons.size() == 1 && !summons[0].hard);
+        CHECK(!canHardSummon());
+    }
+    // A player host's relay is the one that vouches.
+    resetSession();
+    g_hostSession = 0;
+    helloFrom(200, "Host", proto::kHelloHost | proto::kHelloMembersHard);
+    CHECK(!g_hostIsServer && canHardSummon());
+    helloFrom(300, "Member");
+    summonFrom(300, 2, proto::kSummonHard | proto::kSummonVouched);
+    const auto summons = takeSummons();
+    CHECK(summons.size() == 1 && summons[0].hard);
+    mecmp::config::change([](auto& c) { c.allowForcedSummon = false; }, false);
+    mecmp::config::applyPending(false);
+}
+
+// hosting() is about a session that runs: offline, the role left from the last session does not count.
+static void testHostingOnlyWhileRunning() {
+    resetSession(Role::Host);
+    CHECK(hosting());
+    g_run = false;
+    CHECK(!hosting());
+    g_run = true;
+    g_stopRequested = true;
+    CHECK(!hosting());
+    g_stopRequested = false;
+}
+
+// A player host takes as many joiners as each player can show ghosts of (15 others).
+static void testHostPlayerLimit() {
+    resetSession(Role::Host);
+    g_sendTo.clear();
+    size_t admitted = 0;
+    for (uint32_t i = 0; i < 20; ++i) {
+        sockaddr_in a = address(static_cast<uint16_t>(48000 + i));
+        a.sin_addr.s_addr = htonl(0x0a000001u + i); // one player per address (the per-address limit is another rule)
+        if (admitMember(a, 1000 + i)) ++admitted;
+    }
+    CHECK(admitted == 15);
+    g_members.clear();
+    g_sendTo.clear();
+}
+
 int main() {
+    testServerNeverVouches();
+    testHostingOnlyWhileRunning();
+    testHostPlayerLimit();
     testRetiredHosts();
     testListenHostConfirmsItsOwnPlayer();
     testRelayResetAndReadmission();

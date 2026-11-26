@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Running alongside GridNode
+- MECMP no longer stays inactive when GridNode (or a GridNode mod such as the MEC trainer) was injected first. The build
+  check and every hook now take another loaded module's code in a game slot as that module's hook and chain in front of
+  it, as GridNode does with MECMP's; the log names the module. Before, the check stopped MECMP ("this game build differs")
+  and the tick hook refused the slot, so only "MECMP first, then GridNode" worked.
+
 ### Networking and review fixes
 - The "Join MECMP server" button moved from the top of the menu to the Servers section of the Session tab, above the
   saved servers.

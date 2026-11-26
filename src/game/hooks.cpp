@@ -15,6 +15,7 @@
 #include "net/net.h"
 
 #include <atomic>
+#include <string>
 #include <vector>
 
 namespace mecmp::game::hooks {
@@ -81,6 +82,25 @@ void noteThread(const char* site, std::atomic<uint32_t>& last) {
 }
 std::atomic<uint32_t> g_threadTick{0}, g_threadClientUpdater{0}, g_threadServerReplay{0}, g_threadRecorder{0};
 
+// Reads a game slot MECMP is about to hook. True when it holds the game's function, or another module's code
+// (GridNode, a GridNode mod, an overlay hooked it first): `current` is then what MECMP's hook calls through, so
+// both run. `what` and `without` name the hook and what is lost without it for the log line.
+bool slotUsable(const char* what, uintptr_t slot, uintptr_t expectedVa, uintptr_t& current, const char* without) {
+    current = 0;
+    if (!mem::read(slot, current)) {
+        MLOG("hook %s: slot not readable; %s", what, without);
+        return false;
+    }
+    if (current == rva(expectedVa)) return true;
+    std::string module;
+    if (mem::foreignCode(current, &module)) {
+        MLOG("hook %s: slot already hooked by %s (%p); chaining in front of it", what, module.c_str(), reinterpret_cast<void*>(current));
+        return true;
+    }
+    MLOG("hook %s: slot holds %p, expected %p; %s", what, reinterpret_cast<void*>(current), reinterpret_cast<void*>(rva(expectedVa)), without);
+    return false;
+}
+
 // Client replay updater: the updateAll slot of its vtable (shared by the two updater objects) first
 // writes our ghosts' poses, on the thread and at the moment the game reads them. Written from
 // the render thread instead, the game sometimes read a pose half old and half new (jitter between
@@ -104,11 +124,9 @@ void hookUpdaters() {
     if (g_updaterHooked) return;
     const uintptr_t slot = rva(Vtbl_ClientReplayUpdater) + Vtbl_ClientReplayUpdateAll;
     uintptr_t current = 0;
-    if (!mem::read(slot, current)) return;
-    if (current != rva(Fn_ClientReplayUpdateAll)) {
-        static bool warned = false;
-        if (!warned) MLOG("hook client replay updater: slot holds %p, expected %p; ghosts stay server-driven (replicated poses)",
-                          reinterpret_cast<void*>(current), reinterpret_cast<void*>(rva(Fn_ClientReplayUpdateAll)));
+    static bool warned = false;
+    if (warned) return; // a slot that could not be taken is not tried again (and logged once)
+    if (!slotUsable("client replay updater", slot, Fn_ClientReplayUpdateAll, current, "ghosts stay server-driven (replicated poses)")) {
         warned = true;
         return;
     }
@@ -171,7 +189,9 @@ bool installFactory(Factory f, uintptr_t slotVa, uintptr_t expectedVa, FactoryFn
             MLOG("hook %s: slot holds %p (not code); not hooking", kNames[f], reinterpret_cast<void*>(current));
             return false;
         }
-        MLOG("hook %s: already redirected by another component; chaining in front of it", kNames[f]);
+        std::string module = "another component";
+        mem::foreignCode(current, &module);
+        MLOG("hook %s: already redirected by %s (%p); chaining in front of it", kNames[f], module.c_str(), reinterpret_cast<void*>(current));
     }
     // The original is stored before the slot is patched: a call that gets in between must reach it.
     g_orig[f] = reinterpret_cast<FactoryFn>(current);
@@ -205,11 +225,7 @@ void installReplayDownloadedHook(std::vector<Patch>& undo) {
     if (!fingerprint::checkReplayCheck()) return;
     const uintptr_t slot = rva(Slot_ProjectionReplayDownloaded);
     uintptr_t current = 0;
-    if (!mem::read(slot, current) || current != rva(Fn_ProjectionReplayDownloaded)) {
-        MLOG("hook replay download: slot holds %p, expected %p; old full-body ghosts are not refused",
-             reinterpret_cast<void*>(current), reinterpret_cast<void*>(rva(Fn_ProjectionReplayDownloaded)));
-        return;
-    }
+    if (!slotUsable("replay download", slot, Fn_ProjectionReplayDownloaded, current, "old full-body ghosts are not refused")) return;
     g_origReplayDownloaded = reinterpret_cast<ListenerFn>(current); // before the patch, as above
     if (!mem::patchPointer(slot, reinterpret_cast<uintptr_t>(&replayDownloadedHook), nullptr)) {
         MLOG("hook replay download: VirtualProtect failed (%lu)", GetLastError());
@@ -223,11 +239,7 @@ void installReplayDownloadedHook(std::vector<Patch>& undo) {
 void installRecordingUpdaterHook(std::vector<Patch>& undo) {
     const uintptr_t slot = rva(Slot_ClientReplayRecordingUpdateAll);
     uintptr_t current = 0;
-    if (!mem::read(slot, current) || current != rva(Fn_ClientReplayRecordingUpdateAll)) {
-        MLOG("hook recording updater: slot holds %p, expected %p; the game's 23 bones are sent", reinterpret_cast<void*>(current),
-             reinterpret_cast<void*>(rva(Fn_ClientReplayRecordingUpdateAll)));
-        return;
-    }
+    if (!slotUsable("recording updater", slot, Fn_ClientReplayRecordingUpdateAll, current, "the game's 23 bones are sent")) return;
     g_origRecordingUpdateAll = reinterpret_cast<UpdateAllFn>(current); // before the patch, as above
     if (!mem::patchPointer(slot, reinterpret_cast<uintptr_t>(&recordingUpdateAllHook), nullptr)) {
         MLOG("hook recording updater: VirtualProtect failed (%lu)", GetLastError());
@@ -256,11 +268,7 @@ void uiSystemUpdate(void* uiSystem) {
 void installUIPauseHook(std::vector<Patch>& undo) {
     const uintptr_t slot = rva(Slot_PamUISystemUpdate);
     uintptr_t current = 0;
-    if (!mem::read(slot, current) || current != rva(Fn_PamUISystemUpdate)) {
-        MLOG("hook UI system: slot holds %p, expected %p; the mod cannot tell when a game menu is open", reinterpret_cast<void*>(current),
-             reinterpret_cast<void*>(rva(Fn_PamUISystemUpdate)));
-        return;
-    }
+    if (!slotUsable("UI system", slot, Fn_PamUISystemUpdate, current, "the mod cannot tell when a game menu is open")) return;
     g_origUISystemUpdate = reinterpret_cast<UISystemUpdateFn>(current); // before the patch, as above
     if (!mem::patchPointer(slot, reinterpret_cast<uintptr_t>(&uiSystemUpdate), nullptr)) {
         MLOG("hook UI system: VirtualProtect failed (%lu)", GetLastError());
@@ -283,11 +291,7 @@ void presencePoolUpdate(void* pool, void* updateInfo) {
 void installPlayersMapHook(std::vector<Patch>& undo) {
     const uintptr_t slot = rva(Slot_PresenceInfoManagerPoolUpdate);
     uintptr_t current = 0;
-    if (!mem::read(slot, current) || current != rva(Fn_PresenceInfoManagerPoolUpdate)) {
-        MLOG("hook map markers: slot holds %p, expected %p; players are not shown on the map",
-             reinterpret_cast<void*>(current), reinterpret_cast<void*>(rva(Fn_PresenceInfoManagerPoolUpdate)));
-        return;
-    }
+    if (!slotUsable("map markers", slot, Fn_PresenceInfoManagerPoolUpdate, current, "players are not shown on the map")) return;
     g_origPresencePoolUpdate = reinterpret_cast<PoolUpdateFn>(current);
     if (!mem::patchPointer(slot, reinterpret_cast<uintptr_t>(&presencePoolUpdate), nullptr)) {
         MLOG("hook map markers: VirtualProtect failed (%lu)", GetLastError());
@@ -308,11 +312,7 @@ void serverReplayUpdateHook(void* self, void* info) {
 void installServerReplayThreadProbe(std::vector<Patch>& undo) {
     const uintptr_t slot = rva(Slot_ServerReplayUpdate);
     uintptr_t current = 0;
-    if (!mem::read(slot, current) || current != rva(Fn_ServerReplayUpdate)) {
-        MLOG("hook server replay update: slot holds %p, expected %p; thread probe not installed", reinterpret_cast<void*>(current),
-             reinterpret_cast<void*>(rva(Fn_ServerReplayUpdate)));
-        return;
-    }
+    if (!slotUsable("server replay update", slot, Fn_ServerReplayUpdate, current, "thread probe not installed")) return;
     g_origServerReplayUpdate = reinterpret_cast<UpdateAllFn>(current); // before the patch, as above
     if (!mem::patchPointer(slot, reinterpret_cast<uintptr_t>(&serverReplayUpdateHook), nullptr)) return;
     undo.push_back({slot, current});
@@ -337,11 +337,7 @@ bool install(TickFn onTick, Installed* out) {
     // this build expects, the game is left exactly as it was.
     const uintptr_t slot = rva(Slot_ServerWorldPostUpdate);
     uintptr_t current = 0;
-    if (!mem::read(slot, current) || current != rva(Fn_ServerWorldPostUpdate)) {
-        MLOG("hook tick: ServerGameWorld slot holds %p, expected %p; not hooking", reinterpret_cast<void*>(current),
-             reinterpret_cast<void*>(rva(Fn_ServerWorldPostUpdate)));
-        return false;
-    }
+    if (!slotUsable("tick (ServerGameWorld)", slot, Fn_ServerWorldPostUpdate, current, "not hooking")) return false;
     // Factory hooks only report objects as they are created; each group that fails costs a feature,
     // not stability (see Installed). Recorded so that a later failure can undo them.
     std::vector<Patch> undo;

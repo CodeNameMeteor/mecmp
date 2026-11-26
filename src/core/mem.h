@@ -154,6 +154,34 @@ inline bool readUtf8String(uintptr_t addr, std::string& out, size_t maxLen = 256
     return true;
 }
 
+// Code of another loaded module (GridNode, a mod, an overlay) found in a game slot: executable, outside the game
+// image and inside a DLL the loader knows. Such a pointer is taken as that module's hook and chained over, so the
+// order MECMP and another hooking tool are injected in does not matter. `module` gets the DLL's file name.
+inline bool foreignCode(uintptr_t addr, std::string* module = nullptr) {
+    if (addr < 0x10000) return false;
+    const uintptr_t base = moduleBase();
+    const auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
+    const auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(base + static_cast<uintptr_t>(dos->e_lfanew));
+    if (addr >= base && addr < base + nt->OptionalHeader.SizeOfImage) return false; // the game's own code
+    MEMORY_BASIC_INFORMATION mbi{};
+    if (!VirtualQuery(reinterpret_cast<LPCVOID>(addr), &mbi, sizeof(mbi)) || mbi.State != MEM_COMMIT ||
+        !(mbi.Protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY)))
+        return false;
+    HMODULE m = nullptr;
+    if (!GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                            reinterpret_cast<LPCSTR>(addr), &m) || !m)
+        return false;
+    if (module) {
+        char path[MAX_PATH] = {};
+        const DWORD n = GetModuleFileNameA(m, path, MAX_PATH);
+        const char* name = path;
+        for (DWORD i = 0; i < n; ++i)
+            if (path[i] == '\\' || path[i] == '/') name = path + i + 1;
+        *module = n ? name : "?";
+    }
+    return true;
+}
+
 // Writes one pointer-sized value into read-only data (a vtable slot). Returns the old value.
 inline bool patchPointer(uintptr_t addr, uintptr_t value, uintptr_t* old) {
     DWORD prot = 0;

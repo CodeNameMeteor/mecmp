@@ -110,6 +110,12 @@ bool check() {
     int bad = 0;
     for (const Slot& s : kSlots) {
         uintptr_t got = 0;
+        std::string module;
+        if (mem::read(rva(s.vtable) + s.offset, got) && got != rva(s.fn) && mem::foreignCode(got, &module)) {
+            // Another tool (GridNode, a GridNode mod) hooked it first: MECMP's hook goes on top and calls through it.
+            MLOG("build check: %s is hooked by %s (%p); MECMP chains to it", s.what, module.c_str(), reinterpret_cast<void*>(got));
+            continue;
+        }
         if (!mem::read(rva(s.vtable) + s.offset, got) || got != rva(s.fn)) {
             MLOG("build check: %s is %p, expected %p", s.what, reinterpret_cast<void*>(got), reinterpret_cast<void*>(rva(s.fn)));
             ++bad;

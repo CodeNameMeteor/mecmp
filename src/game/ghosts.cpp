@@ -784,7 +784,9 @@ bool spawnerHolds(void* spawner, void* ch) {
 bool despawnGhost(void* spawner, void* ch) {
     if (!level::spawnerAlive(spawner) || !spawnerHolds(spawner, ch)) return false;
     const uintptr_t vt = mem::readOr<uintptr_t>(reinterpret_cast<uintptr_t>(spawner));
-    if (!vt || mem::readOr<uintptr_t>(vt + Vtbl_SpawnerUnspawn) != rva(Fn_SpawnerUnspawn)) return false;
+    // The right kind of spawner: its unspawn is the game's, or another module's hook over it (GridNode, a mod).
+    const uintptr_t unspawn = vt ? mem::readOr<uintptr_t>(vt + Vtbl_SpawnerUnspawn) : 0;
+    if (!vt || (unspawn != rva(Fn_SpawnerUnspawn) && !mem::foreignCode(unspawn))) return false;
     using UnspawnFn = void (*)(void*, void*, bool, void*);
     reinterpret_cast<UnspawnFn>(rva(Fn_SpawnerUnspawn))(spawner, ch, true, nullptr);
     return !spawnerHolds(spawner, ch);
@@ -1523,7 +1525,8 @@ void hookSetVisibleLog() {
     if (g_origSetVisible) return;
     const uintptr_t slot = rva(Vtbl_PamClientCharacterEntity) + Vtbl_ClientSetVisible;
     uintptr_t current = 0;
-    if (!mem::read(slot, current) || !inImage(current)) return; // the startup fingerprint check already matched it
+    // The startup fingerprint check already matched it (the game's function, or another module's hook to chain to).
+    if (!mem::read(slot, current) || !(inImage(current) || mem::foreignCode(current))) return;
     g_origSetVisible = reinterpret_cast<SetVisibleFn>(current);
     if (mem::patchPointer(slot, reinterpret_cast<uintptr_t>(&setVisibleHook), nullptr)) MLOG("hook ghost setVisible log: installed");
     else g_origSetVisible = nullptr;
@@ -1532,11 +1535,13 @@ void hookSpawnerAdd() {
     if (g_origOnSpawned) return;
     const uintptr_t slot = rva(Vtbl_ClientCharacterSpawnEntity) + Vtbl_ClientSpawnerOnSpawned;
     uintptr_t current = 0;
-    if (!mem::read(slot, current) || current != rva(Fn_ClientSpawnerOnSpawned)) {
+    std::string module;
+    if (!mem::read(slot, current) || !(current == rva(Fn_ClientSpawnerOnSpawned) || mem::foreignCode(current, &module))) {
         MLOG("hook client spawner add: slot holds %p, expected %p (not installed, the 250 ms pass keeps the order)",
              reinterpret_cast<void*>(current), reinterpret_cast<void*>(rva(Fn_ClientSpawnerOnSpawned)));
         return;
     }
+    if (!module.empty()) MLOG("hook client spawner add: slot already hooked by %s; chaining in front of it", module.c_str());
     g_origOnSpawned = reinterpret_cast<OnSpawnedFn>(current);
     if (mem::patchPointer(slot, reinterpret_cast<uintptr_t>(&onCharacterSpawnedHook), nullptr)) MLOG("hook client spawner add: installed");
     else g_origOnSpawned = nullptr;
